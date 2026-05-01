@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
 from stream_manager.decision_graph import DecisionGraph
@@ -29,12 +29,25 @@ class GovDecision:
     mode: Mode
     matched_hash: str = ""
     source: str = ""
+    original_action: str = ""
 
 
 PROMOTE_AT = 0.75
 DEMOTE_AT = 0.40
 ROLLING_WINDOW = 10
 DEFAULT_RATE_LIMIT_PER_MIN = 10
+MIN_INTERVENTIONS_FOR_PROMOTE = 3
+
+# Sources where the engine actually exercised judgment. The "default" branch
+# returning ALLOW with confidence 0.1 carries no information about engine
+# accuracy and must not contribute to the rolling window.
+ELIGIBLE_SOURCES: frozenset[str] = frozenset({"precheck", "graph", "api"})
+INTERVENTION_ACTIONS: frozenset[str] = frozenset({"SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
+
+
+def _was_intervention_attempt(decision: GovDecision) -> bool:
+    effective = decision.original_action or decision.action
+    return effective in INTERVENTION_ACTIONS
 
 
 @dataclass
@@ -44,7 +57,8 @@ class GovernanceEngine:
     mode: Mode = Mode.OBSERVE
     rate_limit_per_min: int = DEFAULT_RATE_LIMIT_PER_MIN
 
-    _accuracy_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
+    _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
+    _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_log: deque[float] = field(default_factory=lambda: deque(maxlen=120))
 
     def evaluate(self, msg: Message) -> GovDecision:
@@ -93,13 +107,33 @@ class GovernanceEngine:
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:
-            return _replace(decision, action="ALLOW", reasoning=f"observed: {decision.reasoning}")
+            return replace(
+                decision,
+                action="ALLOW",
+                reasoning=f"observed: {decision.reasoning}",
+                original_action=decision.action,
+            )
         if self.mode == Mode.SUGGEST and decision.action in {"INTERVENE", "BLOCK"}:
-            return _replace(decision, action="SUGGEST", reasoning=f"suggested: {decision.reasoning}")
+            return replace(
+                decision,
+                action="SUGGEST",
+                reasoning=f"suggested: {decision.reasoning}",
+                original_action=decision.action,
+            )
         if self.mode == Mode.GUIDE and decision.action == "BLOCK":
-            return _replace(decision, action="GUIDE", reasoning=f"guided: {decision.reasoning}")
+            return replace(
+                decision,
+                action="GUIDE",
+                reasoning=f"guided: {decision.reasoning}",
+                original_action=decision.action,
+            )
         if self.mode == Mode.INTERVENE and decision.action == "BLOCK":
-            return _replace(decision, action="INTERVENE", reasoning=f"intervened: {decision.reasoning}")
+            return replace(
+                decision,
+                action="INTERVENE",
+                reasoning=f"intervened: {decision.reasoning}",
+                original_action=decision.action,
+            )
         return decision
 
     def _rate_limited(self) -> bool:
@@ -108,7 +142,14 @@ class GovernanceEngine:
         return recent >= self.rate_limit_per_min
 
     def feedback(self, decision: GovDecision, was_correct: bool) -> None:
-        self._accuracy_window.append(was_correct)
+        # Eligibility: only decisions where the engine actually exercised
+        # judgment count toward the rolling accuracy window. The default-allow
+        # branch carries no signal and would otherwise let routine ALLOW-only
+        # traffic ramp the mode ladder all the way to BLOCK (the bug fixed
+        # by hardening item #2).
+        if decision.source in ELIGIBLE_SOURCES:
+            self._eligible_window.append(was_correct)
+            self._intervention_window.append(_was_intervention_attempt(decision))
         if decision.matched_hash:
             self.graph.feedback(decision.matched_hash, was_correct)
         self._update_mode()
@@ -117,36 +158,39 @@ class GovernanceEngine:
         self.graph.observe(msg.content, success)
 
     def _update_mode(self) -> None:
-        if len(self._accuracy_window) < ROLLING_WINDOW:
+        if len(self._eligible_window) < ROLLING_WINDOW:
             return
-        accuracy = sum(self._accuracy_window) / len(self._accuracy_window)
-        if accuracy >= PROMOTE_AT and int(self.mode) < int(Mode.BLOCK):
+        accuracy = sum(self._eligible_window) / len(self._eligible_window)
+        intervention_count = sum(self._intervention_window)
+
+        can_promote = (
+            accuracy >= PROMOTE_AT
+            and int(self.mode) < int(Mode.BLOCK)
+            and intervention_count >= MIN_INTERVENTIONS_FOR_PROMOTE
+        )
+        if can_promote:
             self.mode = Mode(int(self.mode) + 1)
-            log.info("mode promoted to %s (accuracy=%.2f)", self.mode.name, accuracy)
+            log.info(
+                "mode promoted to %s (acc=%.2f, interventions_in_window=%d)",
+                self.mode.name,
+                accuracy,
+                intervention_count,
+            )
         elif accuracy <= DEMOTE_AT and int(self.mode) > int(Mode.OBSERVE):
             self.mode = Mode(int(self.mode) - 1)
-            log.info("mode demoted to %s (accuracy=%.2f)", self.mode.name, accuracy)
+            log.info("mode demoted to %s (acc=%.2f)", self.mode.name, accuracy)
 
     def stats(self) -> dict[str, object]:
         cutoff = time.time() - 60.0
         return {
             "mode": self.mode.name,
             "graph": self.graph.stats(),
-            "accuracy": (
-                sum(self._accuracy_window) / len(self._accuracy_window)
-                if self._accuracy_window
+            "eligible_decisions_in_window": len(self._eligible_window),
+            "eligible_accuracy": (
+                sum(self._eligible_window) / len(self._eligible_window)
+                if self._eligible_window
                 else 0.0
             ),
+            "interventions_in_window": sum(self._intervention_window),
             "interventions_last_min": sum(1 for t in self._intervention_log if t > cutoff),
         }
-
-
-def _replace(d: GovDecision, **kwargs: object) -> GovDecision:
-    return GovDecision(
-        action=str(kwargs.get("action", d.action)),
-        confidence=float(kwargs.get("confidence", d.confidence)),
-        reasoning=str(kwargs.get("reasoning", d.reasoning)),
-        mode=d.mode,
-        matched_hash=d.matched_hash,
-        source=d.source,
-    )

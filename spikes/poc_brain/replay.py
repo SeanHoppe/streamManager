@@ -63,6 +63,7 @@ def replay(fixture_path: Path, repo_path: Path, ignore_intent: bool) -> dict[str
                     "role": entry["role"],
                     "expected": expected_resolved,
                     "got": decision.action,
+                    "original": decision.original_action,
                     "source": decision.source,
                     "confidence": decision.confidence,
                     "mode": engine.mode.name,
@@ -74,12 +75,21 @@ def replay(fixture_path: Path, repo_path: Path, ignore_intent: bool) -> dict[str
             if was_correct:
                 correct += 1
 
+    eligible_total = sum(1 for d in decisions if d["source"] in {"precheck", "graph", "api"})
+    intervention_total = sum(
+        1
+        for d in decisions
+        if d["source"] in {"precheck", "graph", "api"}
+        and (d["original"] or d["got"]) in {"SUGGEST", "GUIDE", "INTERVENE", "BLOCK"}
+    )
     return {
         "ignore_intent": ignore_intent,
         "has_intent_file": snap.has_intent_file,
         "total": total,
         "correct": correct,
         "accuracy": correct / total if total else 0.0,
+        "eligible_total": eligible_total,
+        "intervention_total": intervention_total,
         "graph_stats": engine.graph.stats(),
         "graph_summary": engine.graph.summarize(max_chars=400),
         "mode_final": engine.mode.name,
@@ -115,6 +125,8 @@ def main() -> None:
     print(f"intent_loaded   = {result['has_intent_file'] and not args.ignore_intent}")
     print(f"messages        = {result['total']}")
     print(f"accuracy        = {result['accuracy']:.3f} ({result['correct']}/{result['total']})")
+    print(f"eligible (src in precheck/graph/api) = {result['eligible_total']}/{result['total']}")
+    print(f"interventions attempted              = {result['intervention_total']}")
     print(f"final mode      = {result['mode_final']}")
     print(f"mode changes    = {result['mode_changes']}")
     print(f"precheck median = {result['precheck_us_median']:.2f} us")
