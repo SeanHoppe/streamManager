@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
+from stream_manager.api_governance import ApiGovernor, is_enabled as _api_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.messages import Message
 from stream_manager.project_context import ProjectContextSnapshot, fast_precheck
@@ -60,6 +61,7 @@ class GovernanceEngine:
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_log: deque[float] = field(default_factory=lambda: deque(maxlen=120))
+    _api_governor: ApiGovernor | None = None
 
     def evaluate(self, msg: Message) -> GovDecision:
         pre = fast_precheck(msg.content, self.project_context)
@@ -97,6 +99,29 @@ class GovernanceEngine:
                 source="graph",
             )
 
+        api_decision = self._maybe_api_evaluate(msg.content)
+        if api_decision is not None:
+            decision = self._apply_mode(
+                GovDecision(
+                    action=api_decision.action,
+                    confidence=api_decision.confidence,
+                    reasoning=api_decision.reasoning,
+                    mode=self.mode,
+                    source="api",
+                )
+            )
+            if decision.action in {"INTERVENE", "BLOCK"} and self._rate_limited():
+                decision = GovDecision(
+                    action="ALLOW",
+                    confidence=0.5,
+                    reasoning=f"rate-limited intervention ({decision.reasoning})",
+                    mode=self.mode,
+                    source="rate_limit",
+                )
+            elif decision.action in {"INTERVENE", "BLOCK"}:
+                self._intervention_log.append(time.time())
+            return decision
+
         return GovDecision(
             action="ALLOW",
             confidence=0.1,
@@ -104,6 +129,13 @@ class GovernanceEngine:
             mode=self.mode,
             source="default",
         )
+
+    def _maybe_api_evaluate(self, content: str):
+        if not _api_enabled():
+            return None
+        if self._api_governor is None:
+            self._api_governor = ApiGovernor(self.project_context)
+        return self._api_governor.evaluate(content)
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:
