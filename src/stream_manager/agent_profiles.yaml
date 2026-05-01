@@ -196,9 +196,11 @@ profiles:
 # context_loading:
 #   root_glob: "*.md"
 #   spotlight:
-#     - oversight/OVERSIGHT-BLUEPRINT.md
-#     - oversight/shared/*.md
+#     - oversight/OVERSIGHT-BLUEPRINT.md    # agent soul specs + pipeline protocol
+#     - oversight/shared/*.md               # PIPELINE-PROTOCOL, KNOWN-PITFALLS, etc.
+#     - instructions/MVP-100-PLAN.md        # primary alignment ref: per-axis sweep plan
+#     - maturity-dashboard.html             # current maturity scores (local generated artifact)
 #   exclude:
-#     - oversight/agents/**
-#     - "**/*-memory-*.md"
+#     - oversight/agents/**                 # job logs, daily memory, inbox/outbox (400+ files)
+#     - "**/*-memory-*.md"                  # daily memory snapshots
 #     - "**/archive/**"
