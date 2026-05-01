@@ -118,12 +118,19 @@ class _InstrumentedRunner:
         return result
 
 
-def _run_pass(events, snap, *, cli_enabled: bool) -> tuple[_SoakStats, list[str]]:
+def _run_pass(
+    events,
+    snap,
+    *,
+    cli_enabled: bool,
+    bus=None,
+    session_id: str = "",
+) -> tuple[_SoakStats, list[str]]:
     """Run one pass through events. Returns stats + mode-transition log."""
     stats = _SoakStats()
     mode_log: list[str] = []
 
-    engine = GovernanceEngine(project_context=snap)
+    engine = GovernanceEngine(project_context=snap, bus=bus, session_id=session_id)
     if cli_enabled:
         runner = _InstrumentedRunner(stats)
         engine._cli_governor = CliGovernor(snap, runner=runner)
@@ -167,6 +174,9 @@ def main() -> int:
     ap.add_argument(
         "--no-intent", action="store_true", help="Skip INTENT.md even if present"
     )
+    ap.add_argument(
+        "--bus", default="", help="Path to WAL bus SQLite DB; enables real-time monitoring"
+    )
     args = ap.parse_args()
 
     cli_was_enabled = os.environ.get("BRIDGE_API_GOV", "").lower() in ("1", "true", "yes")
@@ -186,6 +196,18 @@ def main() -> int:
 
     snap = load(args.intent, ignore_intent=args.no_intent)
     transcript_name = Path(args.transcript).name
+    session_id = Path(args.transcript).stem
+
+    bus = None
+    if args.bus:
+        from stream_manager.message_bus import MessageBus  # noqa: E402
+        bus = MessageBus(args.bus)
+        bus.open_session(
+            session_id,
+            project_slug=Path(args.intent).resolve().name,
+            pid=os.getpid(),
+        )
+        print(f"- bus: {args.bus} (session {session_id})", file=sys.stderr)
 
     print(f"# CLI soak report -- {transcript_name}")
     print()
@@ -200,7 +222,9 @@ def main() -> int:
         os.environ["BRIDGE_API_GOV"] = "true"
     else:
         os.environ.pop("BRIDGE_API_GOV", None)
-    cli_stats, cli_modes = _run_pass(events, snap, cli_enabled=cli_was_enabled)
+    cli_stats, cli_modes = _run_pass(
+        events, snap, cli_enabled=cli_was_enabled, bus=bus, session_id=session_id
+    )
 
     print("## CLI escalation path")
     print()
@@ -278,6 +302,11 @@ def main() -> int:
         print()
 
     print(f"## Overall: {'PASS' if targets_met else 'FAIL'}")
+
+    if bus is not None:
+        bus.close_session(session_id)
+        bus.close()
+
     return 0 if targets_met else 2
 
 

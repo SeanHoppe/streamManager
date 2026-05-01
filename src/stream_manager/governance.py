@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
+from stream_manager import message_bus as _msg_bus
 from stream_manager.cli_governance import CliGovernor, is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.messages import Message
@@ -58,12 +59,37 @@ class GovernanceEngine:
     mode: Mode = Mode.OBSERVE
     rate_limit_per_min: int = DEFAULT_RATE_LIMIT_PER_MIN
 
+    bus: _msg_bus.MessageBus | None = None
+    session_id: str = ""
+
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_log: deque[float] = field(default_factory=lambda: deque(maxlen=120))
     _cli_governor: CliGovernor | None = None
 
     def evaluate(self, msg: Message) -> GovDecision:
+        bus_msg: _msg_bus.Message | None = None
+        if self.bus is not None and self.session_id:
+            bus_msg = _msg_bus.Message.new(
+                session_id=self.session_id,
+                type="governance_eval",
+                direction="inbound",
+                content=msg.content,
+                metadata={"role": msg.role, "msg_id": msg.id},
+            )
+            self.bus.publish(bus_msg)
+        decision = self._evaluate_inner(msg)
+        if self.bus is not None and bus_msg is not None:
+            self.bus.record_decision(
+                message_id=bus_msg.id,
+                action=decision.action,
+                confidence=decision.confidence,
+                reasoning=decision.reasoning,
+                matched_hash=decision.matched_hash,
+            )
+        return decision
+
+    def _evaluate_inner(self, msg: Message) -> GovDecision:
         pre = fast_precheck(msg.content, self.project_context)
         if pre is not None:
             decision = self._apply_mode(
