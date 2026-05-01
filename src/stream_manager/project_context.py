@@ -196,3 +196,48 @@ def _safe_read(fp: Path, max_bytes: int = 64 * 1024) -> str:
         return fp.read_text(encoding="utf-8", errors="replace")[:max_bytes]
     except OSError:
         return ""
+
+
+# ── FR-OG-7: .sm-context.yaml loader (Phase 5) ─────────────────────────
+#
+# When SM governs a project that ships an `.sm-context.yaml`, that file
+# declares which artifacts SM should pay attention to (spotlight) and
+# the path to a structured maturity artifact (e.g. certPortal's
+# maturity.yaml). The loader is intentionally tolerant: missing files
+# return None so callers can dormant-skip the FR-OG-7 codepath without
+# an exception path.
+
+
+def load_sm_context(project_root: Path) -> dict[str, object] | None:
+    """Load `.sm-context.yaml` from project root. Returns None if absent
+    or unparseable. Never raises.
+    """
+    path = Path(project_root) / ".sm-context.yaml"
+    if not path.exists():
+        return None
+    try:
+        import yaml  # type: ignore[import-untyped]
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def get_maturity_artifact_path(
+    sm_context: dict[str, object], project_root: Path
+) -> Path | None:
+    """Extract `maturity.artifact_path` from `.sm-context.yaml` config and
+    resolve it relative to `project_root`. Returns None when the field is
+    missing, the value is malformed, or the resolved path does not exist.
+    """
+    maturity = sm_context.get("maturity")
+    if not isinstance(maturity, dict):
+        return None
+    rel = maturity.get("artifact_path")
+    if not isinstance(rel, str) or not rel:
+        return None
+    p = Path(project_root) / rel
+    return p if p.exists() else None

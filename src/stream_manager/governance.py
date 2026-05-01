@@ -13,6 +13,7 @@ from stream_manager.cli_governance import CliGovernor
 from stream_manager.cli_governance import is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.hitl import HitlQueue
+from stream_manager.maturity_reader import MaturityReader
 from stream_manager.messages import Message
 from stream_manager.model_router import (
     ConvergenceMonitor,
@@ -159,6 +160,10 @@ class GovernanceEngine:
     session_id: str = ""
     registry: AgentRegistry | None = None
     hitl: HitlQueue | None = None
+    # Phase 5 / FR-OG-7: optional MaturityReader. When None, all FR-OG-7
+    # signals are dormant (gate condition).
+    maturity: MaturityReader | None = None
+    _sweep_job_agents_seen: list[str] = field(default_factory=list)
 
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
@@ -264,6 +269,27 @@ class GovernanceEngine:
         profile: AgentProfile | None = None
         if self.registry is not None and self.session_id:
             profile = self.registry.active_profile(self.session_id)
+        active_profile_slug = profile.slug if profile is not None else None
+
+        # FR-OG-7 (Phase 5): maturity-ring signals run BEFORE precheck so
+        # ring-derived overrides (negative regression BLOCK, sweep-JOB
+        # ALLOW, AAR-without-deviations GUIDE) win over the static
+        # precheck rules. The gate condition lives inside _check_fr_og7:
+        # when self.maturity is None, the method returns None immediately
+        # and normal evaluation continues unchanged.
+        og7 = self._check_fr_og7(msg, active_profile_slug)
+        if og7 is not None:
+            # Route the override decision into a layer for cost accounting
+            # and convergence monitoring, just like the normal codepath.
+            is_ambiguous_block = (
+                og7.action == "BLOCK" and og7.confidence < 0.85
+            )
+            self._last_routing = route(
+                source=og7.source,
+                confidence=og7.confidence,
+                is_ambiguous_block=is_ambiguous_block,
+            )
+            return og7
 
         # FR-AR-6: blocked_ops are unconditional — short-circuit before any
         # other routing so an agent cannot smuggle a forbidden op past a
@@ -348,6 +374,164 @@ class GovernanceEngine:
             source=f"agent_profile:{profile.slug}",
             original_action=decision.original_action or decision.action,
         )
+
+    # ── FR-OG-7 (Phase 5): maturity-ring signals ──────────────────────
+    #
+    # Canonical sweep-JOB order: developer → code_reviewer → tester →
+    # researcher. When the active-profile slug stream matches that exact
+    # 4-tuple, the JOB is recognized as the legitimate sweep pipeline and
+    # is allowed through with confidence=0.95.
+    _SWEEP_ORDER: tuple[str, ...] = (
+        "developer",
+        "code_reviewer",
+        "tester",
+        "researcher",
+    )
+
+    def _check_fr_og7(
+        self, msg: Message, active_profile_slug: str | None
+    ) -> GovDecision | None:
+        """Return an overriding GovDecision if any FR-OG-7 signal fires.
+
+        Gate condition: when ``self.maturity`` is None, FR-OG-7 is
+        dormant — return None immediately so evaluate() proceeds with
+        the standard precheck/graph/cli flow.
+        """
+        if self.maturity is None:
+            return None
+
+        # Refresh maturity snapshot (debounced; tolerant of bad files).
+        try:
+            delta = self.maturity.refresh()
+        except Exception:
+            log.exception("fr-og7: maturity.refresh raised; skipping signals")
+            delta = None
+
+        # Signal: negative cell regression → BLOCK + emit
+        # governance_negative_regression bus event.
+        if delta is not None and delta.regressed_cells:
+            if self.bus is not None and self.session_id:
+                try:
+                    self.bus.publish(
+                        _msg_bus.Message.new(
+                            session_id=self.session_id,
+                            type="governance_negative_regression",
+                            direction="internal",
+                            content=(
+                                "Cells regressed: "
+                                + ", ".join(delta.regressed_cells)
+                            ),
+                            metadata={
+                                "cells": delta.regressed_cells,
+                                "delta": delta.delta,
+                            },
+                        )
+                    )
+                except Exception:
+                    log.exception("fr-og7: regression event publish failed")
+            return GovDecision(
+                action="BLOCK",
+                confidence=1.0,
+                reasoning=(
+                    f"FR-OG-7: negative cell regression — "
+                    f"{delta.regressed_cells}"
+                ),
+                mode=self.mode,
+                source="fr_og7_regression",
+            )
+
+        # Signal: ring delta > 5% in 24h → emit governance_variance_alert
+        # (FYI event only — does NOT short-circuit the decision).
+        if (
+            delta is not None
+            and abs(delta.delta) > 5.0
+            and delta.elapsed_seconds < 86400
+            and self.bus is not None
+            and self.session_id
+        ):
+            try:
+                self.bus.publish(
+                    _msg_bus.Message.new(
+                        session_id=self.session_id,
+                        type="governance_variance_alert",
+                        direction="internal",
+                        content=(
+                            f"Ring delta {delta.delta:+.1f}% in "
+                            f"{delta.elapsed_seconds / 3600:.1f}h"
+                        ),
+                        metadata={
+                            "delta": delta.delta,
+                            "elapsed_seconds": delta.elapsed_seconds,
+                        },
+                    )
+                )
+            except Exception:
+                log.exception("fr-og7: variance event publish failed")
+
+        # Signal: ≥3 cells promoted in same session → variance alert (FYI).
+        if (
+            delta is not None
+            and len(delta.promoted_cells) >= 3
+            and self.bus is not None
+            and self.session_id
+        ):
+            try:
+                self.bus.publish(
+                    _msg_bus.Message.new(
+                        session_id=self.session_id,
+                        type="governance_variance_alert",
+                        direction="internal",
+                        content=(
+                            f"3+ cells promoted: {delta.promoted_cells}"
+                        ),
+                        metadata={"cells": delta.promoted_cells},
+                    )
+                )
+            except Exception:
+                log.exception("fr-og7: promotion event publish failed")
+
+        # Signal: sweep-JOB pattern detected → ALLOW override.
+        # The sliding window keeps the last 4 profile slugs seen; we
+        # match exactly against the canonical sweep order. The window
+        # is NOT cleared on match — it slides naturally, so a partial
+        # re-match later still requires the full 4-tuple.
+        if active_profile_slug:
+            self._sweep_job_agents_seen.append(active_profile_slug)
+            self._sweep_job_agents_seen = self._sweep_job_agents_seen[-4:]
+            if (
+                tuple(self._sweep_job_agents_seen) == self._SWEEP_ORDER
+            ):
+                return GovDecision(
+                    action="ALLOW",
+                    confidence=0.95,
+                    reasoning="FR-OG-7: sweep JOB pattern recognized",
+                    mode=self.mode,
+                    source="fr_og7_sweep",
+                )
+
+        # Signal: AAR message missing ## Deviations section → GUIDE.
+        # AAR detection: heuristic on content (the literal "AAR", or the
+        # phrase "after action", or the explicit "## deviations" header
+        # mention) AND the literal "## Deviations" header is absent.
+        content = msg.content or ""
+        is_aar = (
+            "AAR" in content
+            or "after action" in content.lower()
+            or "## deviations" in content.lower()
+        )
+        if is_aar and "## Deviations" not in content:
+            return GovDecision(
+                action="GUIDE",
+                confidence=0.80,
+                reasoning=(
+                    "FR-OG-7: AAR missing ## Deviations section "
+                    "(invariant 9)"
+                ),
+                mode=self.mode,
+                source="fr_og7_aar",
+            )
+
+        return None
 
     def _evaluate_inner_core(self, msg: Message) -> GovDecision:
         pre = fast_precheck(msg.content, self.project_context)

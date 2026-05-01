@@ -631,6 +631,136 @@ def _iso_now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
 
 
+# ── FR-OG-7 (Phase 5): /api/maturity endpoint ─────────────────────────
+#
+# A separate, lazily-initialized MaturityReader is held at module scope
+# so the dashboard can poll without coupling to the running governance
+# engine. Activation is gated on the presence of ``.sm-context.yaml``
+# AND a valid ``maturity.artifact_path`` in the governed project root.
+# Resolution order for the project root:
+#   1. ``SM_PROJECT_ROOT`` env var (explicit override)
+#   2. fallback: SM repo root (i.e. ROOT) — yields ``active=False`` in
+#      practice because SM itself doesn't ship `.sm-context.yaml`.
+
+_maturity_reader = None  # type: ignore[var-annotated]
+_maturity_resolved = False
+_maturity_last_sweep_ts: float | None = None
+
+
+def _get_maturity_reader():
+    """Resolve and cache the MaturityReader. Returns None when FR-OG-7
+    is dormant for this dashboard (no `.sm-context.yaml` or no artifact).
+    """
+    global _maturity_reader, _maturity_resolved
+    if _maturity_resolved:
+        return _maturity_reader
+    _maturity_resolved = True
+    try:
+        from stream_manager.maturity_reader import MaturityReader
+        from stream_manager.project_context import (
+            get_maturity_artifact_path,
+            load_sm_context,
+        )
+
+        project_root_env = os.environ.get("SM_PROJECT_ROOT")
+        project_root = Path(project_root_env) if project_root_env else ROOT
+        ctx = load_sm_context(project_root)
+        if ctx is None:
+            _maturity_reader = None
+            return None
+        artifact = get_maturity_artifact_path(ctx, project_root)
+        if artifact is None:
+            _maturity_reader = None
+            return None
+        _maturity_reader = MaturityReader(artifact)
+    except Exception:
+        _maturity_reader = None
+    return _maturity_reader
+
+
+@app.get("/api/maturity")
+async def api_maturity():
+    """FR-OG-7 ring snapshot for the dashboard panel.
+
+    Returns ``active=False`` when no MaturityReader is wired (gate
+    condition); the dashboard hides the ring panel in that case.
+    """
+    reader = _get_maturity_reader()
+    if reader is None:
+        return {
+            "active": False,
+            "percent": 0.0,
+            "at_threshold": 0,
+            "total": 0,
+            "last_delta": None,
+            "regressed_cells": [],
+            "promoted_cells": [],
+            "snapshot_age_seconds": 0.0,
+            "last_sweep_timestamp": None,
+        }
+
+    delta = None
+    try:
+        delta = reader.refresh()
+    except Exception:
+        delta = None
+
+    snap = reader.current_snapshot
+    if snap is None:
+        # Force a non-debounced read to seed the panel on first hit.
+        snap = reader.read()
+
+    # Look up the most recent fr_og7_sweep bus event for the timestamp
+    # badge. We reach into the WAL bus directly so this endpoint stays
+    # decoupled from any in-process engine instance.
+    last_sweep_ts: float | None = None
+    try:
+        conn = _open()
+        row = conn.execute(
+            "SELECT timestamp FROM messages WHERE type='fr_og7_sweep' "
+            "ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            # Older code paths emit nothing for fr_og7_sweep — the
+            # ALLOW decision itself sources to fr_og7_sweep, so fall
+            # back to the latest decision row with that source.
+            row = conn.execute(
+                "SELECT timestamp FROM decisions WHERE reasoning LIKE "
+                "'FR-OG-7: sweep JOB pattern recognized%' "
+                "ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        if row is not None:
+            last_sweep_ts = float(row[0])
+        conn.close()
+    except Exception:
+        last_sweep_ts = None
+
+    if snap is None:
+        return {
+            "active": True,
+            "percent": 0.0,
+            "at_threshold": 0,
+            "total": 0,
+            "last_delta": None,
+            "regressed_cells": [],
+            "promoted_cells": [],
+            "snapshot_age_seconds": 0.0,
+            "last_sweep_timestamp": last_sweep_ts,
+        }
+
+    return {
+        "active": True,
+        "percent": round(snap.percent, 1),
+        "at_threshold": snap.at_threshold,
+        "total": snap.total,
+        "last_delta": (round(delta.delta, 2) if delta is not None else None),
+        "regressed_cells": (delta.regressed_cells if delta is not None else []),
+        "promoted_cells": (delta.promoted_cells if delta is not None else []),
+        "snapshot_age_seconds": max(0.0, time.time() - snap.timestamp),
+        "last_sweep_timestamp": last_sweep_ts,
+    }
+
+
 _HITL_EVENT_TYPES = ("hitl_sync_queued", "hitl_async_flagged", "hitl_timeout")
 
 

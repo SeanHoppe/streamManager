@@ -945,6 +945,112 @@ body::after{
 .settings-toggle input{accent-color:var(--accent)}
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FR-OG-7 MATURITY RING PANEL (Phase 5)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.ring-panel{
+  display:none;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  padding:18px 22px;
+  margin-bottom:22px;
+  position:relative;
+}
+.ring-panel.on{display:block}
+.ring-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:14px;
+}
+.ring-title{
+  font-family:var(--font-h);
+  font-size:11px;
+  letter-spacing:0.22em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+}
+[data-theme="paper"] .ring-title{
+  font-family:'Courier Prime',monospace;
+  font-size:10px;
+  letter-spacing:0.12em;
+}
+.ring-active-badge{
+  font-family:var(--font-d);
+  font-size:9px;
+  letter-spacing:0.14em;
+  color:var(--accent);
+  border:1px solid var(--border-hi);
+  padding:3px 8px;
+  background:var(--accent-dim);
+  text-transform:uppercase;
+}
+.ring-row{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  gap:22px;
+  align-items:center;
+}
+.ring-percent{
+  font-family:var(--font-d);
+  font-size:38px;
+  font-weight:300;
+  color:var(--text-bright);
+  letter-spacing:-0.03em;
+  line-height:1;
+}
+[data-theme="paper"] .ring-percent{
+  font-family:'Playfair Display',serif;
+  font-weight:700;
+}
+.ring-bar-wrap{display:flex;flex-direction:column;gap:6px}
+.ring-bar{
+  height:6px;
+  background:var(--bg-row);
+  border:1px solid var(--border);
+  position:relative;
+  overflow:hidden;
+}
+.ring-bar-fill{
+  position:absolute;
+  inset:0 auto 0 0;
+  width:0%;
+  background:var(--accent);
+  box-shadow:0 0 8px var(--accent-glow);
+  transition:width .4s ease;
+}
+.ring-bar-meta{
+  display:flex;
+  justify-content:space-between;
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text-ui);
+  letter-spacing:0.08em;
+}
+.ring-side{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:6px;
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text-ui);
+  letter-spacing:0.08em;
+}
+.ring-delta-badge{
+  font-family:var(--font-d);
+  font-size:11px;
+  padding:3px 8px;
+  border:1px solid var(--border);
+  letter-spacing:0.04em;
+  color:var(--text);
+  background:var(--bg-row);
+}
+.ring-delta-badge.up{color:var(--c-allow);border-color:var(--c-allow)}
+.ring-delta-badge.down{color:var(--c-block);border-color:var(--c-block)}
+.ring-delta-badge.neutral{color:var(--text-ui)}
+.ring-sweep{font-size:9px;color:var(--text-dim)}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    FOOTER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .footer{
@@ -1027,6 +1133,27 @@ body::after{
       <div class="hitl-count" id="hitlCount">0</div>
     </div>
     <div class="hitl-list" id="hitlList"></div>
+  </section>
+
+  <!-- ── FR-OG-7 MATURITY RING PANEL (Phase 5) ──────────── -->
+  <section class="ring-panel" id="ringPanel" aria-hidden="true">
+    <div class="ring-head">
+      <div class="ring-title">Maturity Ring</div>
+      <div class="ring-active-badge" id="ringActiveBadge">OG-7 ACTIVE</div>
+    </div>
+    <div class="ring-row">
+      <div class="ring-percent" id="ringPercent">—</div>
+      <div class="ring-bar-wrap">
+        <div class="ring-bar"><div class="ring-bar-fill" id="ringBarFill"></div></div>
+        <div class="ring-bar-meta">
+          <span id="ringCellsLabel">0 / 0 cells at threshold</span>
+          <span id="ringSweep" class="ring-sweep">last sweep: —</span>
+        </div>
+      </div>
+      <div class="ring-side">
+        <span class="ring-delta-badge neutral" id="ringDeltaBadge">—</span>
+      </div>
+    </div>
   </section>
 
   <!-- ── FILTER BAR ─────────────────────────────────────── -->
@@ -1740,6 +1867,66 @@ document.querySelectorAll('.theme-btn').forEach(btn=>{
     document.documentElement.dataset.theme = btn.dataset.t;
   });
 });
+
+/* ── FR-OG-7 maturity ring panel poller (Phase 5) ───────
+   Polls /api/maturity every 30s. Hides the panel entirely when
+   active=false (gate condition: no .sm-context.yaml, no artifact). */
+const ringPanel        = document.getElementById('ringPanel');
+const ringPercent      = document.getElementById('ringPercent');
+const ringBarFill      = document.getElementById('ringBarFill');
+const ringCellsLabel   = document.getElementById('ringCellsLabel');
+const ringDeltaBadge   = document.getElementById('ringDeltaBadge');
+const ringSweep        = document.getElementById('ringSweep');
+
+function _formatTs(ts){
+  if (ts == null) return '—';
+  try{
+    const d = new Date(Number(ts) * 1000);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString();
+  }catch(_){ return '—'; }
+}
+
+async function fetchMaturity(){
+  if (!ringPanel) return;
+  try{
+    const res  = await fetch('/api/maturity');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || data.active !== true){
+      ringPanel.classList.remove('on');
+      ringPanel.setAttribute('aria-hidden','true');
+      return;
+    }
+    ringPanel.classList.add('on');
+    ringPanel.setAttribute('aria-hidden','false');
+
+    const pct = Number(data.percent || 0);
+    ringPercent.textContent = pct.toFixed(1) + '%';
+    ringBarFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    ringCellsLabel.textContent =
+      `${data.at_threshold || 0} / ${data.total || 0} cells at threshold`;
+
+    const d = data.last_delta;
+    if (d == null){
+      ringDeltaBadge.textContent = '—';
+      ringDeltaBadge.className = 'ring-delta-badge neutral';
+    } else if (Number(d) > 0){
+      ringDeltaBadge.textContent = '+' + Number(d).toFixed(1) + '%';
+      ringDeltaBadge.className = 'ring-delta-badge up';
+    } else if (Number(d) < 0){
+      ringDeltaBadge.textContent = Number(d).toFixed(1) + '%';
+      ringDeltaBadge.className = 'ring-delta-badge down';
+    } else {
+      ringDeltaBadge.textContent = '0.0%';
+      ringDeltaBadge.className = 'ring-delta-badge neutral';
+    }
+    ringSweep.textContent = 'last sweep: ' + _formatTs(data.last_sweep_timestamp);
+  }catch(_){ /* silent — panel stays in last good state */ }
+}
+
+fetchMaturity();
+setInterval(fetchMaturity, 30000);
 </script>
 </body>
 </html>
