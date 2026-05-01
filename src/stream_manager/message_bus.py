@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import sqlite3
@@ -66,6 +67,29 @@ CREATE TABLE IF NOT EXISTS agents (
     last_seen REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
+
+CREATE TABLE IF NOT EXISTS hitl_pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL REFERENCES messages(id),
+    proposed_action TEXT NOT NULL,
+    proposed_confidence REAL NOT NULL,
+    trigger_reason TEXT NOT NULL,
+    queued_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_hitl_pending_unresolved ON hitl_pending(resolved_at);
+
+CREATE TABLE IF NOT EXISTS hitl_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id TEXT NOT NULL REFERENCES decisions(id),
+    original_action TEXT NOT NULL,
+    override_action TEXT NOT NULL,
+    note TEXT,
+    mode TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hitl_overrides_decision ON hitl_overrides(decision_id);
 """
 
 
@@ -128,6 +152,21 @@ class MessageBus:
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Additive migration for sessions table: add hitl_mode + hitl_floor
+            # if absent. Older DBs created before Phase 2 will not have these
+            # columns; CREATE TABLE IF NOT EXISTS does not add them.
+            cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            if "hitl_mode" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN hitl_mode TEXT NOT NULL DEFAULT 'async'"
+                )
+            if "hitl_floor" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN hitl_floor REAL NOT NULL DEFAULT 0.60"
+                )
 
     def open_session(
         self,
@@ -252,6 +291,186 @@ class MessageBus:
                         row[0],
                     ),
                 )
+
+    # ── FR-HITL §4.9 ─────────────────────────────────────────────────
+
+    def queue_hitl(
+        self,
+        message_id: str,
+        proposed_action: str,
+        proposed_confidence: float,
+        trigger_reason: str,
+    ) -> int:
+        """Queue a decision for human approval. Returns hitl_pending.id."""
+        queued_at = _dt.datetime.now(_dt.UTC).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO hitl_pending (message_id, proposed_action, "
+                "proposed_confidence, trigger_reason, queued_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    message_id,
+                    proposed_action,
+                    float(proposed_confidence),
+                    trigger_reason,
+                    queued_at,
+                ),
+            )
+            pending_id = int(cur.lastrowid or 0)
+        return pending_id
+
+    def resolve_hitl(self, pending_id: int, resolution: str) -> None:
+        """Mark a pending HITL row as resolved."""
+        resolved_at = _dt.datetime.now(_dt.UTC).isoformat()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE hitl_pending SET resolved_at=?, resolution=? "
+                "WHERE id=? AND resolved_at IS NULL",
+                (resolved_at, resolution, pending_id),
+            )
+
+    def get_pending_hitl(self, session_id: str) -> list[dict[str, object]]:
+        """Return unresolved hitl_pending rows for a session, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT hp.id, hp.message_id, hp.proposed_action, "
+                "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
+                "hp.resolved_at, hp.resolution "
+                "FROM hitl_pending hp "
+                "JOIN messages m ON hp.message_id = m.id "
+                "WHERE m.session_id=? AND hp.resolved_at IS NULL "
+                "ORDER BY hp.id ASC",
+                (session_id,),
+            ).fetchall()
+        out: list[dict[str, object]] = []
+        for r in rows:
+            out.append(
+                {
+                    "id": int(r[0]),
+                    "message_id": r[1],
+                    "proposed_action": r[2],
+                    "proposed_confidence": float(r[3]),
+                    "trigger_reason": r[4],
+                    "queued_at": r[5],
+                    "resolved_at": r[6],
+                    "resolution": r[7],
+                }
+            )
+        return out
+
+    def get_hitl_pending_row(self, pending_id: int) -> dict[str, object] | None:
+        """Look up a single hitl_pending row by id (for poll loops)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, message_id, proposed_action, proposed_confidence, "
+                "trigger_reason, queued_at, resolved_at, resolution "
+                "FROM hitl_pending WHERE id=?",
+                (pending_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row[0]),
+            "message_id": row[1],
+            "proposed_action": row[2],
+            "proposed_confidence": float(row[3]),
+            "trigger_reason": row[4],
+            "queued_at": row[5],
+            "resolved_at": row[6],
+            "resolution": row[7],
+        }
+
+    def annotate_decision(
+        self,
+        decision_id: str,
+        original_action: str,
+        override_action: str,
+        note: str | None,
+        mode: str,
+    ) -> None:
+        """Insert an override row into hitl_overrides."""
+        ts = _dt.datetime.now(_dt.UTC).isoformat()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO hitl_overrides (decision_id, original_action, "
+                "override_action, note, mode, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                (decision_id, original_action, override_action, note, mode, ts),
+            )
+
+    def get_overrides_for_hash(
+        self, matched_hash: str, limit: int = 5
+    ) -> list[dict[str, object]]:
+        """Return up to `limit` most recent overrides linked to decisions
+        whose matched_hash equals the given value.
+        """
+        if not matched_hash:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ho.id, ho.decision_id, ho.original_action, "
+                "ho.override_action, ho.note, ho.mode, ho.timestamp "
+                "FROM hitl_overrides ho "
+                "JOIN decisions d ON ho.decision_id = d.id "
+                "WHERE d.matched_hash=? "
+                "ORDER BY ho.id DESC LIMIT ?",
+                (matched_hash, int(limit)),
+            ).fetchall()
+        return [
+            {
+                "id": int(r[0]),
+                "decision_id": r[1],
+                "original_action": r[2],
+                "override_action": r[3],
+                "note": r[4],
+                "mode": r[5],
+                "timestamp": r[6],
+            }
+            for r in rows
+        ]
+
+    def get_hitl_mode(self, session_id: str) -> tuple[str, float]:
+        """Return (hitl_mode, hitl_floor) for a session.
+
+        Falls back to ("async", 0.60) if the session row is missing.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT hitl_mode, hitl_floor FROM sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return ("async", 0.60)
+        mode = str(row[0]) if row[0] is not None else "async"
+        floor = float(row[1]) if row[1] is not None else 0.60
+        return (mode, floor)
+
+    def set_hitl_mode(self, session_id: str, mode: str, floor: float) -> None:
+        """Update hitl_mode and hitl_floor for a session."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET hitl_mode=?, hitl_floor=? WHERE id=?",
+                (mode, float(floor), session_id),
+            )
+
+    def get_decision_by_id(self, decision_id: str) -> dict[str, object] | None:
+        """Return a single decision row by id."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, message_id, action, confidence, reasoning, "
+                "matched_hash, timestamp FROM decisions WHERE id=?",
+                (decision_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "message_id": row[1],
+            "action": row[2],
+            "confidence": float(row[3]),
+            "reasoning": row[4],
+            "matched_hash": row[5],
+            "timestamp": float(row[6]),
+        }
 
     def stats(self) -> dict[str, int]:
         with self._lock:
