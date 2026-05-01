@@ -203,6 +203,77 @@ class DecisionGraph:
         counts["sequence_candidates"] = len(self._sequence_candidates)
         return counts
 
+    def save(self, db_path: str) -> None:
+        """Upsert all patterns to SQLite. Safe to call after every evaluate()."""
+        import json
+        import sqlite3
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS graph_patterns (
+                hash TEXT PRIMARY KEY,
+                level INTEGER NOT NULL,
+                vector TEXT NOT NULL,
+                canonical_text TEXT NOT NULL,
+                occurrences INTEGER NOT NULL,
+                successes INTEGER NOT NULL,
+                last_seen REAL NOT NULL,
+                children TEXT NOT NULL
+            )"""
+        )
+        with conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO graph_patterns
+                   (hash, level, vector, canonical_text, occurrences, successes, last_seen, children)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        p.hash,
+                        int(p.level),
+                        json.dumps(p.vector),
+                        p.canonical_text,
+                        p.occurrences,
+                        p.successes,
+                        p.last_seen,
+                        json.dumps(p.children),
+                    )
+                    for p in self.patterns.values()
+                ],
+            )
+        conn.close()
+
+    @classmethod
+    def load(cls, db_path: str) -> "DecisionGraph":
+        """Load persisted patterns from SQLite. Returns empty graph if absent."""
+        import json
+        import sqlite3
+
+        graph = cls()
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM graph_patterns").fetchall()
+            conn.close()
+        except Exception:
+            return graph
+        for row in rows:
+            try:
+                p = Pattern(
+                    hash=row["hash"],
+                    level=PatternLevel(row["level"]),
+                    vector=json.loads(row["vector"]),
+                    canonical_text=row["canonical_text"],
+                    occurrences=row["occurrences"],
+                    successes=row["successes"],
+                    last_seen=row["last_seen"],
+                    children=json.loads(row["children"]),
+                )
+                graph.patterns[p.hash] = p
+            except Exception:
+                continue
+        return graph
+
     def summarize(self, max_chars: int = 300) -> str:
         by_level: dict[int, list[Pattern]] = {}
         for p in self.patterns.values():
