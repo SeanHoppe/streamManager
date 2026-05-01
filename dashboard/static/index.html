@@ -452,8 +452,49 @@ body::after{
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    FEED TABLE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-/* col layout: time | action | source | conf | content+reason | session */
-.feed-cols{display:grid;grid-template-columns:86px 82px 68px 96px 1fr 76px;gap:10px}
+/* col layout: time | action | source | agent | conf | content+reason | session */
+.feed-cols{display:grid;grid-template-columns:86px 82px 68px 96px 96px 1fr 76px;gap:10px}
+
+/* agent chip */
+.c-agent{
+  font-family:var(--font-d);
+  font-size:9px;
+  letter-spacing:.04em;
+  padding-top:3px;
+  text-transform:lowercase;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.agent-chip{
+  display:inline-block;
+  padding:1px 6px;
+  border:1px solid var(--border);
+  color:var(--text);
+  background:var(--accent-dim);
+}
+.agent-chip.unknown{color:var(--text-dim);background:transparent}
+
+/* active-agent badge */
+.agent-badge-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-top:10px;
+  padding-top:10px;
+  border-top:1px dashed var(--border);
+  font-family:var(--font-d);
+  font-size:10px;
+}
+.agent-badge-label{
+  color:var(--text-ui);
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  font-size:9px;
+}
+.agent-badge-name{color:var(--accent)}
+.agent-badge-slug{color:var(--text-bright);font-weight:500}
+.agent-badge-empty{color:var(--text-dim);font-style:italic}
 .feed-head{
   padding:7px 12px;
   border:1px solid var(--border);
@@ -657,6 +698,10 @@ body::after{
       <div class="sess-list" id="sessList">
         <div class="sess-empty">no session data</div>
       </div>
+      <div class="agent-badge-row" id="agentBadgeRow">
+        <span class="agent-badge-label">Active agent</span>
+        <span class="agent-badge-empty" id="agentBadge">none identified</span>
+      </div>
     </div>
   </div>
 
@@ -676,6 +721,7 @@ body::after{
     <div class="fh-col">Time</div>
     <div class="fh-col">Action</div>
     <div class="fh-col">Source</div>
+    <div class="fh-col">Agent</div>
     <div class="fh-col">Confidence</div>
     <div class="fh-col">Content / Reasoning</div>
     <div class="fh-col">Session</div>
@@ -743,6 +789,11 @@ function confPips(c){
 function buildRow(row, isNew=false){
   const src = inferSrc(row);
   const sid = (row.session_id||'').slice(0,8);
+  const slug = row.profile_slug || '';
+  const plugin = row.attribution_plugin || '';
+  const agentTitle = plugin ? `${plugin} (${slug||'unknown'})` : (slug||'no profile');
+  const agentLabel = slug || '–';
+  const chipCls = slug && slug !== 'unknown' ? 'agent-chip' : 'agent-chip unknown';
   const el  = document.createElement('div');
   el.className = `row feed-cols${isNew?' fresh':''}`;
   el.dataset.action = row.action||'';
@@ -750,6 +801,7 @@ function buildRow(row, isNew=false){
     <div class="c-ts">${fmtTs(row.timestamp)}</div>
     <div><span class="badge badge-${esc(row.action||'?')}">${esc(row.action||'?')}</span></div>
     <div class="c-src src-${src}">${src}</div>
+    <div class="c-agent" title="${esc(agentTitle)}"><span class="${chipCls}">${esc(agentLabel)}</span></div>
     <div class="c-conf">${confPips(row.confidence)}</div>
     <div class="c-content">
       <div class="ct" title="${esc(row.content||'')}">${esc(clip(row.content||''))}</div>
@@ -878,6 +930,31 @@ async function fetchSessions(){
 }
 fetchSessions();
 setInterval(fetchSessions,10000);
+
+/* ── active agent badge ──────────────────────────────── */
+async function fetchAgents(){
+  try{
+    const r = await fetch('/api/agents?limit=1');
+    const rows = await r.json();
+    const badge = $('agentBadge');
+    if(!rows||!rows.length){
+      badge.className='agent-badge-empty';
+      badge.textContent='none identified';
+      return;
+    }
+    const a = rows[0];
+    const sidechainSuffix = a.is_sidechain ? ' [side]' : '';
+    badge.className='';
+    badge.innerHTML = `<span class="agent-badge-name">${esc(a.attribution_plugin||'?')}</span>` +
+                     ` <span class="agent-badge-slug">${esc(a.profile_slug||'unknown')}${esc(sidechainSuffix)}</span>`;
+  }catch(_){
+    const badge = $('agentBadge');
+    badge.className='agent-badge-empty';
+    badge.textContent='unavailable';
+  }
+}
+fetchAgents();
+setInterval(fetchAgents,8000);
 
 /* ── SSE connection ──────────────────────────────────── */
 const liveDot  = $('liveDot');

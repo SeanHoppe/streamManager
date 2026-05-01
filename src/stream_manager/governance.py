@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
 from stream_manager import message_bus as _msg_bus
+from stream_manager.agent_registry import AgentProfile, AgentRegistry
 from stream_manager.cli_governance import CliGovernor, is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.messages import Message
@@ -52,6 +54,92 @@ def _was_intervention_attempt(decision: GovDecision) -> bool:
     return effective in INTERVENTION_ACTIONS
 
 
+# ── Operation classification (FR-AR-6) ────────────────────────────────
+#
+# Heuristic mapping from message content to operation categories used in
+# agent_profiles.yaml. Intentionally simple: regex/substring match. The
+# AgentRegistry profile's blocked_ops/restricted_ops are checked against
+# this set to decide whether to BLOCK / cap action.
+
+_DESTRUCTIVE_SHELL_RE = re.compile(
+    r"\brm\s+-rf\b|\bDROP\s+TABLE\b|\bdd\s+if=|\btruncate\b",
+    re.IGNORECASE,
+)
+_FORCE_PUSH_RE = re.compile(
+    r"git\s+push.*(?:--force|-f)\b.*\b(?:main|master|production)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_CRED_EXFIL_RE = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_\-]{16,}|"  # OpenAI-style keys
+    r"AKIA[0-9A-Z]{16}|"             # AWS access keys
+    r"ghp_[A-Za-z0-9]{20,}|"          # GitHub PAT
+    r"xox[baprs]-[A-Za-z0-9\-]{10,})\b",
+)
+_SHELL_HINT_RE = re.compile(
+    r"(?:^|\s)(?:bash|sh|cmd|powershell|pwsh)\s|"
+    r"\$\(|`[^`]+`|"
+    r"\b(?:ls|cat|grep|find|chmod|chown|kill|systemctl|docker|kubectl|"
+    r"npm|pip|pytest|make|cargo|go)\s+",
+    re.IGNORECASE,
+)
+_FILE_WRITE_RE = re.compile(
+    r"\b(?:write\s+to|create\s+file|save\s+to|new\s+file)\b",
+    re.IGNORECASE,
+)
+_FILE_EDIT_RE = re.compile(
+    r"\b(?:edit|modify|update|patch)\b.*\.[A-Za-z0-9]+",
+    re.IGNORECASE,
+)
+_FILE_READ_RE = re.compile(
+    r"\b(?:read|open|show\s+me|cat|view)\b.*\.[A-Za-z0-9]+",
+    re.IGNORECASE,
+)
+
+
+def _classify_ops(content: str) -> set[str]:
+    """Return the set of operation categories the message content matches."""
+    ops: set[str] = set()
+    if not content:
+        return ops
+    if _DESTRUCTIVE_SHELL_RE.search(content):
+        ops.add("destructive_shell")
+    if _FORCE_PUSH_RE.search(content):
+        ops.add("force_push_protected")
+    if _CRED_EXFIL_RE.search(content):
+        ops.add("credential_exfiltration")
+    if _SHELL_HINT_RE.search(content):
+        ops.add("shell_command")
+        ops.add("tool_execution")
+    if _FILE_WRITE_RE.search(content):
+        ops.add("file_write")
+    if _FILE_EDIT_RE.search(content):
+        ops.add("file_edit")
+    if _FILE_READ_RE.search(content):
+        ops.add("file_read")
+    return ops
+
+
+_ACTION_RANK: dict[str, int] = {
+    "ALLOW": 0,
+    "OBSERVE": 0,
+    "SUGGEST": 1,
+    "GUIDE": 2,
+    "INTERVENE": 3,
+    "BLOCK": 4,
+}
+
+
+def _cap_action(current: str, ceiling: str) -> str:
+    """Return whichever of (current, ceiling) is strictly more restrictive.
+
+    The ceiling raises the floor — i.e. if current is less restrictive than
+    the ceiling, return ceiling; otherwise keep current.
+    """
+    cur_rank = _ACTION_RANK.get(current, 0)
+    ceil_rank = _ACTION_RANK.get(ceiling, 0)
+    return ceiling if ceil_rank > cur_rank else current
+
+
 @dataclass
 class GovernanceEngine:
     project_context: ProjectContextSnapshot
@@ -61,6 +149,7 @@ class GovernanceEngine:
 
     bus: _msg_bus.MessageBus | None = None
     session_id: str = ""
+    registry: AgentRegistry | None = None
 
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
@@ -90,6 +179,83 @@ class GovernanceEngine:
         return decision
 
     def _evaluate_inner(self, msg: Message) -> GovDecision:
+        profile: AgentProfile | None = None
+        if self.registry is not None and self.session_id:
+            profile = self.registry.active_profile(self.session_id)
+
+        # FR-AR-6: blocked_ops are unconditional — short-circuit before any
+        # other routing so an agent cannot smuggle a forbidden op past a
+        # graph match or default ALLOW.
+        if profile is not None:
+            ops = _classify_ops(msg.content)
+            blocked_hit = ops & set(profile.blocked_ops)
+            if blocked_hit:
+                return GovDecision(
+                    action="BLOCK",
+                    confidence=1.0,
+                    reasoning=(
+                        f"agent_profile {profile.slug} blocks op(s): "
+                        f"{', '.join(sorted(blocked_hit))}"
+                    ),
+                    mode=self.mode,
+                    source=f"agent_profile:{profile.slug}",
+                )
+
+        decision = self._evaluate_inner_core(msg)
+
+        if profile is not None:
+            decision = self._apply_profile_constraints(decision, profile, msg.content)
+        return decision
+
+    def _apply_profile_constraints(
+        self,
+        decision: GovDecision,
+        profile: AgentProfile,
+        content: str,
+    ) -> GovDecision:
+        ops = _classify_ops(content)
+        changed = False
+        new_action = decision.action
+        new_reason = decision.reasoning
+
+        # Restricted ops: cap final action at profile.escalate_to.
+        restricted_hit = ops & set(profile.restricted_ops)
+        if restricted_hit:
+            capped = _cap_action(new_action, profile.escalate_to)
+            if capped != new_action:
+                new_action = capped
+                new_reason = (
+                    f"agent_profile {profile.slug} restricted op(s) "
+                    f"{','.join(sorted(restricted_hit))} -> capped to "
+                    f"{profile.escalate_to}; {decision.reasoning}"
+                )
+                changed = True
+
+        # Confidence floor: if the engine's confidence is below the floor,
+        # escalate to at least GUIDE.
+        if decision.confidence < profile.confidence_floor:
+            floored = _cap_action(new_action, "GUIDE")
+            if floored != new_action:
+                new_action = floored
+                new_reason = (
+                    f"agent_profile {profile.slug} confidence_floor "
+                    f"{profile.confidence_floor:.2f} (got "
+                    f"{decision.confidence:.2f}) -> escalated to GUIDE; "
+                    f"{decision.reasoning}"
+                )
+                changed = True
+
+        if not changed:
+            return decision
+        return replace(
+            decision,
+            action=new_action,
+            reasoning=new_reason,
+            source=f"agent_profile:{profile.slug}",
+            original_action=decision.original_action or decision.action,
+        )
+
+    def _evaluate_inner_core(self, msg: Message) -> GovDecision:
         pre = fast_precheck(msg.content, self.project_context)
         if pre is not None:
             decision = self._apply_mode(
