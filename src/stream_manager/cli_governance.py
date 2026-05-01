@@ -107,16 +107,25 @@ class CliGovernor:
         self._system = _SYSTEM_TEMPLATE.format(intent=intent[:8000])
         return self._system
 
-    def evaluate(self, content: str) -> CliDecision | None:
+    def evaluate(
+        self,
+        content: str,
+        model_id: str | None = None,
+    ) -> CliDecision | None:
         if not is_enabled():
             return None
 
         user_prompt = f"Evaluate this proposed action:\n\n{content[:4000]}"
+        # Phase 4 / NFR-M2: caller (model_router) may pass model_id for
+        # tier-aware dispatch (Haiku for L2/L3, Sonnet for L4). When None,
+        # fall back to the legacy default so existing callers/tests are
+        # unaffected.
+        chosen_model = model_id if model_id is not None else MODEL
         cmd = [
             CLI_BIN, "-p", user_prompt,
             "--system-prompt", self._system_prompt(),
             "--output-format", "json",
-            "--model", MODEL,
+            "--model", chosen_model,
             "--no-session-persistence",
             "--tools", "",
         ]

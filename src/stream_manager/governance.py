@@ -9,10 +9,17 @@ from enum import IntEnum
 
 from stream_manager import message_bus as _msg_bus
 from stream_manager.agent_registry import AgentProfile, AgentRegistry
-from stream_manager.cli_governance import CliGovernor, is_enabled as _cli_enabled
+from stream_manager.cli_governance import CliGovernor
+from stream_manager.cli_governance import is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.hitl import HitlQueue
 from stream_manager.messages import Message
+from stream_manager.model_router import (
+    ConvergenceMonitor,
+    ModelLayer,
+    RoutingDecision,
+    route,
+)
 from stream_manager.project_context import ProjectContextSnapshot, fast_precheck
 
 log = logging.getLogger(__name__)
@@ -158,6 +165,10 @@ class GovernanceEngine:
     _intervention_log: deque[float] = field(default_factory=lambda: deque(maxlen=120))
     _cli_governor: CliGovernor | None = None
     _desktop_pause_active: bool = False
+    _convergence: ConvergenceMonitor = field(default_factory=ConvergenceMonitor)
+    # Phase 4: routing decision attached during _evaluate_inner so the outer
+    # evaluate() can persist model_used/layer and feed the convergence monitor.
+    _last_routing: RoutingDecision | None = None
 
     def signal_desktop_pause(self) -> None:
         """Mark the next evaluate() as following a Desktop end_turn pause.
@@ -209,6 +220,16 @@ class GovernanceEngine:
         # Always reset the pause flag, whether or not we routed.
         self._desktop_pause_active = False
 
+        # Phase 4 / NFR-M3: capture the routing classification produced by
+        # _evaluate_inner so we can persist model_used + layer alongside the
+        # decision row, and feed the convergence monitor (NFR-M4).
+        routing = self._last_routing
+        self._last_routing = None
+        if routing is None:
+            # HITL re-route or other path that did not set routing —
+            # default to L0 (no LLM, no model attribution).
+            routing = RoutingDecision(ModelLayer.L0, None)
+
         if self.bus is not None and bus_msg is not None:
             self.bus.record_decision(
                 message_id=bus_msg.id,
@@ -216,7 +237,27 @@ class GovernanceEngine:
                 confidence=decision.confidence,
                 reasoning=decision.reasoning,
                 matched_hash=decision.matched_hash,
+                model_used=routing.model_id or "",
+                layer=int(routing.layer),
             )
+
+        # NFR-M4 convergence alert: if L4 share exceeds 20% in the rolling
+        # 5-minute window, publish an internal bus event so the dashboard /
+        # operator can react. Total < 5 suppresses noisy early alerts.
+        should_alert = self._convergence.record(routing.layer)
+        if should_alert and self.bus is not None and self.session_id:
+            try:
+                self.bus.publish(
+                    _msg_bus.Message.new(
+                        session_id=self.session_id,
+                        type="nfr_model_routing_alert",
+                        direction="internal",
+                        content="L4 rate exceeded 20% threshold in 5-minute window",
+                        metadata={"layer": int(routing.layer)},
+                    )
+                )
+            except Exception:
+                log.exception("convergence alert publish failed")
         return decision
 
     def _evaluate_inner(self, msg: Message) -> GovDecision:
@@ -246,6 +287,18 @@ class GovernanceEngine:
 
         if profile is not None:
             decision = self._apply_profile_constraints(decision, profile, msg.content)
+
+        # Phase 4 / NFR-M1-M3: classify the final decision into a routing
+        # layer for cost accounting + convergence monitoring. is_ambiguous_block
+        # is derived here (caller does not need to compute it).
+        is_ambiguous_block = (
+            decision.action == "BLOCK" and decision.confidence < 0.85
+        )
+        self._last_routing = route(
+            source=decision.source,
+            confidence=decision.confidence,
+            is_ambiguous_block=is_ambiguous_block,
+        )
         return decision
 
     def _apply_profile_constraints(
@@ -382,7 +435,13 @@ class GovernanceEngine:
             return None
         if self._cli_governor is None:
             self._cli_governor = CliGovernor(self.project_context)
-        return self._cli_governor.evaluate(content)
+        # Phase 4 / NFR-M2: CLI escalation occurs when neither precheck nor
+        # a high-confidence graph match resolved the message — that is the
+        # L3 (pattern inference) tier, which uses the Haiku model. We pass
+        # the routed model id explicitly so the subprocess uses --model
+        # {haiku} regardless of the CLI default.
+        from stream_manager.model_router import get_l2_model
+        return self._cli_governor.evaluate(content, model_id=get_l2_model())
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:

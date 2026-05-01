@@ -453,7 +453,7 @@ body::after{
    FEED TABLE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 /* col layout: time | action | source | agent | conf | content+reason | session */
-.feed-cols{display:grid;grid-template-columns:86px 82px 68px 96px 96px 1fr 76px;gap:10px}
+.feed-cols{display:grid;grid-template-columns:86px 82px 68px 38px 96px 96px 1fr 76px;gap:10px}
 
 /* agent chip */
 .c-agent{
@@ -568,6 +568,28 @@ body::after{
 .badge-GUIDE    {color:var(--c-guide)}
 .badge-INTERVENE{color:var(--c-intervene)}
 .badge-BLOCK    {color:var(--c-block);box-shadow:0 0 7px rgba(239,68,68,.35)}
+
+/* ── NFR-M1–M5 routing-layer badges (Phase 4) ── */
+.c-layer{padding-top:2px}
+.layer-badge{
+  display:inline-block;
+  font-family:var(--font-d);
+  font-size:8.5px;
+  font-weight:600;
+  letter-spacing:0.06em;
+  padding:2px 5px;
+  border:1px solid currentColor;
+  white-space:nowrap;
+  text-align:center;
+  min-width:22px;
+}
+/* L0/L1: no LLM (gray / blue). L2: teal (haiku, low-cost).
+   L3: yellow (haiku, pattern inference). L4: orange-red (Sonnet, expensive). */
+.layer-L0{color:var(--text-dim)}
+.layer-L1{color:#60a5fa}
+.layer-L2{color:#14b8a6}
+.layer-L3{color:var(--c-guide)}
+.layer-L4{color:var(--c-block);box-shadow:0 0 6px rgba(239,68,68,.30)}
 
 .c-src{
   font-family:var(--font-d);
@@ -1023,6 +1045,7 @@ body::after{
     <div class="fh-col">Time</div>
     <div class="fh-col">Action</div>
     <div class="fh-col">Source</div>
+    <div class="fh-col">Layer</div>
     <div class="fh-col">Agent</div>
     <div class="fh-col">Confidence</div>
     <div class="fh-col">Content / Reasoning</div>
@@ -1150,10 +1173,17 @@ function buildRow(row, isNew=false){
   el.dataset.action = row.action||'';
   if(row.id) el.dataset.decisionId = row.id;
   if(row.message_id) el.dataset.messageId = row.message_id;
+  // Phase 4 / NFR-M1–M5 — routing-layer badge
+  const layerNum = (row.layer == null) ? 0 : Number(row.layer);
+  const layerLbl = `L${layerNum}`;
+  const layerTip = (layerNum <= 1)
+    ? 'no LLM'
+    : (row.model_used || 'no LLM');
   el.innerHTML = `
     <div class="c-ts">${fmtTs(row.timestamp)}</div>
     <div><span class="badge badge-${esc(row.action||'?')}">${esc(row.action||'?')}</span></div>
     <div class="c-src src-${src}">${src}</div>
+    <div class="c-layer"><span class="layer-badge layer-${esc(layerLbl)}" title="${esc(layerTip)}">${esc(layerLbl)}</span></div>
     <div class="c-agent" title="${esc(agentTitle)}"><span class="${chipCls}">${esc(agentLabel)}</span></div>
     <div class="c-conf">${confPips(row.confidence)}</div>
     <div class="c-content">
