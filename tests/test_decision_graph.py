@@ -56,6 +56,26 @@ def test_sequence_pattern_emerges_in_window() -> None:
     assert sequences, "expected at least one L1 sequence pattern"
 
 
+def test_singleton_sequences_do_not_materialize() -> None:
+    g = DecisionGraph()
+    g.observe("apple bread", success=True)
+    g.observe("zebra glow", success=True)
+    sequences = [p for p in g.patterns.values() if p.canonical_text.startswith("sequence:")]
+    assert sequences == [], "single observation must stay in the candidates dict"
+    assert g.stats()["sequence_candidates"] >= 1
+
+
+def test_sequences_materialize_on_second_observation() -> None:
+    g = DecisionGraph()
+    g.observe("alpha widget", success=True)
+    g.observe("beta sprocket", success=True)
+    g.observe("alpha widget", success=True)
+    g.observe("beta sprocket", success=True)
+    sequences = [p for p in g.patterns.values() if p.canonical_text.startswith("sequence:")]
+    materialized = [p for p in sequences if p.occurrences >= 2]
+    assert materialized, "sequence seen twice must be materialized as a Pattern"
+
+
 def test_match_returns_existing_pattern_when_similar(tmp_path) -> None:  # type: ignore[no-untyped-def]
     g = DecisionGraph()
     g.observe("git status", success=True)

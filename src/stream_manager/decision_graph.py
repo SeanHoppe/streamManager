@@ -76,6 +76,7 @@ class Pattern:
 class DecisionGraph:
     patterns: dict[str, Pattern] = field(default_factory=dict)
     _window: deque[str] = field(default_factory=lambda: deque(maxlen=SEQUENCE_WINDOW))
+    _sequence_candidates: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     def observe(self, content: str, success: bool) -> Pattern:
         vec = project(content)
@@ -134,6 +135,10 @@ class DecisionGraph:
             p.level = PatternLevel(int(p.level) + 1)
 
     def _observe_sequences(self, success: bool) -> None:
+        # Deferred materialization: a sequence only becomes a Pattern after
+        # its second observation. The first observation lives in a lightweight
+        # candidates dict so singletons don't pollute the pattern store.
+        # Restores sub-linear pattern growth (POC_FINDINGS hardening item #1).
         if len(self._window) < 2:
             return
         recent = list(self._window)
@@ -142,24 +147,37 @@ class DecisionGraph:
             return
         seq_id = f"{a}->{b}"
         seq_hash = hashlib.sha256(seq_id.encode()).hexdigest()[:16]
+
         existing = self.patterns.get(seq_hash)
-        if existing is None:
-            self.patterns[seq_hash] = Pattern(
-                hash=seq_hash,
-                level=PatternLevel.L1,
-                vector=[0.0] * FEATURE_DIM,
-                canonical_text=f"sequence: {seq_id}",
-                occurrences=1,
-                successes=(1 if success else 0),
-                last_seen=time.time(),
-                children=[a, b],
-            )
-        else:
+        if existing is not None:
             existing.occurrences += 1
             if success:
                 existing.successes += 1
             existing.last_seen = time.time()
             self._maybe_promote(existing)
+            return
+
+        cand = self._sequence_candidates.get(seq_hash)
+        if cand is None:
+            self._sequence_candidates[seq_hash] = (1, 1 if success else 0)
+            return
+
+        prior_count, prior_succ = cand
+        new_count = prior_count + 1
+        new_succ = prior_succ + (1 if success else 0)
+        del self._sequence_candidates[seq_hash]
+        materialized = Pattern(
+            hash=seq_hash,
+            level=PatternLevel.L1,
+            vector=[0.0] * FEATURE_DIM,
+            canonical_text=f"sequence: {seq_id}",
+            occurrences=new_count,
+            successes=new_succ,
+            last_seen=time.time(),
+            children=[a, b],
+        )
+        self.patterns[seq_hash] = materialized
+        self._maybe_promote(materialized)
 
     def feedback(self, pattern_hash: str, success: bool) -> None:
         p = self.patterns.get(pattern_hash)
@@ -179,6 +197,7 @@ class DecisionGraph:
         for p in self.patterns.values():
             counts[f"L{int(p.level)}"] += 1
         counts["total"] = len(self.patterns)
+        counts["sequence_candidates"] = len(self._sequence_candidates)
         return counts
 
     def summarize(self, max_chars: int = 300) -> str:
