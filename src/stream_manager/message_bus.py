@@ -54,6 +54,18 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at REAL NOT NULL,
     ended_at REAL
 );
+
+CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    attribution_plugin TEXT NOT NULL DEFAULT '',
+    attribution_skill TEXT NOT NULL DEFAULT '',
+    is_sidechain INTEGER NOT NULL DEFAULT 0,
+    profile_slug TEXT NOT NULL DEFAULT 'unknown',
+    first_seen REAL NOT NULL,
+    last_seen REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
 """
 
 
@@ -187,6 +199,59 @@ class MessageBus:
                 (decision_id, message_id, action, confidence, reasoning, matched_hash, time.time()),
             )
         return decision_id
+
+    def upsert_agent(
+        self,
+        session_id: str,
+        attribution_plugin: str,
+        attribution_skill: str,
+        is_sidechain: bool,
+        profile_slug: str,
+    ) -> None:
+        """Insert or update the agent identity row for (session_id, attribution_plugin).
+
+        One row per (session_id, attribution_plugin) pair: subsequent calls
+        with the same plugin update last_seen and profile_slug; first_seen
+        is preserved.
+        """
+        now = time.time()
+        sidechain_int = 1 if is_sidechain else 0
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT id, first_seen FROM agents "
+                "WHERE session_id=? AND attribution_plugin=?",
+                (session_id, attribution_plugin),
+            )
+            row = cur.fetchone()
+            if row is None:
+                agent_id = str(uuid.uuid4())
+                self._conn.execute(
+                    "INSERT INTO agents (id, session_id, attribution_plugin, "
+                    "attribution_skill, is_sidechain, profile_slug, "
+                    "first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        agent_id,
+                        session_id,
+                        attribution_plugin,
+                        attribution_skill,
+                        sidechain_int,
+                        profile_slug,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE agents SET attribution_skill=?, is_sidechain=?, "
+                    "profile_slug=?, last_seen=? WHERE id=?",
+                    (
+                        attribution_skill,
+                        sidechain_int,
+                        profile_slug,
+                        now,
+                        row[0],
+                    ),
+                )
 
     def stats(self) -> dict[str, int]:
         with self._lock:

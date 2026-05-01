@@ -43,7 +43,13 @@ app.add_middleware(
 _SEED_SQL = """
     SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
-           m.content, m.direction, m.session_id
+           m.content, m.direction, m.session_id,
+           (SELECT a.profile_slug FROM agents a
+              WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp
+              ORDER BY a.last_seen DESC LIMIT 1) AS profile_slug,
+           (SELECT a.attribution_plugin FROM agents a
+              WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp
+              ORDER BY a.last_seen DESC LIMIT 1) AS attribution_plugin
     FROM decisions d
     JOIN messages m ON d.message_id = m.id
     ORDER BY d.rowid DESC LIMIT ?
@@ -52,7 +58,13 @@ _SEED_SQL = """
 _TAIL_SQL = """
     SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
-           m.content, m.direction, m.session_id
+           m.content, m.direction, m.session_id,
+           (SELECT a.profile_slug FROM agents a
+              WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp
+              ORDER BY a.last_seen DESC LIMIT 1) AS profile_slug,
+           (SELECT a.attribution_plugin FROM agents a
+              WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp
+              ORDER BY a.last_seen DESC LIMIT 1) AS attribution_plugin
     FROM decisions d
     JOIN messages m ON d.message_id = m.id
     WHERE d.rowid > ?
@@ -82,6 +94,46 @@ def _open(readonly: bool = True) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
+
+def _has_agents_table(conn: sqlite3.Connection) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='agents'"
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+_SEED_SQL_NO_AGENTS = """
+    SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
+           d.matched_hash, d.timestamp,
+           m.content, m.direction, m.session_id,
+           NULL AS profile_slug, NULL AS attribution_plugin
+    FROM decisions d
+    JOIN messages m ON d.message_id = m.id
+    ORDER BY d.rowid DESC LIMIT ?
+"""
+
+_TAIL_SQL_NO_AGENTS = """
+    SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
+           d.matched_hash, d.timestamp,
+           m.content, m.direction, m.session_id,
+           NULL AS profile_slug, NULL AS attribution_plugin
+    FROM decisions d
+    JOIN messages m ON d.message_id = m.id
+    WHERE d.rowid > ?
+    ORDER BY d.rowid ASC
+"""
+
+
+def _seed_sql(conn: sqlite3.Connection) -> str:
+    return _SEED_SQL if _has_agents_table(conn) else _SEED_SQL_NO_AGENTS
+
+
+def _tail_sql(conn: sqlite3.Connection) -> str:
+    return _TAIL_SQL if _has_agents_table(conn) else _TAIL_SQL_NO_AGENTS
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -117,9 +169,44 @@ async def api_decisions(limit: int = 50):
     """Seed: last N decisions newest-first (for page load before SSE connects)."""
     try:
         conn = _open()
-        rows = conn.execute(_SEED_SQL, (min(limit, 200),)).fetchall()
+        rows = conn.execute(_seed_sql(conn), (min(limit, 200),)).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+@app.get("/api/agents")
+async def api_agents(session_id: str | None = None, limit: int = 50):
+    """Active agents per session — newest last_seen first.
+
+    If session_id is provided, scope to that session. Otherwise return up
+    to `limit` rows across all sessions.
+    """
+    try:
+        conn = _open()
+        if session_id:
+            rows = conn.execute(
+                "SELECT session_id, attribution_plugin, attribution_skill, "
+                "is_sidechain, profile_slug, first_seen, last_seen "
+                "FROM agents WHERE session_id=? "
+                "ORDER BY last_seen DESC LIMIT ?",
+                (session_id, min(limit, 200)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT session_id, attribution_plugin, attribution_skill, "
+                "is_sidechain, profile_slug, first_seen, last_seen "
+                "FROM agents ORDER BY last_seen DESC LIMIT ?",
+                (min(limit, 200),),
+            ).fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["is_sidechain"] = bool(d.get("is_sidechain"))
+            out.append(d)
+        return out
     except Exception:
         return []
 
@@ -155,7 +242,7 @@ async def sse_events(request: Request):
 
         # Seed with last 25 decisions (oldest→newest so client prepends correctly)
         try:
-            seed = conn.execute(_SEED_SQL, (25,)).fetchall()
+            seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
             last_rid = seed[0]["rid"] if seed else 0
             for row in reversed(seed):
                 yield f"data: {json.dumps(dict(row))}\n\n"
@@ -166,7 +253,7 @@ async def sse_events(request: Request):
             if await request.is_disconnected():
                 break
             try:
-                rows = conn.execute(_TAIL_SQL, (last_rid,)).fetchall()
+                rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
                 for row in rows:
                     last_rid = row["rid"]
                     yield f"data: {json.dumps(dict(row))}\n\n"
