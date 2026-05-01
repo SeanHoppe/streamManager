@@ -105,3 +105,83 @@ def test_pattern_chain_promotes_through_levels() -> None:
     assert PatternLevel.L2 in levels, (
         f"5 same-content observations should chain L0->L1->L2; got levels {levels}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Persistence — save / load
+# ---------------------------------------------------------------------------
+
+
+def test_save_load_round_trips_all_fields(tmp_path) -> None:
+    db = str(tmp_path / "graph.db")
+    g = DecisionGraph()
+    for _ in range(3):
+        g.observe("pytest tests/", True)
+    g.observe("git status", False)
+    g.save(db)
+
+    g2 = DecisionGraph.load(db)
+    assert len(g2.patterns) == len(g.patterns)
+    for h, p in g.patterns.items():
+        assert h in g2.patterns
+        p2 = g2.patterns[h]
+        assert p2.occurrences == p.occurrences
+        assert p2.successes == p.successes
+        assert p2.level == p.level
+        assert abs(p2.last_seen - p.last_seen) < 1e-6
+        assert p2.canonical_text == p.canonical_text
+
+
+def test_load_missing_db_returns_empty_graph(tmp_path) -> None:
+    g = DecisionGraph.load(str(tmp_path / "nonexistent.db"))
+    assert len(g.patterns) == 0
+
+
+def test_load_missing_table_returns_empty_graph(tmp_path) -> None:
+    import sqlite3
+    db = str(tmp_path / "empty.db")
+    sqlite3.connect(db).close()  # valid DB, no graph_patterns table
+    g = DecisionGraph.load(db)
+    assert len(g.patterns) == 0
+
+
+def test_save_upserts_incremented_counts(tmp_path) -> None:
+    db = str(tmp_path / "graph.db")
+    g = DecisionGraph()
+    g.observe("pytest tests/", True)
+    g.save(db)
+
+    g.observe("pytest tests/", True)
+    g.save(db)
+
+    g2 = DecisionGraph.load(db)
+    pat = next(p for p in g2.patterns.values() if "pytest" in p.canonical_text)
+    assert pat.occurrences == 2
+    assert pat.successes == 2
+
+
+def test_save_preserves_promoted_level(tmp_path) -> None:
+    db = str(tmp_path / "graph.db")
+    g = DecisionGraph()
+    for _ in range(PROMOTION_THRESHOLDS[0]):  # L0 threshold
+        g.observe("ruff check .", True)
+    g.save(db)
+
+    g2 = DecisionGraph.load(db)
+    pat = next(p for p in g2.patterns.values() if "ruff" in p.canonical_text)
+    assert pat.level >= PatternLevel.L1
+
+
+def test_save_preserves_sequence_children(tmp_path) -> None:
+    db = str(tmp_path / "graph.db")
+    g = DecisionGraph()
+    # Observe same pair twice to materialize a sequence pattern
+    for _ in range(2):
+        g.observe("git add .", True)
+        g.observe("git commit -m x", True)
+    g.save(db)
+
+    g2 = DecisionGraph.load(db)
+    seq_patterns = [p for p in g2.patterns.values() if p.children]
+    assert seq_patterns, "sequence pattern with children should persist"
+    assert len(seq_patterns[0].children) == 2

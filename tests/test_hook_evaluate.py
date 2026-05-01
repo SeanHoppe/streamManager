@@ -173,3 +173,55 @@ def test_main_degrade_engine_exception(monkeypatch, tmp_path):
 
     monkeypatch.setattr(GovernanceEngine, "evaluate", _boom)
     assert hook_evaluate.main() == 0  # degrade, never re-raise
+
+
+# ---------------------------------------------------------------------------
+# Graph persistence across hook invocations
+# ---------------------------------------------------------------------------
+
+
+def test_hook_accumulates_graph_across_invocations(monkeypatch, tmp_path):
+    from stream_manager.decision_graph import DecisionGraph
+
+    db = str(tmp_path / "gov.db")
+    monkeypatch.setenv("STREAM_MANAGER_BUS", db)
+
+    for _ in range(3):
+        monkeypatch.setattr(
+            "sys.stdin",
+            _stdin({"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "pytest tests/"}}),
+        )
+        hook_evaluate.main()
+
+    g = DecisionGraph.load(db)
+    assert any("pytest" in p.canonical_text for p in g.patterns.values())
+    pat = next(p for p in g.patterns.values() if "pytest" in p.canonical_text)
+    assert pat.occurrences >= 3
+
+
+def test_hook_graph_survives_process_restart(monkeypatch, tmp_path):
+    """Simulate process restart: reload hook module state between calls."""
+    import importlib
+    from stream_manager.decision_graph import DecisionGraph
+
+    db = str(tmp_path / "gov.db")
+    monkeypatch.setenv("STREAM_MANAGER_BUS", db)
+
+    # First "process"
+    monkeypatch.setattr(
+        "sys.stdin",
+        _stdin({"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "ruff check ."}}),
+    )
+    hook_evaluate.main()
+
+    # Second "process" — graph loaded from DB, not in-memory
+    monkeypatch.setattr(
+        "sys.stdin",
+        _stdin({"session_id": "s2", "tool_name": "Bash", "tool_input": {"command": "ruff check ."}}),
+    )
+    hook_evaluate.main()
+
+    g = DecisionGraph.load(db)
+    pat = next((p for p in g.patterns.values() if "ruff" in p.canonical_text), None)
+    assert pat is not None
+    assert pat.occurrences >= 2
