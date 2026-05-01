@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+import threading
+import time
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    content TEXT NOT NULL,
+    context TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    timestamp REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    reasoning TEXT NOT NULL,
+    matched_hash TEXT NOT NULL DEFAULT '',
+    timestamp REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_message ON decisions(message_id);
+
+CREATE TABLE IF NOT EXISTS patterns (
+    hash TEXT PRIMARY KEY,
+    level INTEGER NOT NULL,
+    occurrences INTEGER NOT NULL,
+    success_rate REAL NOT NULL,
+    last_seen REAL NOT NULL,
+    payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    started_at REAL NOT NULL,
+    ended_at REAL
+);
+"""
+
+
+@dataclass
+class Message:
+    id: str
+    session_id: str
+    sequence: int
+    type: str
+    direction: str
+    content: str
+    timestamp: float
+    context: dict[str, object] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def new(
+        cls,
+        session_id: str,
+        type: str,
+        direction: str,
+        content: str,
+        metadata: dict[str, object] | None = None,
+    ) -> Message:
+        return cls(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            sequence=-1,
+            type=type,
+            direction=direction,
+            content=content,
+            timestamp=time.time(),
+            metadata=metadata or {},
+        )
+
+
+SubscriberCallback = Callable[[Message], None]
+
+
+class MessageBus:
+    def __init__(self, db_path: str) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._subscribers: list[SubscriberCallback] = []
+        self._conn = self._connect()
+        self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+            isolation_level=None,
+        )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def _init_schema(self) -> None:
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
+
+    def open_session(self, session_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO sessions (id, started_at) VALUES (?, ?)",
+                (session_id, time.time()),
+            )
+
+    def close_session(self, session_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET ended_at=? WHERE id=? AND ended_at IS NULL",
+                (time.time(), session_id),
+            )
+
+    def publish(self, msg: Message) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) FROM messages WHERE session_id=?",
+                (msg.session_id,),
+            )
+            row = cur.fetchone()
+            msg.sequence = (row[0] or 0) + 1
+            self._conn.execute(
+                "INSERT INTO messages (id, session_id, sequence, type, direction, "
+                "content, context, metadata, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    msg.id,
+                    msg.session_id,
+                    msg.sequence,
+                    msg.type,
+                    msg.direction,
+                    msg.content,
+                    json.dumps(msg.context),
+                    json.dumps(msg.metadata),
+                    msg.timestamp,
+                ),
+            )
+        for sub in list(self._subscribers):
+            try:
+                sub(msg)
+            except Exception:
+                # NFR-R6: subscriber failures must not crash the bus.
+                log.exception("subscriber callback failed")
+        return msg.sequence
+
+    def subscribe(self, callback: SubscriberCallback) -> None:
+        self._subscribers.append(callback)
+
+    def record_decision(
+        self,
+        message_id: str,
+        action: str,
+        confidence: float,
+        reasoning: str,
+        matched_hash: str = "",
+    ) -> str:
+        decision_id = str(uuid.uuid4())
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO decisions (id, message_id, action, confidence, "
+                "reasoning, matched_hash, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (decision_id, message_id, action, confidence, reasoning, matched_hash, time.time()),
+            )
+        return decision_id
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            mrow = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+            drow = self._conn.execute("SELECT COUNT(*) FROM decisions").fetchone()
+        return {"messages": int(mrow[0]), "decisions": int(drow[0])}
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
