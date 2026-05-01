@@ -87,6 +87,8 @@ _SEED_SQL = """
     SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
            d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
+           COALESCE(d.model_used, '') AS model_used,
+           COALESCE(d.layer, 0)       AS layer,
            m.content, m.direction, m.session_id,
            (SELECT a.profile_slug FROM agents a
               WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp
@@ -103,6 +105,8 @@ _TAIL_SQL = """
     SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
            d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
+           COALESCE(d.model_used, '') AS model_used,
+           COALESCE(d.layer, 0)       AS layer,
            m.content, m.direction, m.session_id,
            (SELECT a.profile_slug FROM agents a
               WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp
@@ -151,10 +155,24 @@ def _has_agents_table(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def _has_decision_routing_cols(conn: sqlite3.Connection) -> bool:
+    """Phase 4: detect whether the decisions table has model_used + layer."""
+    try:
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(decisions)").fetchall()
+        }
+        return "model_used" in cols and "layer" in cols
+    except Exception:
+        return False
+
+
 _SEED_SQL_NO_AGENTS = """
     SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
            d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
+           COALESCE(d.model_used, '') AS model_used,
+           COALESCE(d.layer, 0)       AS layer,
            m.content, m.direction, m.session_id,
            NULL AS profile_slug, NULL AS attribution_plugin
     FROM decisions d
@@ -166,6 +184,8 @@ _TAIL_SQL_NO_AGENTS = """
     SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
            d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
+           COALESCE(d.model_used, '') AS model_used,
+           COALESCE(d.layer, 0)       AS layer,
            m.content, m.direction, m.session_id,
            NULL AS profile_slug, NULL AS attribution_plugin
     FROM decisions d
@@ -176,11 +196,29 @@ _TAIL_SQL_NO_AGENTS = """
 
 
 def _seed_sql(conn: sqlite3.Connection) -> str:
-    return _SEED_SQL if _has_agents_table(conn) else _SEED_SQL_NO_AGENTS
+    sql = _SEED_SQL if _has_agents_table(conn) else _SEED_SQL_NO_AGENTS
+    if not _has_decision_routing_cols(conn):
+        sql = sql.replace(
+            "COALESCE(d.model_used, '') AS model_used,",
+            "'' AS model_used,",
+        ).replace(
+            "COALESCE(d.layer, 0)       AS layer,",
+            "0  AS layer,",
+        )
+    return sql
 
 
 def _tail_sql(conn: sqlite3.Connection) -> str:
-    return _TAIL_SQL if _has_agents_table(conn) else _TAIL_SQL_NO_AGENTS
+    sql = _TAIL_SQL if _has_agents_table(conn) else _TAIL_SQL_NO_AGENTS
+    if not _has_decision_routing_cols(conn):
+        sql = sql.replace(
+            "COALESCE(d.model_used, '') AS model_used,",
+            "'' AS model_used,",
+        ).replace(
+            "COALESCE(d.layer, 0)       AS layer,",
+            "0  AS layer,",
+        )
+    return sql
 
 
 @app.get("/", response_class=HTMLResponse)

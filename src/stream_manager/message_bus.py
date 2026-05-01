@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
 import logging
@@ -168,6 +169,22 @@ class MessageBus:
                     "ALTER TABLE sessions ADD COLUMN hitl_floor REAL NOT NULL DEFAULT 0.60"
                 )
 
+            # Phase 4 / NFR-M3 — additive migration for decisions table:
+            # add model_used + layer if absent. Older DBs created before
+            # Phase 4 will not have these columns. SQLite's ALTER TABLE
+            # ADD COLUMN is the supported migration path.
+            for col, definition in (
+                ("model_used", "TEXT NOT NULL DEFAULT ''"),
+                ("layer", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                # try/except sqlite3.OperationalError (idiomatic via
+                # contextlib.suppress): the column already exists on
+                # already-migrated DBs.
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._conn.execute(
+                        f"ALTER TABLE decisions ADD COLUMN {col} {definition}"
+                    )
+
     def open_session(
         self,
         session_id: str,
@@ -229,13 +246,26 @@ class MessageBus:
         confidence: float,
         reasoning: str,
         matched_hash: str = "",
+        model_used: str = "",
+        layer: int = 0,
     ) -> str:
         decision_id = str(uuid.uuid4())
         with self._lock:
             self._conn.execute(
                 "INSERT INTO decisions (id, message_id, action, confidence, "
-                "reasoning, matched_hash, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (decision_id, message_id, action, confidence, reasoning, matched_hash, time.time()),
+                "reasoning, matched_hash, timestamp, model_used, layer) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    decision_id,
+                    message_id,
+                    action,
+                    confidence,
+                    reasoning,
+                    matched_hash,
+                    time.time(),
+                    model_used,
+                    int(layer),
+                ),
             )
         return decision_id
 
