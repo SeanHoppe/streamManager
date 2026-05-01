@@ -631,6 +631,298 @@ body::after{
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   HITL — queue panel, annotate tray, settings panel
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.hitl-panel{
+  display:none;
+  border:1px solid var(--border-hi);
+  background:var(--bg-card);
+  margin-bottom:22px;
+  box-shadow:0 0 12px var(--accent-glow);
+  transition:box-shadow .3s,border-color .3s;
+}
+.hitl-panel.show{display:block}
+[data-theme="obsidian"] .hitl-panel{background:#1a1a1a}
+[data-theme="phosphor"] .hitl-panel{background:#0a0f0a}
+[data-theme="paper"]    .hitl-panel{background:#f5f0e8}
+
+.hitl-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 14px;
+  border-bottom:1px solid var(--border);
+}
+.hitl-title{
+  font-family:var(--font-h);
+  font-size:11px;
+  letter-spacing:0.22em;
+  text-transform:uppercase;
+  color:var(--accent);
+}
+[data-theme="paper"] .hitl-title{
+  font-family:'Courier Prime',monospace;
+  font-size:10px;
+  letter-spacing:0.14em;
+}
+.hitl-count{
+  font-family:var(--font-d);
+  font-size:10px;
+  padding:1px 7px;
+  border:1px solid var(--accent);
+  color:var(--accent);
+  background:var(--accent-dim);
+}
+.hitl-list{display:flex;flex-direction:column;gap:1px;background:var(--border)}
+.hitl-item{
+  background:var(--bg-row);
+  padding:10px 14px;
+  display:grid;
+  grid-template-columns:78px 100px 92px 64px 1fr;
+  gap:10px;
+  align-items:center;
+  transition:opacity .3s,background .2s;
+}
+.hitl-item.expired{opacity:.35;filter:grayscale(.6)}
+.hitl-item-row2{
+  grid-column:1/-1;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-top:8px;
+}
+.hitl-bar{
+  flex:1;
+  height:4px;
+  background:var(--border);
+  border-radius:2px;
+  overflow:hidden;
+}
+.hitl-bar-fill{
+  height:100%;
+  width:100%;
+  background:var(--accent);
+  transition:width 1s linear;
+}
+[data-theme="paper"] .hitl-bar-fill{background:#2a2018}
+.hitl-btns{display:flex;gap:5px;flex-wrap:wrap}
+.hitl-btn{
+  font-family:var(--font-d);
+  font-size:9px;
+  letter-spacing:0.08em;
+  padding:4px 9px;
+  border:1px solid var(--border);
+  background:transparent;
+  color:var(--text);
+  cursor:pointer;
+  text-transform:uppercase;
+  transition:all .15s;
+}
+.hitl-btn:hover{border-color:var(--accent);color:var(--accent)}
+.hitl-btn[data-act="approve"]{color:var(--c-allow);border-color:var(--c-allow)}
+.hitl-btn[data-act="approve"]:hover{background:rgba(34,197,94,.1)}
+.hitl-btn[data-act="GUIDE"]   {color:var(--c-guide);border-color:var(--c-guide)}
+.hitl-btn[data-act="BLOCK"]   {color:var(--c-block);border-color:var(--c-block)}
+.hitl-btn[data-act="ALLOW"]   {color:var(--c-allow);border-color:var(--c-allow)}
+.hitl-trig{
+  font-family:var(--font-d);
+  font-size:8.5px;
+  letter-spacing:0.07em;
+  padding:2px 6px;
+  border:1px solid var(--accent);
+  color:var(--accent);
+  text-transform:uppercase;
+  white-space:nowrap;
+  text-align:center;
+}
+.hitl-prev{
+  font-family:var(--font-d);
+  font-size:10.5px;
+  color:var(--text);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.hitl-ts{
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text-dim);
+}
+
+/* annotate tray */
+.row.has-tray{cursor:pointer}
+.row.tray-open{background:var(--bg-row-hover)}
+@keyframes hitlFlash{
+  0%  {background:var(--bg-row-flash)}
+  100%{background:var(--bg-row)}
+}
+.row.hitl-flagged{animation:hitlFlash 1s ease-out}
+@keyframes annotated{
+  0%  {background:rgba(34,197,94,.18)}
+  100%{background:var(--bg-row)}
+}
+.row.annotated{animation:annotated 2s ease-out}
+.tray{
+  padding:10px 14px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg-row-alt);
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.tray textarea{
+  width:100%;
+  min-height:48px;
+  font-family:var(--font-d);
+  font-size:11px;
+  padding:7px 9px;
+  background:var(--bg);
+  border:1px solid var(--border);
+  color:var(--text);
+  resize:vertical;
+  outline:none;
+}
+.tray textarea:focus{border-color:var(--accent)}
+.tray-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tray select{
+  font-family:var(--font-d);
+  font-size:10px;
+  padding:4px 8px;
+  background:var(--bg);
+  border:1px solid var(--border);
+  color:var(--text);
+  outline:none;
+}
+.tray-btn{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  letter-spacing:0.08em;
+  padding:5px 12px;
+  border:1px solid var(--accent);
+  background:var(--accent-dim);
+  color:var(--accent);
+  cursor:pointer;
+  text-transform:uppercase;
+}
+.tray-btn:hover{box-shadow:0 0 10px var(--accent-glow)}
+
+/* HITL mode badge in stats area */
+.hitl-mode-badge{
+  display:inline-block;
+  font-family:var(--font-d);
+  font-size:9px;
+  letter-spacing:0.1em;
+  padding:2px 7px;
+  border:1px solid var(--accent);
+  color:var(--accent);
+  background:var(--accent-dim);
+  margin-left:10px;
+  text-transform:uppercase;
+  vertical-align:middle;
+}
+
+/* settings panel */
+.gear-btn{
+  font-size:16px;
+  color:var(--text-ui);
+  background:transparent;
+  border:1px solid transparent;
+  padding:3px 7px;
+  cursor:pointer;
+  transition:color .2s,border-color .2s,transform .3s;
+}
+.gear-btn:hover{color:var(--accent);border-color:var(--accent)}
+.gear-btn.on{color:var(--accent);border-color:var(--accent);transform:rotate(45deg)}
+
+.settings-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.35);
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .25s;
+  z-index:99;
+}
+.settings-overlay.show{opacity:1;pointer-events:auto}
+
+.settings-panel{
+  position:fixed;
+  top:0;right:0;
+  width:340px;
+  max-width:90vw;
+  height:100vh;
+  background:var(--bg-card);
+  border-left:1px solid var(--border-hi);
+  box-shadow:-4px 0 24px rgba(0,0,0,.45);
+  transform:translateX(100%);
+  transition:transform .28s cubic-bezier(.4,0,.2,1);
+  z-index:100;
+  display:flex;
+  flex-direction:column;
+  overflow-y:auto;
+}
+.settings-panel.show{transform:translateX(0)}
+.settings-head{
+  padding:18px 20px 12px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  border-bottom:1px solid var(--border);
+}
+.settings-title{
+  font-family:var(--font-h);
+  font-size:14px;
+  letter-spacing:0.18em;
+  color:var(--accent);
+  text-transform:uppercase;
+}
+.settings-close{
+  font-size:20px;
+  color:var(--text-ui);
+  background:transparent;
+  cursor:pointer;
+}
+.settings-close:hover{color:var(--accent)}
+.settings-body{padding:14px 20px;display:flex;flex-direction:column;gap:18px}
+.settings-section{display:flex;flex-direction:column;gap:8px}
+.settings-label{
+  font-family:var(--font-h);
+  font-size:10px;
+  letter-spacing:0.18em;
+  color:var(--text-ui);
+  text-transform:uppercase;
+}
+[data-theme="paper"] .settings-label{
+  font-family:'Courier Prime',monospace;
+  font-size:9px;
+  letter-spacing:0.1em;
+}
+.settings-radios{display:flex;gap:14px;font-family:var(--font-d);font-size:11px}
+.settings-radios label{display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--text)}
+.settings-slider-row{display:flex;align-items:center;gap:10px}
+.settings-slider-row input[type=range]{flex:1;accent-color:var(--accent)}
+.settings-val{
+  font-family:var(--font-d);
+  font-size:11px;
+  color:var(--accent);
+  min-width:42px;
+  text-align:right;
+}
+.settings-input{
+  font-family:var(--font-d);
+  font-size:12px;
+  padding:5px 9px;
+  background:var(--bg);
+  border:1px solid var(--border);
+  color:var(--text);
+  width:120px;
+  outline:none;
+}
+.settings-input:focus{border-color:var(--accent)}
+.settings-toggle{display:flex;align-items:center;gap:8px;font-family:var(--font-d);font-size:11px;color:var(--text);cursor:pointer}
+.settings-toggle input{accent-color:var(--accent)}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    FOOTER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .footer{
@@ -662,6 +954,7 @@ body::after{
         <button class="theme-btn"     data-t="paper"    title="Paper (editorial light)"></button>
       </div>
       <div class="live-dot" id="liveDot">LIVE</div>
+      <button class="gear-btn" id="gearBtn" title="Settings" aria-label="settings">⚙</button>
     </div>
   </header>
 
@@ -672,7 +965,7 @@ body::after{
       <div class="stat-value" id="sTotal">—</div>
     </div>
     <div class="stat-cell">
-      <div class="stat-label">Sessions</div>
+      <div class="stat-label">Sessions <span class="hitl-mode-badge" id="hitlModeBadge">[ASYNC]</span></div>
       <div class="stat-value" id="sSessions">—</div>
     </div>
     <div class="stat-cell">
@@ -705,6 +998,15 @@ body::after{
     </div>
   </div>
 
+  <!-- ── HITL QUEUE PANEL ───────────────────────────────── -->
+  <section class="hitl-panel" id="hitlPanel">
+    <div class="hitl-header">
+      <div class="hitl-title">HITL Queue</div>
+      <div class="hitl-count" id="hitlCount">0</div>
+    </div>
+    <div class="hitl-list" id="hitlList"></div>
+  </section>
+
   <!-- ── FILTER BAR ─────────────────────────────────────── -->
   <div class="filter-bar">
     <button class="fbtn on"  data-f="ALL">ALL</button>
@@ -729,6 +1031,42 @@ body::after{
   <div class="feed" id="feed">
     <div class="feed-empty" id="feedEmpty">AWAITING GOVERNANCE EVENTS…</div>
   </div>
+
+  <!-- ── SETTINGS PANEL ─────────────────────────────────── -->
+  <div class="settings-overlay" id="settingsOverlay"></div>
+  <aside class="settings-panel" id="settingsPanel" aria-hidden="true">
+    <div class="settings-head">
+      <div class="settings-title">Settings</div>
+      <button class="settings-close" id="settingsClose" aria-label="close settings">×</button>
+    </div>
+    <div class="settings-body">
+      <div class="settings-section">
+        <div class="settings-label">HITL Mode</div>
+        <div class="settings-radios">
+          <label><input type="radio" name="hitlMode" value="sync" id="modeSync"> Sync</label>
+          <label><input type="radio" name="hitlMode" value="async" id="modeAsync" checked> Async</label>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-label">Confidence Floor</div>
+        <div class="settings-slider-row">
+          <input type="range" id="floorSlider" min="0.50" max="0.90" step="0.05" value="0.60">
+          <span class="settings-val" id="floorVal">0.60</span>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-label">Sync Timeout (seconds)</div>
+        <input type="number" id="timeoutInput" class="settings-input" min="15" max="300" step="1" value="60">
+      </div>
+      <div class="settings-section">
+        <div class="settings-label">Pause Detection</div>
+        <label class="settings-toggle">
+          <input type="checkbox" id="pauseToggle" checked>
+          <span id="pauseToggleLabel">Enabled</span>
+        </label>
+      </div>
+    </div>
+  </aside>
 
   <!-- ── FOOTER ─────────────────────────────────────────── -->
   <footer class="footer">
@@ -785,6 +1123,19 @@ function confPips(c){
   return `<span class="pips">${esc(filled)}<span style="color:var(--text-dim)">${esc(empty)}</span></span> ${pct}%`;
 }
 
+/* ── HITL state ──────────────────────────────────────── */
+const HITL = {
+  pending: [],            // [{id, queued_at, trigger_reason, proposed_action, proposed_confidence, content, ...}]
+  timers: new Map(),      // pending_id -> intervalId
+  startedAt: new Map(),   // pending_id -> ms timestamp when bar started draining
+  mode: 'async',
+  floor: 0.60,
+  timeoutSeconds: 60,
+  pauseDetection: true,
+  sessionId: null,
+  openTrayDecisionId: null,
+};
+
 /* ── row builder ─────────────────────────────────────── */
 function buildRow(row, isNew=false){
   const src = inferSrc(row);
@@ -795,8 +1146,10 @@ function buildRow(row, isNew=false){
   const agentLabel = slug || '–';
   const chipCls = slug && slug !== 'unknown' ? 'agent-chip' : 'agent-chip unknown';
   const el  = document.createElement('div');
-  el.className = `row feed-cols${isNew?' fresh':''}`;
+  el.className = `row feed-cols has-tray${isNew?' fresh':''}`;
   el.dataset.action = row.action||'';
+  if(row.id) el.dataset.decisionId = row.id;
+  if(row.message_id) el.dataset.messageId = row.message_id;
   el.innerHTML = `
     <div class="c-ts">${fmtTs(row.timestamp)}</div>
     <div><span class="badge badge-${esc(row.action||'?')}">${esc(row.action||'?')}</span></div>
@@ -972,6 +1325,11 @@ function connect(){
     try{
       const d = JSON.parse(e.data);
       if(d.error) return;
+      // HITL bus events (forwarded by server with event_type field)
+      if(d.event_type){
+        handleHitlEvent(d);
+        return;
+      }
       prependRow(d);
     }catch(_){}
   };
@@ -983,6 +1341,366 @@ function connect(){
   };
 }
 connect();
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   HITL — queue panel rendering, countdown, resolve
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+const hitlPanel = $('hitlPanel');
+const hitlList  = $('hitlList');
+const hitlCount = $('hitlCount');
+const hitlModeBadge = $('hitlModeBadge');
+
+function fmtHms(ts){
+  if(!ts && ts!==0) return '–';
+  // queued_at can be a unix epoch float or an ISO 8601 string.
+  let d;
+  if(typeof ts === 'number') d = new Date(ts*1000);
+  else d = new Date(ts);
+  if(isNaN(d.getTime())) return '–';
+  const p = n => String(n).padStart(2,'0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+const TRIGGER_LABEL = {
+  new_pattern:    'NEW PATTERN',
+  low_confidence: 'LOW CONF',
+  desktop_pause:  'PAUSE',
+};
+
+function renderHitlPanel(){
+  // Clear timers for items no longer present
+  const liveIds = new Set(HITL.pending.map(p=>p.id));
+  for(const [pid, tid] of HITL.timers){
+    if(!liveIds.has(pid)){
+      clearInterval(tid);
+      HITL.timers.delete(pid);
+      HITL.startedAt.delete(pid);
+    }
+  }
+
+  if(!HITL.pending.length){
+    hitlPanel.classList.remove('show');
+    hitlList.innerHTML = '';
+    hitlCount.textContent = '0';
+    updateModeBadge();
+    return;
+  }
+
+  hitlPanel.classList.add('show');
+  hitlCount.textContent = String(HITL.pending.length);
+
+  // Re-render every item (idempotent — preserves bar by reading startedAt).
+  hitlList.innerHTML = '';
+  HITL.pending.forEach(item=>{
+    const trigger = TRIGGER_LABEL[item.trigger_reason] || (item.trigger_reason||'?').toUpperCase();
+    const action = String(item.proposed_action||'?');
+    const conf = Math.round((item.proposed_confidence||0)*100);
+    const preview = clip(item.content||'', 80);
+
+    const el = document.createElement('div');
+    el.className = 'hitl-item';
+    el.dataset.pid = item.id;
+    el.innerHTML = `
+      <div class="hitl-ts">${esc(fmtHms(item.queued_at))}</div>
+      <div class="hitl-trig">${esc(trigger)}</div>
+      <div><span class="badge badge-${esc(action)}">${esc(action)}</span></div>
+      <div class="c-conf">${conf}%</div>
+      <div class="hitl-prev" title="${esc(item.content||'')}">${esc(preview)}</div>
+      <div class="hitl-item-row2">
+        <div class="hitl-bar"><div class="hitl-bar-fill" data-bar="${item.id}"></div></div>
+        <div class="hitl-btns">
+          <button class="hitl-btn" data-act="approve" data-pid="${item.id}">APPROVE</button>
+          <button class="hitl-btn" data-act="GUIDE"   data-pid="${item.id}">GUIDE</button>
+          <button class="hitl-btn" data-act="BLOCK"   data-pid="${item.id}">BLOCK</button>
+          <button class="hitl-btn" data-act="ALLOW"   data-pid="${item.id}">ALLOW</button>
+        </div>
+      </div>
+    `;
+    hitlList.appendChild(el);
+
+    // Start (or resume) countdown.
+    if(!HITL.startedAt.has(item.id)) HITL.startedAt.set(item.id, Date.now());
+    if(!HITL.timers.has(item.id)){
+      const tid = setInterval(()=>tickHitlBar(item.id), 1000);
+      HITL.timers.set(item.id, tid);
+    }
+    tickHitlBar(item.id);
+  });
+
+  updateModeBadge();
+}
+
+function tickHitlBar(pid){
+  const fill = document.querySelector(`.hitl-bar-fill[data-bar="${pid}"]`);
+  if(!fill) return;
+  const start = HITL.startedAt.get(pid) || Date.now();
+  const elapsed = (Date.now() - start) / 1000;
+  const tot = Math.max(1, HITL.timeoutSeconds);
+  const remaining = Math.max(0, tot - elapsed);
+  const pct = Math.max(0, Math.min(100, (remaining/tot)*100));
+  fill.style.width = pct + '%';
+  if(remaining <= 0){
+    const item = fill.closest('.hitl-item');
+    if(item) item.classList.add('expired');
+    const tid = HITL.timers.get(pid);
+    if(tid){ clearInterval(tid); HITL.timers.delete(pid); }
+  }
+}
+
+async function fetchHitlPending(){
+  try{
+    const r = await fetch('/api/hitl/pending');
+    const rows = await r.json();
+    HITL.pending = Array.isArray(rows) ? rows : [];
+    renderHitlPanel();
+  }catch(_){}
+}
+
+async function resolveHitl(pid, resolution){
+  // Optimistic update
+  const before = HITL.pending;
+  HITL.pending = HITL.pending.filter(p=>p.id !== pid);
+  renderHitlPanel();
+  try{
+    const r = await fetch('/api/hitl/resolve', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pending_id: Number(pid), resolution}),
+    });
+    if(!r.ok) throw new Error('resolve failed');
+  }catch(_){
+    // Restore on failure
+    HITL.pending = before;
+    renderHitlPanel();
+    return;
+  }
+  fetchHitlPending();
+}
+
+hitlList.addEventListener('click', e=>{
+  const btn = e.target.closest('.hitl-btn');
+  if(!btn) return;
+  const pid = Number(btn.dataset.pid);
+  const act = btn.dataset.act;
+  let resolution;
+  if(act === 'approve') resolution = 'approved';
+  else resolution = 'overridden:' + act;
+  resolveHitl(pid, resolution);
+});
+
+function handleHitlEvent(d){
+  const t = d.event_type;
+  if(t === 'hitl_sync_queued' || t === 'hitl_timeout'){
+    // Re-fetch queue + redraw.
+    fetchHitlPending();
+    return;
+  }
+  if(t === 'hitl_async_flagged'){
+    // Pulse the matching row. The bus event's `content` field is the
+    // message_id; rows expose data-message-id when available.
+    const msgId = d.content;
+    if(msgId){
+      const row = feed.querySelector(`.row[data-message-id="${msgId}"]`);
+      if(row){
+        row.classList.remove('hitl-flagged');
+        // force reflow to restart animation
+        void row.offsetWidth;
+        row.classList.add('hitl-flagged');
+        setTimeout(()=>row.classList.remove('hitl-flagged'), 1100);
+      }
+    }
+    return;
+  }
+}
+
+function updateModeBadge(){
+  if(!hitlModeBadge) return;
+  const n = HITL.pending.length;
+  if(HITL.mode === 'sync' && n > 0) hitlModeBadge.textContent = `[SYNC · ${n}]`;
+  else hitlModeBadge.textContent = HITL.mode === 'sync' ? '[SYNC]' : '[ASYNC]';
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ANNOTATE TRAY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function closeAnyTray(){
+  const open = feed.querySelector('.tray');
+  if(open) open.remove();
+  feed.querySelectorAll('.row.tray-open').forEach(r=>r.classList.remove('tray-open'));
+  HITL.openTrayDecisionId = null;
+}
+
+function openTray(rowEl){
+  const did = rowEl.dataset.decisionId;
+  if(!did) return; // can't annotate without a decision id
+  closeAnyTray();
+  rowEl.classList.add('tray-open');
+  HITL.openTrayDecisionId = did;
+  const tray = document.createElement('div');
+  tray.className = 'tray';
+  tray.innerHTML = `
+    <textarea placeholder="Add note (≤50 tokens stored)…"></textarea>
+    <div class="tray-controls">
+      <select class="tray-override">
+        <option value="">Keep original ▾</option>
+        <option value="ALLOW">ALLOW</option>
+        <option value="GUIDE">GUIDE</option>
+        <option value="INTERVENE">INTERVENE</option>
+        <option value="BLOCK">BLOCK</option>
+      </select>
+      <button class="tray-btn">ANNOTATE</button>
+    </div>
+  `;
+  rowEl.parentNode.insertBefore(tray, rowEl.nextSibling);
+
+  tray.querySelector('.tray-btn').addEventListener('click', async ()=>{
+    const note = tray.querySelector('textarea').value.trim();
+    const sel  = tray.querySelector('.tray-override').value;
+    const originalAction = rowEl.dataset.action || 'ALLOW';
+    const overrideAction = sel || originalAction;
+    try{
+      const r = await fetch('/api/hitl/annotate', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({decision_id: did, override_action: overrideAction, note: note||null}),
+      });
+      if(!r.ok) throw new Error('annotate failed');
+      closeAnyTray();
+      rowEl.classList.add('annotated');
+      // Inline flash text
+      const flash = document.createElement('span');
+      flash.textContent = ' ✓ Annotated';
+      flash.style.cssText = 'color:var(--c-allow);font-size:9px;margin-left:6px';
+      const ct = rowEl.querySelector('.ct');
+      if(ct){
+        ct.appendChild(flash);
+        setTimeout(()=>{ flash.remove(); rowEl.classList.remove('annotated'); }, 2000);
+      }
+    }catch(_){
+      // keep tray open on failure
+    }
+  });
+}
+
+feed.addEventListener('click', e=>{
+  if(e.target.closest('.tray')) return; // ignore clicks inside tray
+  const row = e.target.closest('.row');
+  if(!row) return;
+  if(row.classList.contains('tray-open')){
+    closeAnyTray();
+    return;
+  }
+  openTray(row);
+});
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   SETTINGS PANEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+const gearBtn         = $('gearBtn');
+const settingsOverlay = $('settingsOverlay');
+const settingsPanel   = $('settingsPanel');
+const settingsClose   = $('settingsClose');
+const modeSync        = $('modeSync');
+const modeAsync       = $('modeAsync');
+const floorSlider     = $('floorSlider');
+const floorVal        = $('floorVal');
+const timeoutInput    = $('timeoutInput');
+const pauseToggle     = $('pauseToggle');
+const pauseToggleLabel= $('pauseToggleLabel');
+
+function openSettings(){
+  settingsOverlay.classList.add('show');
+  settingsPanel.classList.add('show');
+  gearBtn.classList.add('on');
+  settingsPanel.setAttribute('aria-hidden','false');
+  loadSettings();
+}
+function closeSettings(){
+  settingsOverlay.classList.remove('show');
+  settingsPanel.classList.remove('show');
+  gearBtn.classList.remove('on');
+  settingsPanel.setAttribute('aria-hidden','true');
+}
+gearBtn.addEventListener('click', ()=>{
+  if(settingsPanel.classList.contains('show')) closeSettings(); else openSettings();
+});
+settingsClose.addEventListener('click', closeSettings);
+settingsOverlay.addEventListener('click', closeSettings);
+
+async function loadSettings(){
+  try{
+    const r = await fetch('/api/hitl/settings');
+    const d = await r.json();
+    if(!d || d.error) return;
+    HITL.mode = d.hitl_mode || 'async';
+    HITL.floor = (typeof d.hitl_floor === 'number') ? d.hitl_floor : 0.60;
+    HITL.timeoutSeconds = (typeof d.timeout_seconds === 'number') ? d.timeout_seconds : 60;
+    HITL.pauseDetection = (typeof d.pause_detection_enabled === 'boolean') ? d.pause_detection_enabled : true;
+    if(d.session_id) HITL.sessionId = d.session_id;
+    modeSync.checked  = HITL.mode === 'sync';
+    modeAsync.checked = HITL.mode !== 'sync';
+    floorSlider.value = HITL.floor.toFixed(2);
+    floorVal.textContent = HITL.floor.toFixed(2);
+    timeoutInput.value = Math.round(HITL.timeoutSeconds);
+    pauseToggle.checked = HITL.pauseDetection;
+    pauseToggleLabel.textContent = HITL.pauseDetection ? 'Enabled' : 'Disabled';
+    updateModeBadge();
+  }catch(_){}
+}
+
+async function postSettings(payload){
+  try{
+    if(HITL.sessionId && !payload.session_id) payload.session_id = HITL.sessionId;
+    const r = await fetch('/api/hitl/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if(r.ok){
+      const d = await r.json();
+      if(typeof d.timeout_seconds === 'number') HITL.timeoutSeconds = d.timeout_seconds;
+      if(typeof d.pause_detection_enabled === 'boolean') HITL.pauseDetection = d.pause_detection_enabled;
+    }
+  }catch(_){}
+}
+
+modeSync.addEventListener('change', ()=>{
+  if(modeSync.checked){ HITL.mode='sync'; updateModeBadge(); postSettings({hitl_mode:'sync', hitl_floor: HITL.floor}); }
+});
+modeAsync.addEventListener('change', ()=>{
+  if(modeAsync.checked){ HITL.mode='async'; updateModeBadge(); postSettings({hitl_mode:'async', hitl_floor: HITL.floor}); }
+});
+
+let floorDebounce = null;
+floorSlider.addEventListener('input', ()=>{
+  const v = parseFloat(floorSlider.value);
+  floorVal.textContent = v.toFixed(2);
+  HITL.floor = v;
+  clearTimeout(floorDebounce);
+  floorDebounce = setTimeout(()=>postSettings({hitl_floor: v, hitl_mode: HITL.mode}), 500);
+});
+
+let timeoutDebounce = null;
+timeoutInput.addEventListener('input', ()=>{
+  const v = parseInt(timeoutInput.value, 10);
+  if(isNaN(v)) return;
+  clearTimeout(timeoutDebounce);
+  timeoutDebounce = setTimeout(()=>{
+    const clamped = Math.max(15, Math.min(300, v));
+    HITL.timeoutSeconds = clamped;
+    postSettings({timeout_seconds: clamped});
+  }, 500);
+});
+
+pauseToggle.addEventListener('change', ()=>{
+  HITL.pauseDetection = pauseToggle.checked;
+  pauseToggleLabel.textContent = HITL.pauseDetection ? 'Enabled' : 'Disabled';
+  postSettings({pause_detection_enabled: HITL.pauseDetection});
+});
+
+// Initial settings + queue load
+loadSettings();
+fetchHitlPending();
 
 /* ── theme switcher ──────────────────────────────────── */
 document.querySelectorAll('.theme-btn').forEach(btn=>{
