@@ -259,3 +259,25 @@ Outstanding work this doc does NOT cover:
   wrapping is needed.
 - Real-API soak test with `BRIDGE_API_GOV=true` against a live Anthropic
   endpoint — current Item 4 tests use an injected mock client.
+
+## 2026-05-01 follow-up: API → CLI migration
+
+Item #4's transport was migrated from the `anthropic` Python SDK to a
+`claude` CLI subprocess invocation. `src/stream_manager/api_governance.py`
+deleted; `src/stream_manager/cli_governance.py` introduced. Engine path
+unchanged: same `BRIDGE_API_GOV` env flag, same stub-by-default semantics,
+same five-action decision schema. Source tag in `GovDecision` changed
+`"api"` → `"cli"` (also reflected in `ELIGIBLE_SOURCES`). Wall-clock
+budget bumped 2.0s → 5.0s to absorb CLI cold-start. The `anthropic`
+dependency was removed from `pyproject.toml` runtime deps.
+
+Why: operator runs locally via the logged-in Claude Code CLI and does
+not maintain an Anthropic API key for this project. Rejected the
+"keep both backends" option in favor of a single transport that matches
+the actual deployment.
+
+Test count after migration: 47 passing (12 new CLI-subprocess tests
+replace the 6 SDK-mock tests). Real-CLI soak harness is the next
+demand-driven step — replays a JSONL transcript with `BRIDGE_API_GOV=true`
+and reports p50/p95 latency, schema-fail rate, and action-distribution
+drift vs the local-only path.
