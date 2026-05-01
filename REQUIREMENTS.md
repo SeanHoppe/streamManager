@@ -249,6 +249,19 @@ JSONL tail MUST be non-blocking: a lag or parse failure in the tail MUST NOT del
 
 **FR-OG-6** — All alignment and cadence decisions MUST be recorded to the `decisions` table with `source="orch_governance"` for audit and replay.
 
+**FR-OG-7** — When the governed project provides a **maturity-ring alignment reference** (a `maturity-dashboard.html` or equivalent score artifact in the spotlight paths), SM MUST apply the following additional governance signals:
+
+| Signal | Source | SM action |
+|--------|--------|-----------|
+| Per-axis sweep JOB in flight (Dave → Jen → Matt → Oliver AAR pattern) | Agent activity + JSONL tail | ALLOW; recognized as canonical cadence |
+| Orchestration prompt deviating from any open cell's axis | FR-OG-1 alignment check vs. MVP-100-PLAN spotlight | GUIDE with note citing open cell |
+| `## Deviations` section absent from an AAR message | Content pattern match | GUIDE — design-intent drift per invariant 9 |
+| MVP ring delta > 5% in 24 h (from `maturity-history.jsonl` or dashboard delta) | Maturity score change event | Emit `governance_variance_alert` bus event; trigger HITL desktop_pause |
+| Any negative cell score movement detected | Score comparison | BLOCK forwarding; emit `governance_negative_regression` bus event; require HITL ack before resume |
+| ≥ 3 cells flipped in single session | Session score delta | Emit `governance_variance_alert`; surface in dashboard |
+
+FR-OG-7 activates only when `.sm-context.yaml` includes a maturity score artifact in its spotlight. Projects without a maturity harness are unaffected.
+
 ### 4.9 Human-in-the-Loop (FR-HITL)
 
 **FR-HITL-1** — SM MUST support two HITL operating modes, switchable at runtime via the dashboard UI:
@@ -597,3 +610,4 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | 1.3 | 2026-05-01 | SeanHoppe | Add FR-HITL (§4.9): hybrid sync/async HITL with mode switch, three sync triggers (new_pattern, low_confidence, desktop_pause), feedback loop via hitl_overrides, WAL schema additions, ADR-9 |
 | 1.4 | 2026-05-01 | SeanHoppe | FR-AR-7: JSONL log tail as second signal path; attributionPlugin/attributionSkill eliminate pattern inference; isSidechain→sub_agent; stopReason→primary desktop_pause signal; FR-HITL-2 amended with JSONL-primary/heuristic-fallback detection hierarchy |
 | 1.5 | 2026-05-01 | SeanHoppe | §5.6 NFR-M1–M5: tiered model routing (no-LLM L0–L1, Haiku L2–L3, Sonnet-floor L4); ADR-10; model logged per-decision; convergence alert NFR-M4 |
+| 1.6 | 2026-05-01 | SeanHoppe | FR-OG-7: maturity-ring alignment signals (sweep-JOB pattern=ALLOW, deviation=GUIDE, missing AAR Deviations=GUIDE, ring delta>5%=variance alert+HITL, negative cell=BLOCK+ack); agent_profiles.yaml spotlight updated with MVP-100-PLAN + maturity-dashboard.html |
