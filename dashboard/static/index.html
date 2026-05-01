@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GOVERNANCE MONITOR — STREAM MANAGER</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Teko:wght@300;400;500;600&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Share+Tech+Mono&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   RESET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{height:100%;-webkit-font-smoothing:antialiased}
+button{border:none;cursor:pointer;background:none}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   THEME: OBSIDIAN — dark industrial telemetry, amber glow
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+[data-theme="obsidian"]{
+  --bg:           #080a0c;
+  --bg-card:      #0c1118;
+  --bg-row:       #0e141e;
+  --bg-row-alt:   #0b1018;
+  --bg-row-hover: #131c2a;
+  --bg-row-flash: rgba(245,158,11,0.09);
+  --border:       #192030;
+  --border-hi:    rgba(245,158,11,0.25);
+  --text:         #b8b098;
+  --text-dim:     #3a3828;
+  --text-ui:      #5a5848;
+  --text-bright:  #e8e0cc;
+  --accent:       #f59e0b;
+  --accent-dim:   rgba(245,158,11,0.09);
+  --accent-glow:  rgba(245,158,11,0.35);
+  --font-h:       'Teko', sans-serif;
+  --font-d:       'JetBrains Mono', monospace;
+  --scan-op:      0.7;
+  --logo-size:    30px;
+  --logo-ls:      0.12em;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   THEME: PHOSPHOR — pure CRT green phosphor terminal
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+[data-theme="phosphor"]{
+  --bg:           #010602;
+  --bg-card:      #010d03;
+  --bg-row:       #021005;
+  --bg-row-alt:   #010d03;
+  --bg-row-hover: #031508;
+  --bg-row-flash: rgba(57,255,20,0.07);
+  --border:       #082510;
+  --border-hi:    rgba(57,255,20,0.3);
+  --text:         #5aaa60;
+  --text-dim:     #163820;
+  --text-ui:      #246630;
+  --text-bright:  #9de89e;
+  --accent:       #39ff14;
+  --accent-dim:   rgba(57,255,20,0.07);
+  --accent-glow:  rgba(57,255,20,0.3);
+  --font-h:       'Share Tech Mono', monospace;
+  --font-d:       'Share Tech Mono', monospace;
+  --scan-op:      1;
+  --logo-size:    20px;
+  --logo-ls:      0.2em;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   THEME: PAPER — editorial print, light, ink & red accent
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+[data-theme="paper"]{
+  --bg:           #ede8df;
+  --bg-card:      #f8f4ee;
+  --bg-row:       #fefefc;
+  --bg-row-alt:   #f5f1ea;
+  --bg-row-hover: #f0eae0;
+  --bg-row-flash: rgba(192,57,43,0.07);
+  --border:       #ccc4b4;
+  --border-hi:    rgba(192,57,43,0.35);
+  --text:         #2a2018;
+  --text-dim:     #a09080;
+  --text-ui:      #887060;
+  --text-bright:  #140c04;
+  --accent:       #c0392b;
+  --accent-dim:   rgba(192,57,43,0.07);
+  --accent-glow:  rgba(192,57,43,0.2);
+  --font-h:       'Playfair Display', serif;
+  --font-d:       'Courier Prime', monospace;
+  --scan-op:      0;
+  --logo-size:    26px;
+  --logo-ls:      0.04em;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ACTION PALETTE (shared — adjusted per theme below)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+:root{
+  --c-allow:      #22c55e;
+  --c-suggest:    #84cc16;
+  --c-guide:      #eab308;
+  --c-intervene:  #f97316;
+  --c-block:      #ef4444;
+}
+[data-theme="paper"]{
+  --c-allow:      #16a34a;
+  --c-suggest:    #65a30d;
+  --c-guide:      #ca8a04;
+  --c-intervene:  #ea580c;
+  --c-block:      #dc2626;
+}
+[data-theme="phosphor"]{
+  --c-allow:      #39ff14;
+  --c-suggest:    #7fff00;
+  --c-guide:      #ccff00;
+  --c-intervene:  #ffaa00;
+  --c-block:      #ff3333;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   BASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font-d);
+  font-size:13px;
+  line-height:1.5;
+  min-height:100vh;
+  overflow-x:hidden;
+  transition:background .3s,color .3s;
+}
+
+/* scanline overlay */
+body::after{
+  content:'';
+  position:fixed;
+  inset:0;
+  background:repeating-linear-gradient(
+    0deg,
+    transparent 0px,transparent 3px,
+    rgba(0,0,0,.08) 3px,rgba(0,0,0,.08) 4px
+  );
+  pointer-events:none;
+  z-index:9999;
+  opacity:var(--scan-op,0);
+  transition:opacity .4s;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   SHELL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.shell{
+  max-width:1280px;
+  margin:0 auto;
+  padding:0 24px 48px;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   HEADER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:20px 0 16px;
+  border-bottom:1px solid var(--border);
+  margin-bottom:22px;
+}
+.logo{
+  display:flex;
+  align-items:baseline;
+  gap:14px;
+}
+.logo-mark{
+  font-family:var(--font-h);
+  font-size:var(--logo-size);
+  font-weight:600;
+  color:var(--accent);
+  letter-spacing:var(--logo-ls);
+  line-height:1;
+  text-shadow:0 0 22px var(--accent-glow);
+  transition:color .3s,text-shadow .3s;
+}
+[data-theme="paper"] .logo-mark{
+  font-style:italic;
+  font-weight:700;
+  text-shadow:none;
+}
+.logo-sub{
+  font-family:var(--font-d);
+  font-size:9px;
+  color:var(--text-ui);
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+}
+[data-theme="paper"] .logo-sub{
+  font-family:'Courier Prime',monospace;
+  letter-spacing:0.1em;
+}
+.header-right{
+  display:flex;
+  align-items:center;
+  gap:18px;
+}
+/* live dot */
+.live-dot{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text-ui);
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+.live-dot::before{
+  content:'';
+  width:7px;height:7px;
+  border-radius:50%;
+  background:var(--c-allow);
+  box-shadow:0 0 7px var(--c-allow),0 0 16px var(--c-allow);
+  animation:pulse 2.2s ease-in-out infinite;
+}
+.live-dot.off::before{
+  background:var(--c-block);
+  box-shadow:0 0 6px var(--c-block);
+  animation:none;
+}
+@keyframes pulse{
+  0%,100%{opacity:1;transform:scale(1)}
+  50%{opacity:.35;transform:scale(.8)}
+}
+/* theme switcher */
+.theme-switcher{
+  display:flex;
+  gap:5px;
+  align-items:center;
+}
+.theme-btn{
+  width:18px;height:18px;
+  border-radius:50%;
+  border:2px solid transparent;
+  cursor:pointer;
+  transition:border-color .2s,transform .15s,box-shadow .2s;
+  flex-shrink:0;
+}
+.theme-btn:hover{transform:scale(1.2)}
+.theme-btn.on{
+  border-color:var(--text-bright);
+  box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--text-bright);
+}
+.theme-btn[data-t="obsidian"]{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.theme-btn[data-t="phosphor"]{background:linear-gradient(135deg,#39ff14,#16a34a)}
+.theme-btn[data-t="paper"]   {background:linear-gradient(135deg,#c0392b,#7f1d1d)}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   STATS BAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.stats-bar{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:1px;
+  background:var(--border);
+  border:1px solid var(--border);
+  margin-bottom:22px;
+}
+.stat-cell{
+  background:var(--bg-card);
+  padding:16px 20px;
+  transition:background .3s;
+}
+.stat-label{
+  font-family:var(--font-h);
+  font-size:10px;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+  margin-bottom:6px;
+}
+[data-theme="paper"] .stat-label{
+  font-family:'Courier Prime',monospace;
+  font-size:9px;
+  letter-spacing:0.12em;
+}
+.stat-value{
+  font-family:var(--font-d);
+  font-size:28px;
+  font-weight:300;
+  color:var(--text-bright);
+  letter-spacing:-0.03em;
+  line-height:1;
+  transition:color .4s;
+}
+[data-theme="paper"] .stat-value{
+  font-family:'Playfair Display',serif;
+  font-weight:700;
+  font-size:24px;
+  letter-spacing:0;
+}
+.stat-value .unit{
+  font-size:12px;
+  font-weight:400;
+  color:var(--text-ui);
+  letter-spacing:0;
+  margin-left:2px;
+}
+.stat-flash{
+  color:var(--accent) !important;
+  transition:color .05s;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ACTION DISTRIBUTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.dist-panel{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:1px;
+  background:var(--border);
+  border:1px solid var(--border);
+  margin-bottom:22px;
+}
+.dist-cell{
+  background:var(--bg-card);
+  padding:16px 20px;
+}
+.dist-title{
+  font-family:var(--font-h);
+  font-size:10px;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+  margin-bottom:14px;
+}
+[data-theme="paper"] .dist-title{
+  font-family:'Courier Prime',monospace;
+  font-size:9px;
+  letter-spacing:0.12em;
+}
+.dist-rows{
+  display:flex;
+  flex-direction:column;
+  gap:9px;
+}
+.dist-row{
+  display:grid;
+  grid-template-columns:78px 1fr 40px;
+  align-items:center;
+  gap:10px;
+}
+.dist-name{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  font-weight:500;
+  letter-spacing:0.07em;
+}
+.dist-track{
+  height:3px;
+  background:var(--border);
+  border-radius:2px;
+  overflow:hidden;
+}
+.dist-fill{
+  height:100%;
+  border-radius:2px;
+  transition:width .9s cubic-bezier(.4,0,.2,1);
+}
+.dist-pct{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  color:var(--text-dim);
+  text-align:right;
+}
+/* session panel */
+.sess-cell{
+  background:var(--bg-card);
+  padding:16px 20px;
+}
+.sess-title{
+  font-family:var(--font-h);
+  font-size:10px;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+  margin-bottom:14px;
+}
+[data-theme="paper"] .sess-title{
+  font-family:'Courier Prime',monospace;
+  font-size:9px;
+  letter-spacing:0.12em;
+}
+.sess-list{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.sess-row{
+  display:flex;
+  justify-content:space-between;
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text);
+  gap:12px;
+}
+.sess-id{color:var(--accent);opacity:.7}
+.sess-active{color:var(--c-allow)}
+.sess-ended{color:var(--text-dim)}
+.sess-empty{font-size:10px;color:var(--text-dim);font-style:italic}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FILTERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.filter-bar{
+  display:flex;
+  gap:4px;
+  margin-bottom:10px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+.filter-sep{
+  width:1px;height:16px;
+  background:var(--border);
+  margin:0 4px;
+}
+.fbtn{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  letter-spacing:0.08em;
+  padding:4px 10px;
+  border:1px solid var(--border);
+  background:transparent;
+  color:var(--text-dim);
+  cursor:pointer;
+  transition:all .15s;
+  text-transform:uppercase;
+}
+.fbtn:hover{border-color:var(--accent);color:var(--text)}
+.fbtn.on{
+  background:var(--accent-dim);
+  border-color:var(--accent);
+  color:var(--accent);
+}
+.fbtn[data-f="ALLOW"].on   {color:var(--c-allow);  border-color:var(--c-allow);  background:rgba(34,197,94,.07)}
+.fbtn[data-f="SUGGEST"].on {color:var(--c-suggest);border-color:var(--c-suggest);background:rgba(132,204,22,.07)}
+.fbtn[data-f="GUIDE"].on   {color:var(--c-guide);  border-color:var(--c-guide);  background:rgba(234,179,8,.07)}
+.fbtn[data-f="INTERVENE"].on{color:var(--c-intervene);border-color:var(--c-intervene);background:rgba(249,115,22,.07)}
+.fbtn[data-f="BLOCK"].on   {color:var(--c-block);  border-color:var(--c-block);  background:rgba(239,68,68,.07)}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FEED TABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* col layout: time | action | source | conf | content+reason | session */
+.feed-cols{display:grid;grid-template-columns:86px 82px 68px 96px 1fr 76px;gap:10px}
+.feed-head{
+  padding:7px 12px;
+  border:1px solid var(--border);
+  border-bottom:none;
+  background:var(--bg-card);
+}
+.fh-col{
+  font-family:var(--font-h);
+  font-size:9.5px;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+}
+[data-theme="paper"] .fh-col{
+  font-family:'Courier Prime',monospace;
+  font-size:8px;
+  letter-spacing:0.1em;
+}
+
+.feed{
+  border:1px solid var(--border);
+  max-height:540px;
+  overflow-y:auto;
+  overflow-x:hidden;
+}
+.feed::-webkit-scrollbar{width:3px}
+.feed::-webkit-scrollbar-track{background:var(--bg)}
+.feed::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* rows */
+.row{
+  padding:9px 12px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg-row);
+  transition:background .12s;
+  cursor:default;
+}
+.row:nth-child(even){background:var(--bg-row-alt)}
+.row:hover{background:var(--bg-row-hover)}
+.row.hide{display:none}
+
+@keyframes rowIn{
+  from{opacity:0;transform:translateY(-5px);background:var(--bg-row-flash)}
+  to  {opacity:1;transform:translateY(0);background:var(--bg-row)}
+}
+.row.fresh{animation:rowIn .45s ease-out forwards}
+
+/* cells */
+.c-ts{
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text-dim);
+  white-space:nowrap;
+  padding-top:2px;
+  letter-spacing:.01em;
+}
+.badge{
+  display:inline-block;
+  font-family:var(--font-d);
+  font-size:8.5px;
+  font-weight:500;
+  letter-spacing:0.07em;
+  padding:2px 6px;
+  border:1px solid currentColor;
+  white-space:nowrap;
+  transition:box-shadow .2s;
+}
+.row:hover .badge{box-shadow:0 0 9px currentColor}
+.badge-ALLOW    {color:var(--c-allow)}
+.badge-SUGGEST  {color:var(--c-suggest)}
+.badge-GUIDE    {color:var(--c-guide)}
+.badge-INTERVENE{color:var(--c-intervene)}
+.badge-BLOCK    {color:var(--c-block);box-shadow:0 0 7px rgba(239,68,68,.35)}
+
+.c-src{
+  font-family:var(--font-d);
+  font-size:9px;
+  letter-spacing:.05em;
+  padding-top:3px;
+  text-transform:uppercase;
+}
+.src-precheck  {color:var(--accent);opacity:.65}
+.src-graph     {color:#60a5fa}
+.src-cli       {color:#c084fc}
+.src-default   {color:var(--text-dim)}
+.src-rate-limit{color:var(--c-intervene);opacity:.7}
+
+.c-conf{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  color:var(--text-dim);
+  padding-top:2px;
+  white-space:nowrap;
+}
+.pips{display:inline-block;letter-spacing:-1.5px;font-size:10px}
+
+.c-content{min-width:0;overflow:hidden}
+.ct{
+  font-family:var(--font-d);
+  font-size:11px;
+  color:var(--text);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.cr{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  color:var(--text-dim);
+  font-style:italic;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  margin-top:2px;
+}
+
+.c-sess{
+  font-family:var(--font-d);
+  font-size:9px;
+  color:var(--text-dim);
+  padding-top:3px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.feed-empty{
+  padding:60px 24px;
+  text-align:center;
+  color:var(--text-dim);
+  font-family:var(--font-d);
+  font-size:11px;
+  letter-spacing:0.08em;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FOOTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.footer{
+  margin-top:20px;
+  padding-top:14px;
+  border-top:1px solid var(--border);
+  display:flex;
+  justify-content:space-between;
+  font-family:var(--font-d);
+  font-size:9.5px;
+  color:var(--text-dim);
+  letter-spacing:0.07em;
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ── HEADER ─────────────────────────────────────────── -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-mark">GOV·MON</div>
+      <div class="logo-sub">STREAM MANAGER // GOVERNANCE MONITOR</div>
+    </div>
+    <div class="header-right">
+      <div class="theme-switcher">
+        <button class="theme-btn on"  data-t="obsidian" title="Obsidian (dark/amber)"></button>
+        <button class="theme-btn"     data-t="phosphor" title="Phosphor (CRT green)"></button>
+        <button class="theme-btn"     data-t="paper"    title="Paper (editorial light)"></button>
+      </div>
+      <div class="live-dot" id="liveDot">LIVE</div>
+    </div>
+  </header>
+
+  <!-- ── STATS BAR ──────────────────────────────────────── -->
+  <div class="stats-bar">
+    <div class="stat-cell">
+      <div class="stat-label">Decisions</div>
+      <div class="stat-value" id="sTotal">—</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Sessions</div>
+      <div class="stat-value" id="sSessions">—</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Graph Hit</div>
+      <div class="stat-value" id="sGraph">—<span class="unit">%</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Avg Confidence</div>
+      <div class="stat-value" id="sConf">—</div>
+    </div>
+  </div>
+
+  <!-- ── DISTRIBUTION + SESSIONS ────────────────────────── -->
+  <div class="dist-panel">
+    <div class="dist-cell">
+      <div class="dist-title">Action Distribution</div>
+      <div class="dist-rows" id="distRows">
+        <!-- populated by JS -->
+      </div>
+    </div>
+    <div class="sess-cell">
+      <div class="sess-title">Sessions</div>
+      <div class="sess-list" id="sessList">
+        <div class="sess-empty">no session data</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FILTER BAR ─────────────────────────────────────── -->
+  <div class="filter-bar">
+    <button class="fbtn on"  data-f="ALL">ALL</button>
+    <div class="filter-sep"></div>
+    <button class="fbtn" data-f="ALLOW">ALLOW</button>
+    <button class="fbtn" data-f="SUGGEST">SUGGEST</button>
+    <button class="fbtn" data-f="GUIDE">GUIDE</button>
+    <button class="fbtn" data-f="INTERVENE">INTERVENE</button>
+    <button class="fbtn" data-f="BLOCK">BLOCK</button>
+  </div>
+
+  <!-- ── FEED ───────────────────────────────────────────── -->
+  <div class="feed-head feed-cols">
+    <div class="fh-col">Time</div>
+    <div class="fh-col">Action</div>
+    <div class="fh-col">Source</div>
+    <div class="fh-col">Confidence</div>
+    <div class="fh-col">Content / Reasoning</div>
+    <div class="fh-col">Session</div>
+  </div>
+  <div class="feed" id="feed">
+    <div class="feed-empty" id="feedEmpty">AWAITING GOVERNANCE EVENTS…</div>
+  </div>
+
+  <!-- ── FOOTER ─────────────────────────────────────────── -->
+  <footer class="footer">
+    <span id="footStatus">connecting…</span>
+    <span>db: <code>.claude/gov.db</code> &nbsp;·&nbsp; poll 500ms</span>
+  </footer>
+
+</div><!-- /shell -->
+
+<script>
+/* ── helpers ──────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+
+function esc(s){
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function fmtTs(ts){
+  if(!ts) return '–';
+  const d = new Date(ts*1000);
+  const pad = n => String(n).padStart(2,'0');
+  const ms  = String(d.getMilliseconds()).padStart(3,'0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}<span style="color:var(--text-dim)">.${ms}</span>`;
+}
+
+function clip(s, n=72){
+  if(!s) return '–';
+  const c = s.replace(/\s+/g,' ').trim();
+  return c.length > n ? c.slice(0,n)+'…' : c;
+}
+
+function inferSrc(row){
+  if(row.matched_hash) return 'graph';
+  const r = (row.reasoning||'').toLowerCase();
+  if(r.includes('default allow')||r.includes('no rules')) return 'default';
+  if(r.includes('rate-limited'))  return 'rate-limit';
+  if(r.includes('meta-content')||r.includes('destructive')||
+     r.includes('no-actionable')||r.includes('conversational')||
+     r.includes('caveman')||r.includes('thinking')) return 'precheck';
+  if((row.confidence||0) >= 0.9) return 'precheck';
+  if((row.confidence||0) <= 0.12) return 'default';
+  return 'cli';
+}
+
+function confPips(c){
+  const n   = Math.round((c||0)*10);
+  const pct = Math.round((c||0)*100);
+  const filled = '▓'.repeat(n);
+  const empty  = '░'.repeat(10-n);
+  return `<span class="pips">${esc(filled)}<span style="color:var(--text-dim)">${esc(empty)}</span></span> ${pct}%`;
+}
+
+/* ── row builder ─────────────────────────────────────── */
+function buildRow(row, isNew=false){
+  const src = inferSrc(row);
+  const sid = (row.session_id||'').slice(0,8);
+  const el  = document.createElement('div');
+  el.className = `row feed-cols${isNew?' fresh':''}`;
+  el.dataset.action = row.action||'';
+  el.innerHTML = `
+    <div class="c-ts">${fmtTs(row.timestamp)}</div>
+    <div><span class="badge badge-${esc(row.action||'?')}">${esc(row.action||'?')}</span></div>
+    <div class="c-src src-${src}">${src}</div>
+    <div class="c-conf">${confPips(row.confidence)}</div>
+    <div class="c-content">
+      <div class="ct" title="${esc(row.content||'')}">${esc(clip(row.content||''))}</div>
+      <div class="cr" title="${esc(row.reasoning||'')}">${esc(clip(row.reasoning||'',60))}</div>
+    </div>
+    <div class="c-sess" title="${esc(row.session_id||'')}">${esc(sid)||'–'}</div>
+  `;
+  return el;
+}
+
+/* ── feed management ─────────────────────────────────── */
+const MAX_ROWS = 300;
+const feed      = $('feed');
+const feedEmpty = $('feedEmpty');
+let activeFilter = 'ALL';
+
+function prependRow(row){
+  if(feedEmpty.parentNode===feed) feed.removeChild(feedEmpty);
+  const el = buildRow(row, true);
+  if(activeFilter!=='ALL' && el.dataset.action!==activeFilter) el.classList.add('hide');
+  feed.insertBefore(el, feed.firstChild);
+  while(feed.children.length > MAX_ROWS) feed.removeChild(feed.lastChild);
+}
+
+/* ── filters ─────────────────────────────────────────── */
+document.querySelectorAll('.fbtn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    activeFilter = btn.dataset.f;
+    feed.querySelectorAll('.row').forEach(r=>{
+      if(activeFilter==='ALL'||r.dataset.action===activeFilter)
+        r.classList.remove('hide');
+      else r.classList.add('hide');
+    });
+  });
+});
+
+/* ── action color map ────────────────────────────────── */
+const ACTION_COLORS = {
+  ALLOW:     'var(--c-allow)',
+  SUGGEST:   'var(--c-suggest)',
+  GUIDE:     'var(--c-guide)',
+  INTERVENE: 'var(--c-intervene)',
+  BLOCK:     'var(--c-block)',
+};
+const ACTION_ORDER = ['ALLOW','SUGGEST','GUIDE','INTERVENE','BLOCK'];
+
+/* ── stats ───────────────────────────────────────────── */
+function flashEl(el){
+  el.classList.add('stat-flash');
+  setTimeout(()=>el.classList.remove('stat-flash'), 600);
+}
+
+function renderStats(d){
+  if(!d||d.error) return;
+  const tot = $('sTotal'), ses = $('sSessions'),
+        grp = $('sGraph'), cnf = $('sConf');
+
+  const newTotal = (d.total_decisions||0).toLocaleString();
+  if(tot.textContent !== newTotal){ tot.innerHTML=newTotal; flashEl(tot); }
+  ses.innerHTML = d.sessions||0;
+  grp.innerHTML = `${d.graph_pct??'—'}<span class="unit">%</span>`;
+  cnf.innerHTML = d.avg_confidence??'—';
+
+  // distribution
+  const acts  = d.actions||{};
+  const total = Object.values(acts).reduce((a,b)=>a+b,0)||1;
+  const dr    = $('distRows');
+  dr.innerHTML = '';
+  ACTION_ORDER.forEach(act=>{
+    const n   = acts[act]||0;
+    const pct = Math.round(n/total*100);
+    const col = ACTION_COLORS[act]||'var(--text-dim)';
+    const row = document.createElement('div');
+    row.className='dist-row';
+    row.innerHTML=`
+      <div class="dist-name" style="color:${col}">${act}</div>
+      <div class="dist-track">
+        <div class="dist-fill" style="width:${pct}%;background:${col}"></div>
+      </div>
+      <div class="dist-pct">${pct}%</div>
+    `;
+    dr.appendChild(row);
+  });
+}
+
+async function fetchStats(){
+  try{
+    const r = await fetch('/api/stats');
+    renderStats(await r.json());
+  }catch(_){}
+}
+
+fetchStats();
+setInterval(fetchStats,5000);
+
+/* ── sessions panel ──────────────────────────────────── */
+async function fetchSessions(){
+  try{
+    const r = await fetch('/api/sessions');
+    const rows = await r.json();
+    const list = $('sessList');
+    if(!rows||!rows.length){
+      list.innerHTML='<div class="sess-empty">no sessions yet</div>';
+      return;
+    }
+    list.innerHTML='';
+    rows.slice(0,6).forEach(s=>{
+      const el = document.createElement('div');
+      el.className='sess-row';
+      const active = !s.ended_at;
+      const when   = s.started_at
+        ? new Date(s.started_at*1000).toLocaleTimeString()
+        : '–';
+      el.innerHTML=`
+        <span class="sess-id">${esc((s.id||'').slice(0,8))}</span>
+        <span>${esc(s.project_slug||'–')}</span>
+        <span class="${active?'sess-active':'sess-ended'}">${active?'●':'○'} ${when}</span>
+      `;
+      list.appendChild(el);
+    });
+  }catch(_){
+    $('sessList').innerHTML='<div class="sess-empty">unavailable</div>';
+  }
+}
+fetchSessions();
+setInterval(fetchSessions,10000);
+
+/* ── SSE connection ──────────────────────────────────── */
+const liveDot  = $('liveDot');
+const footStat = $('footStatus');
+let es = null;
+
+function connect(){
+  if(es){ es.close(); es=null; }
+  es = new EventSource('/events');
+  es.onopen = ()=>{
+    liveDot.classList.remove('off');
+    footStat.textContent=`connected — ${new Date().toLocaleTimeString()}`;
+  };
+  es.onmessage = e=>{
+    try{
+      const d = JSON.parse(e.data);
+      if(d.error) return;
+      prependRow(d);
+    }catch(_){}
+  };
+  es.onerror = ()=>{
+    liveDot.classList.add('off');
+    footStat.textContent=`disconnected — retry in 3s`;
+    es.close(); es=null;
+    setTimeout(connect,3000);
+  };
+}
+connect();
+
+/* ── theme switcher ──────────────────────────────────── */
+document.querySelectorAll('.theme-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.theme-btn').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    document.documentElement.dataset.theme = btn.dataset.t;
+  });
+});
+</script>
+</body>
+</html>

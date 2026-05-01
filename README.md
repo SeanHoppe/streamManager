@@ -1,20 +1,52 @@
 # StreamManager
 
-Resource-efficient governance + adaptive-learning bridge between Claude Desktop and a Claude CLI session.
+Governance + adaptive-learning bridge between Claude Desktop sub-agent orchestration and a Claude CLI executor. SM acts as the **project manager layer** — reading all project `*.md` files, governing per-agent scope, and enforcing plan alignment and cadence across the full development pipeline.
 
-**Status:** Pre-POC. Requirements drafted, framework planned, spike work not yet started.
+**Status:** POC hardened (99 tests, soak PASS). Requirements v1.1 — agent registry and orchestration governance scoped.
+
+## What SM does
+
+- **Reads full project context** — all `*.md` files from the Desktop project repo (INTENT, REQUIREMENTS, CLAUDE, todos, plans); refreshes mid-session on file change
+- **Discovers sub-agents** — hybrid identification: explicit message metadata + pattern inference via L0→L4 decision graph
+- **Governs per agent role** — reviewer scope ≠ developer scope; each agent governed independently, no cross-agent gating
+- **Enforces plan alignment** — orchestration prompts evaluated against stated requirements and current goals, not just safety
+- **Tracks cadence** — emits warnings when a session stalls or drifts from plan
+
+## Architecture
+
+```
+Claude Desktop Orchestration (Prompt Constructor, Developer, Reviewer, Tester, ...)
+                    │ ws://localhost:8765
+               Stream Manager
+               ├─ Project Context (all *.md, live refresh)
+               ├─ Agent Registry (metadata + pattern inference)
+               ├─ Orchestration Governance (alignment + cadence)
+               └─ Governance Engine + Decision Graph (L0→L4)
+                    │ ws://localhost:8766
+               Claude CLI (executor)
+```
 
 ## Documents
 
-- [REQUIREMENTS.md](REQUIREMENTS.md) — full PRD/RFC/ADR (v1.0, 2026-05-01)
-- [INITIAL_PLAN.md](INITIAL_PLAN.md) — framework skeleton + three-spike POC strategy
+- [REQUIREMENTS.md](REQUIREMENTS.md) — full PRD/RFC/ADR (v1.1, 2026-05-01)
+- [INTENT.md](INTENT.md) — governance intent and safety priorities
+- [POC_FINDINGS.md](POC_FINDINGS.md) — findings from hardening phase
+- [INITIAL_PLAN.md](INITIAL_PLAN.md) — original framework skeleton
 
-## What's next
+## Monitoring
 
-Three throwaway POC spikes, ~1 day each:
+```bash
+pip install -r dashboard/requirements.txt
+uvicorn dashboard.server:app --port 8765 --reload
+# open http://localhost:8765  (3 visual themes: Obsidian / Phosphor / Paper)
+```
 
-- `poc/pipe` — SQLite WAL bus + two WebSocket servers + echo clients (prove the transport)
-- `poc/brain` — Replay log through governance + decision graph (prove the learning math, including project-INTENT signal value)
-- `poc/wire` — Wrap real `claude` subprocess (prove the IPC story end-to-end)
+## Tools
 
-After all three, the spike that surfaced the most surprise becomes v0.1. The other two are deleted; their findings live in `POC_FINDINGS.md`.
+```bash
+# Real-CLI soak (replays transcript, validates parse-success + p95 latency)
+BRIDGE_API_GOV=true python tools/cli_soak.py --transcript <path>.jsonl --intent .
+
+# Governance hook (PreToolUse — wired via .claude/settings.json)
+python tools/hook_evaluate.py
+```

@@ -1,0 +1,204 @@
+# Agent governance profiles for Stream Manager (FR-AR-6)
+#
+# Source: derived from certPortal oversight/OVERSIGHT-BLUEPRINT.md soul specs
+# and SM REQUIREMENTS.md v1.2.
+#
+# Each profile is keyed by role slug. The Agent Registry loads these as defaults
+# on startup; profiles may be refined per-session by pattern learning and are
+# persisted to the WAL bus agent_profiles table.
+#
+# Fields:
+#   default_action  — governance mode before any pattern learning
+#   allowed_ops     — operation categories always allowed
+#   restricted_ops  — operation categories that trigger GUIDE before proceeding
+#   blocked_ops     — operation categories always blocked regardless of context
+#   escalate_to     — mode to escalate to when restricted_op is near protected files
+#   confidence_floor — minimum confidence threshold; below this → escalate to GUIDE
+#   example_agents  — known agent names that map to this role (informational only)
+
+profiles:
+
+  prompt_constructor:
+    default_action: ALLOW
+    allowed_ops:
+      - message_composition
+      - context_reading
+      - metadata_tagging
+    restricted_ops: []
+    blocked_ops:
+      - tool_execution
+      - shell_command
+      - file_write
+    escalate_to: INTERVENE
+    confidence_floor: 0.70
+    example_agents: [Michael]
+
+  developer:
+    default_action: GUIDE
+    allowed_ops:
+      - file_read
+      - file_edit
+      - shell_command
+      - test_runner
+      - package_install
+    restricted_ops:
+      - schema_change
+      - auth_file_edit
+      - governance_core_edit
+    blocked_ops:
+      - destructive_shell      # rm -rf, DROP TABLE, dd if=
+      - force_push_protected   # git push --force to main/master/production
+      - credential_exfiltration
+    escalate_to: INTERVENE
+    confidence_floor: 0.65
+    example_agents: [Dave]
+
+  frontend_architect:
+    default_action: GUIDE
+    allowed_ops:
+      - file_read
+      - file_edit              # frontend paths only
+      - shell_command          # build / lint / dev-server
+      - test_runner
+    restricted_ops:
+      - backend_file_edit      # non-frontend paths → GUIDE with note
+      - schema_change
+    blocked_ops:
+      - destructive_shell
+      - force_push_protected
+      - credential_exfiltration
+      - database_migration     # never from frontend agent
+    escalate_to: INTERVENE
+    confidence_floor: 0.65
+    example_agents: [Jason]
+
+  code_reviewer:
+    default_action: SUGGEST
+    allowed_ops:
+      - file_read
+      - annotation
+      - comment_generation
+      - diff_analysis
+    restricted_ops: []
+    blocked_ops:
+      - file_write
+      - file_edit
+      - shell_command
+      - tool_execution
+    escalate_to: BLOCK
+    confidence_floor: 0.80
+    example_agents: [Jen]
+
+  tester:
+    default_action: ALLOW
+    allowed_ops:
+      - file_read
+      - test_runner
+      - shell_command          # test-scoped only (pytest, npm test, etc.)
+      - diff_analysis
+    restricted_ops:
+      - file_edit              # test files only; prod edits → GUIDE
+    blocked_ops:
+      - destructive_shell
+      - force_push_protected
+      - credential_exfiltration
+    escalate_to: GUIDE
+    confidence_floor: 0.70
+    example_agents: [Matt]
+
+  researcher:
+    default_action: ALLOW
+    allowed_ops:
+      - file_read
+      - web_search
+      - synthesis
+      - report_generation
+    restricted_ops: []
+    blocked_ops:
+      - file_write
+      - file_edit
+      - shell_command
+      - tool_execution
+      - code_execution
+    escalate_to: BLOCK
+    confidence_floor: 0.85
+    example_agents: [Oliver, Oscar]
+
+  strategic_advisor:
+    default_action: OBSERVE
+    allowed_ops:
+      - file_read
+      - recommendation_generation
+      - analysis
+    restricted_ops: []
+    blocked_ops:
+      - file_write
+      - file_edit
+      - shell_command
+      - tool_execution
+      - direct_execution
+    escalate_to: BLOCK
+    confidence_floor: 0.85
+    example_agents: [JeanLuc]
+
+  health_monitor:
+    default_action: OBSERVE
+    allowed_ops:
+      - file_read
+      - status_reporting
+      - bus_event_emit
+    restricted_ops: []
+    blocked_ops:
+      - file_write
+      - file_edit
+      - shell_command
+      - tool_execution
+    escalate_to: BLOCK
+    confidence_floor: 0.90
+    example_agents: [Kathy]
+
+  sub_agent:
+    # Sub-agents have a narrow declared task type (e.g. transport_sender,
+    # transport_validator). Any action outside that declared type is blocked.
+    # The registry must resolve the declared_task_type from agent metadata
+    # before applying this profile.
+    default_action: ALLOW
+    allowed_ops: []            # populated at runtime from declared_task_type
+    restricted_ops: []
+    blocked_ops:
+      - any_op_outside_declared_task_type
+      - destructive_shell
+      - credential_exfiltration
+    escalate_to: BLOCK
+    confidence_floor: 0.90
+    example_agents: [Dave-T, Matt-T]
+
+  unknown:
+    default_action: GUIDE
+    allowed_ops:
+      - file_read
+    restricted_ops:
+      - file_edit
+      - shell_command
+      - tool_execution
+    blocked_ops:
+      - destructive_shell
+      - force_push_protected
+      - credential_exfiltration
+    escalate_to: INTERVENE
+    confidence_floor: 0.60
+    example_agents: []
+
+# Context loading config for certPortal (example project override)
+# SM reads .sm-context.yaml from the governed project root if present.
+# This block is illustrative — it lives in certPortal/.sm-context.yaml, not here.
+#
+# context_loading:
+#   root_glob: "*.md"
+#   spotlight:
+#     - oversight/OVERSIGHT-BLUEPRINT.md
+#     - oversight/shared/*.md
+#   exclude:
+#     - oversight/agents/**
+#     - "**/*-memory-*.md"
+#     - "**/archive/**"

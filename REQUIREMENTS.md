@@ -48,18 +48,39 @@ A user can run `claude` on a remote machine, control it from Claude Desktop on t
 ## 3. Architecture overview
 
 ```
-Claude Desktop  ←─ws://localhost:8765─→  Stream Manager
-                                              │
-                                          Governance Engine
-                                              │
-                                          Message Bus (SQLite WAL)
-                                              │
-                                          Decision Graph (L0→L4)
-                                              │
-                                          Project Context (GitHub repo)
-                                              │
-                                  ←─ws://localhost:8766─→  Claude CLI
+Claude Desktop Orchestration
+  ├── Sub-agent: Prompt Constructor  ─┐  metadata: {agent_id, agent_type, phase}
+  ├── Sub-agent: Developer           ─┤  (or inferred from pattern when absent)
+  ├── Sub-agent: Code Reviewer       ─┤
+  ├── Sub-agent: Tester              ─┘
+            │
+            ▼  ws://localhost:8765
+       ┌────────────────────────────────────────────────────┐
+       │              Stream Manager                        │
+       │  ┌─────────────────────────────────────────────┐  │
+       │  │  Project Context Loader                      │  │
+       │  │  (all *.md + manifests; live refresh)        │  │
+       │  ├─────────────────────────────────────────────┤  │
+       │  │  Agent Registry                              │  │
+       │  │  (metadata + pattern-inferred profiles)      │  │
+       │  ├─────────────────────────────────────────────┤  │
+       │  │  Orchestration Governance                    │  │
+       │  │  (safety + plan alignment + cadence)         │  │
+       │  ├─────────────────────────────────────────────┤  │
+       │  │  Governance Engine  ←→  Decision Graph L0→L4│  │
+       │  ├─────────────────────────────────────────────┤  │
+       │  │  Message Bus (SQLite WAL)                    │  │
+       │  └─────────────────────────────────────────────┘  │
+       └────────────────────────────────────────────────────┘
+            │
+            ▼  ws://localhost:8766
+       Claude CLI (executor)
 ```
+
+**Role summary:**
+- **Claude Desktop Orchestration** — primary director; owns pipeline order; sub-agents produce orchestration prompts
+- **Stream Manager** — governance + PM layer; governs each agent independently per role scope; enforces plan alignment and cadence; does NOT gate agent transitions (pipeline control stays with Desktop)
+- **Claude CLI** — executor; trusts only what SM forwards
 
 ### 3.1 Subsystem boundaries
 
@@ -68,7 +89,9 @@ Claude Desktop  ←─ws://localhost:8765─→  Stream Manager
 | Message Bus | Persistent SQLite WAL store; pub/sub; pattern persistence | `message_bus.py` |
 | Decision Graph | Bottom-up hierarchical pattern learning, L0→L4 promotion | `decision_graph.py` |
 | Governance Engine | Mode-managed real-time decision making, static rules, API enrichment | `governance.py` |
-| Project Context | GitHub repo loader; intent extraction; precheck rules | `project_context.py` |
+| Project Context | Full *.md loader; intent extraction; precheck rules; live refresh | `project_context.py` |
+| Agent Registry | Hybrid agent discovery (metadata + pattern); per-agent governance profiles | `agent_registry.py` |
+| Orchestration Governance | Plan-alignment evaluation; cadence tracking; pipeline stage inference | `orch_governance.py` |
 | Stream Manager | Two WebSocket servers, message routing, governance hookpoint | `stream_manager.py` |
 | Configuration | All config dataclasses; env var overrides | `config.py` |
 | Orchestrator | Wires everything together, lifecycle, status, maintenance | `__main__.py` |
@@ -137,6 +160,18 @@ Claude Desktop  ←─ws://localhost:8765─→  Stream Manager
 
 **FR-PC-6** — Authentication via `GITHUB_TOKEN` env var; public repos MUST work without authentication.
 
+**FR-PC-7** — The loader MUST discover and load `*.md` files using a three-tier strategy:
+
+1. **Root glob** — always load `*.md` from the project repository root.
+2. **Spotlight paths** — an explicit list of high-value paths outside the root (e.g. `oversight/OVERSIGHT-BLUEPRINT.md`, `oversight/shared/*.md`). Configurable per project via `.sm-context.yaml`.
+3. **Exclude patterns** — glob patterns of paths to skip even if matched by root or spotlight (e.g. `oversight/agents/**`, `**/*-memory-*.md`, `**/archive/**`). Operational / ephemeral files MUST be excluded to protect the 400-token alignment budget.
+
+Files are ranked by governance relevance: INTENT > REQUIREMENTS > CLAUDE > README > spotlight > others.
+
+**FR-PC-8** — Project context MUST refresh mid-session when any monitored `*.md` file changes on disk, with a minimum debounce of 10 seconds. Stale context MUST NOT be used after a refresh completes.
+
+**FR-PC-9** — The governance engine MUST use the full `*.md` project context for orchestration-prompt alignment checks (see FR-OG) in addition to static safety checks. The context budget for alignment checks is 400 tokens (ranked excerpts, not full file dumps).
+
 ### 4.5 Stream Manager (FR-SM)
 
 **FR-SM-1** — Two independent WebSocket servers MUST run concurrently: Desktop on port 8765, CLI on port 8766 (configurable).
@@ -160,6 +195,121 @@ Claude Desktop  ←─ws://localhost:8765─→  Stream Manager
 **FR-CC-3** — When wrapping `claude`, the client SHOULD pass `--output-format json` or equivalent flag to ensure parseable output.
 
 **FR-CC-4** — The client MUST send explicit feedback signals to the bridge when a governance suggestion was followed/ignored, enabling reinforcement.
+
+### 4.7 Agent Registry (FR-AR)
+
+**FR-AR-1** — SM MUST support hybrid agent identification: (a) explicit metadata in message envelope (`agent_id`, `agent_type`, `agent_role`, `phase` fields), and (b) pattern inference via the L0→L4 decision graph when metadata is absent. Metadata takes precedence when present.
+
+**FR-AR-2** — Each discovered agent MUST be assigned a governance profile specifying: allowed action scope, confidence thresholds, escalation policy, and plan-alignment weight. Profiles are initialized from defaults and refined via pattern learning.
+
+**FR-AR-3** — Agent profiles MUST persist to the WAL bus `agent_profiles` table and survive session and process restarts.
+
+**FR-AR-4** — SM MUST govern each agent **independently** based on its profile. SM MUST NOT gate one agent's messages based on another agent's completion state — pipeline ordering is the Desktop orchestration's responsibility.
+
+**FR-AR-5** — SM MUST provide a **controlled test mode** (`BRIDGE_AGENT_TEST=true`) that emits agent discovery events to the monitoring bus in real-time, enabling external observation of how agent profiles are built and refined.
+
+**FR-AR-6** — The governance profile for known agent roles MUST enforce appropriate scope by default:
+
+| Agent role | Default scope |
+|------------|---------------|
+| `prompt_constructor` | ALLOW (composition only; no tool execution) |
+| `developer` | GUIDE (file edits + shell; destructive ops → INTERVENE) |
+| `frontend_architect` | GUIDE (frontend file edits + shell; backend or schema changes → INTERVENE) |
+| `code_reviewer` | SUGGEST (annotations only; direct CLI execution → BLOCK) |
+| `tester` | ALLOW (read + test runner commands) |
+| `researcher` | ALLOW (read + synthesis only; any write op or code execution → BLOCK) |
+| `strategic_advisor` | OBSERVE (read + recommendations only; any direct execution → BLOCK) |
+| `health_monitor` | OBSERVE (read + status reporting only; any write op → BLOCK) |
+| `sub_agent` | ALLOW scoped to declared task type only; any action outside declared task type → BLOCK |
+| `unknown` | Governed by standard engine rules |
+
+**FR-AR-7** — SM MUST tail the governed project's active JSONL session log (`~/.claude/projects/{slug}/*.jsonl`, newest file) in parallel with WebSocket message interception. JSONL attribution fields MUST take precedence over all pattern inference:
+
+| JSONL field | SM action |
+|-------------|-----------|
+| `attributionPlugin` present | Assign agent identity directly; skip L1–L3 inference |
+| `attributionSkill` present | Record active skill; refine role profile accordingly |
+| `isSidechain=true` + `sourceToolAssistantUUID` | Assign `sub_agent` profile immediately; link to parent agent UUID |
+| `stopReason=end_turn` | Primary signal for FR-HITL-2 desktop_pause detection (preferred over text heuristic) |
+| `preventedContinuation=true` | Emit `governance_external_block` bus event; record in decisions |
+
+JSONL tail MUST be non-blocking: a lag or parse failure in the tail MUST NOT delay WebSocket message forwarding.
+
+### 4.8 Orchestration Governance (FR-OG)
+
+**FR-OG-1** — SM MUST evaluate orchestration prompts for **project-plan alignment** in addition to safety. Alignment checks ask: does this prompt move work toward stated requirements and current sprint goals, or does it contradict or drift from them?
+
+**FR-OG-2** — Alignment evaluation MUST reference the full ranked `*.md` project context (FR-PC-7/9). Contradictions with INTENT.md or REQUIREMENTS.md MUST produce at minimum a GUIDE decision; contradictions with a frozen component or explicit constraint MUST produce INTERVENE.
+
+**FR-OG-3** — SM MUST infer the **current pipeline stage** from observed agent activity patterns (e.g., sustained Reviewer activity → code-review stage). This stage is used to contextualise governance decisions but does not gate agent transitions.
+
+**FR-OG-4** — SM MUST track a **cadence signal** per session: rate of forward progress relative to stated project goals. A stalling or drifting session (no plan-aligned decisions in configurable window, default 10 minutes) MUST emit a `governance_cadence_warning` bus event.
+
+**FR-OG-5** — SM MUST NOT compose or inject its own prompts into the governed session. Orchestration authorship remains with the Desktop sub-agents; SM's role is evaluation and governance, not generation.
+
+**FR-OG-6** — All alignment and cadence decisions MUST be recorded to the `decisions` table with `source="orch_governance"` for audit and replay.
+
+### 4.9 Human-in-the-Loop (FR-HITL)
+
+**FR-HITL-1** — SM MUST support two HITL operating modes, switchable at runtime via the dashboard UI:
+- **Sync mode** — SM holds matching messages in a pending queue and waits for human approval before forwarding. The mode switch persists to the session record in the WAL bus.
+- **Async mode** — SM decides and forwards immediately; human reviews decisions after the fact and annotates with override + notes. Notes apply to future similar decisions, not the current one.
+
+**FR-HITL-2** — In **sync mode**, a message MUST be queued for human approval when ANY of the following triggers fires:
+1. **New pattern** — decision hash not found in the decision graph (SM has no learned precedent).
+2. **Low confidence** — decision confidence falls below a configurable floor (default `0.60`; adjustable per session in dashboard settings).
+3. **Desktop pause signal** — Desktop orchestration has paused. Detection priority:
+   - **Primary (JSONL):** `stopReason=end_turn` record observed in JSONL tail for the active session.
+   - **Fallback (text heuristic, used only when JSONL tail unavailable or >2 s lagging):** message ends with `?`, or contains phrases like "what would you like", "should I", "please confirm", "done", "complete", "task complete", "all tasks finished".
+
+**FR-HITL-3** — SM MUST expose a `hitl_pending` queue in the WAL bus. Each pending entry records: `message_id`, `proposed_action`, `proposed_confidence`, `trigger_reason` (new_pattern | low_confidence | desktop_pause), `queued_at`, `resolved_at`, `resolution` (approved | overridden | timeout).
+
+**FR-HITL-4** — The dashboard MUST display a **HITL Queue panel** showing all pending messages. For each entry the human can:
+- **Approve** — forward with SM's proposed action.
+- **Override** — select a different action (ALLOW / GUIDE / SUGGEST / INTERVENE / BLOCK) and optionally enter a free-text note explaining the decision.
+- **Dismiss** — mark as not requiring action (equivalent to ALLOW with no note).
+
+**FR-HITL-5** — Sync mode MUST have a configurable timeout (default `60 s`). On timeout, SM falls back to its proposed decision, records `resolution=timeout` in `hitl_pending`, and emits a `hitl_timeout` bus event. A timed-out decision MUST NOT be silently dropped.
+
+**FR-HITL-6** — In **async mode**, every decision row in the dashboard feed MUST expose an **Annotate** affordance. The human can set an override action and add a note at any time after the decision was made. Async annotations MUST be stored as a `hitl_override` record linked to the original `decisions` row.
+
+**FR-HITL-7** — **Feedback loop**: SM MUST read `hitl_override` records when evaluating future messages. Specifically:
+- If a past HITL override changed action for a given hash pattern, SM MUST adjust its confidence toward the human-preferred action for that hash on subsequent encounters (reinforcement signal).
+- Free-text notes from overrides MUST be stored and, when the same hash pattern recurs, injected as a short context hint (≤ 50 tokens) into the governance alignment prompt.
+- Override records accumulate per hash; the most recent `N` overrides (default `N=5`) are retained as active context; older ones are archived in the WAL bus but not injected.
+
+**FR-HITL-8** — WAL bus schema additions:
+
+```sql
+CREATE TABLE IF NOT EXISTS hitl_pending (
+    id           INTEGER PRIMARY KEY,
+    message_id   INTEGER NOT NULL REFERENCES messages(id),
+    proposed_action     TEXT NOT NULL,
+    proposed_confidence REAL NOT NULL,
+    trigger_reason      TEXT NOT NULL,   -- new_pattern | low_confidence | desktop_pause
+    queued_at    TEXT NOT NULL,
+    resolved_at  TEXT,
+    resolution   TEXT                    -- approved | overridden | timeout | dismissed
+);
+
+CREATE TABLE IF NOT EXISTS hitl_overrides (
+    id              INTEGER PRIMARY KEY,
+    decision_id     INTEGER NOT NULL REFERENCES decisions(id),
+    original_action TEXT NOT NULL,
+    override_action TEXT NOT NULL,
+    note            TEXT,
+    mode            TEXT NOT NULL,       -- sync | async
+    timestamp       TEXT NOT NULL
+);
+```
+
+**FR-HITL-9** — Dashboard MUST expose configurable HITL settings per session:
+- Sync/async mode toggle (persisted to session record).
+- Confidence floor slider (0.0–1.0, default 0.60).
+- Sync timeout (seconds, default 60).
+- Desktop pause detection on/off toggle.
+
+**FR-HITL-10** — All HITL interactions (approvals, overrides, timeouts, annotations) MUST be recorded with timestamp and source `"hitl"` in the bus for full audit replay.
 
 ---
 
@@ -191,6 +341,25 @@ Claude Desktop  ←─ws://localhost:8765─→  Stream Manager
 - **NFR-O1** — All subsystems MUST emit structured logs with consistent format and configurable level.
 - **NFR-O2** — A periodic status logger MUST emit governance mode, intervention count, and pattern counts every 30 s.
 - **NFR-O3** — A `--status` CLI flag MUST print current bus statistics and exit.
+
+### 5.6 Model routing
+- **NFR-M1** — SM MUST route governance LLM calls by decision layer; calling a more expensive model than the layer requires is a defect.
+
+  | Layer | Trigger | Model |
+  |-------|---------|-------|
+  | L0 | Regex / static rule match | No LLM |
+  | L1 | Decision graph hash match, confidence ≥ 0.85 | No LLM |
+  | L2 | Decision graph hash match, confidence 0.60–0.84 | `haiku-4-5` |
+  | L3 | No graph match; pattern inference fallback | `haiku-4-5` |
+  | L4 | FR-OG alignment check; ambiguous INTERVENE/BLOCK; HITL note synthesis | `sonnet` (minimum) |
+
+- **NFR-M2** — Model selection MUST be driven by `--model` flag on the `claude -p` subprocess call. No SDK model override. Valid values read from `BRIDGE_L2_MODEL` (default `claude-haiku-4-5-20251001`) and `BRIDGE_L4_MODEL` (default `claude-sonnet-4-6`) env vars.
+
+- **NFR-M3** — Haiku (`claude-haiku-4-5`) MUST NOT be used for: FR-OG alignment checks, any decision that produces INTERVENE or BLOCK on a previously-unseen pattern, or HITL note synthesis. Violations are a correctness defect.
+
+- **NFR-M4** — At steady state (post-pattern-convergence), ≥ 80% of decisions MUST resolve at L0–L1 (no LLM). L4 call rate > 20% of decisions is a signal that pattern learning is not converging and MUST trigger an `nfr_model_routing_alert` bus event.
+
+- **NFR-M5** — Model routing decisions MUST be logged per-decision (`model_used`, `layer`) in the `decisions` table for cost and convergence analysis.
 
 ---
 
@@ -231,6 +400,30 @@ Claude Desktop  ←─ws://localhost:8765─→  Stream Manager
 **Decision:** Two WebSocket servers (Desktop + CLI) using `websockets` package.
 **Alternatives considered:** Unix sockets (no remote), gRPC (heavy), HTTP polling (latency).
 **Consequences:** One Python dependency. Cross-platform. Compatible with browser-based tooling for future visualization.
+
+### ADR-7 — Hybrid agent identification (metadata + pattern inference)
+**Context:** Desktop sub-agents may or may not include identifying metadata in message envelopes. Requiring metadata would break compatibility with agents that don't emit it; pure inference is slow to converge.
+**Decision:** Support both: explicit `agent_id/agent_type/agent_role` metadata fields take precedence; pattern inference via L0→L4 graph fills the gap when metadata is absent.
+**Alternatives considered:** Metadata-only (breaks unannotated agents), inference-only (slow convergence), separate registration handshake (adds protocol complexity).
+**Consequences:** Agent profiles converge faster when metadata is present. Inference path reuses existing graph machinery at no extra cost. Hybrid mode degrades gracefully: worst case is treating an unknown agent as `unknown` role with standard governance rules.
+
+### ADR-8 — SM governs per-agent independently; Desktop owns pipeline order
+**Context:** Multi-agent orchestration raises the question of whether SM should enforce stage sequencing (block deploy until tests pass) or only govern individual message safety and alignment.
+**Decision:** SM governs each agent's messages independently per its profile. Pipeline ordering is Desktop orchestration's responsibility. SM does not gate agent transitions.
+**Alternatives considered:** SM as pipeline coordinator (cross-agent gating) — rejected; adds stateful cross-agent coupling that duplicates what Desktop orchestration already manages, and creates a single point of failure for pipeline flow.
+**Consequences:** SM remains stateless w.r.t. pipeline order. Desktop retains full control of sequencing. SM's cadence signal (FR-OG-4) flags stalls without blocking agents directly.
+
+### ADR-9 — HITL as a switchable mode, not a separate subsystem
+**Context:** HITL could be implemented as an always-on intercept layer, a separate process, or a runtime-switchable mode within the existing engine.
+**Decision:** HITL is a runtime-switchable mode controlled by the dashboard. Sync and async modes share the same `hitl_overrides` WAL table and feedback loop; only the intercept timing differs. No separate process. The governance engine gains a `hitl_mode` flag read from the session record at startup and checked per-decision.
+**Alternatives considered:** Always-on sync (rejected — eliminates human's ability to run uninterrupted sessions); always async only (rejected — removes real-time control that makes HITL valuable for new-pattern and desktop-pause triggers); separate HITL daemon (rejected — adds IPC complexity with no benefit over a flag in the existing engine).
+**Consequences:** Single code path for both modes simplifies testing and reduces engine complexity. The runtime toggle means the human can shift to async for known-stable work and re-engage sync when exploring new territory, without restarting SM.
+
+### ADR-10 — Tiered model routing: Haiku at L2–L3, Sonnet floor at L4
+**Context:** SM uses `claude -p` subprocess for LLM governance calls. Running Sonnet for every call is correct but expensive; running Haiku for every call risks reasoning failures on alignment and ambiguous block decisions.
+**Decision:** Route by decision layer (NFR-M1). L0–L1 require no LLM. L2–L3 use Haiku — these are confirmation or soft-inference calls on low-confidence graph matches where the cost of a Haiku error is a recoverable GUIDE, not a missed destructive action. L4 uses Sonnet minimum — alignment checks, novel INTERVENE/BLOCK, and HITL note synthesis require multi-document reasoning that Haiku degrades on at the 400-token project context budget.
+**Alternatives considered:** Haiku for all LLM calls (rejected — demonstrated reasoning degradation on multi-doc alignment tasks at short token budgets); Sonnet for all LLM calls (correct but ~12× cost of L2–L3 Haiku calls for lower-stakes decisions; unsustainable at high message volume); dynamic model selection per message complexity (rejected — complexity estimation itself requires a model call, defeating the purpose).
+**Consequences:** ~80% of decisions at L0–L1 (no cost); L2–L3 Haiku calls ~12× cheaper than Sonnet; L4 Sonnet reserved for decisions where correctness matters most. Model choice exposed via env vars so it can be updated as better/cheaper models ship. NFR-M4 convergence alert prevents silent model-routing budget drift.
 
 ---
 
@@ -369,8 +562,11 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | OQ-3 | Should project context refresh mid-session if the repo changes? | Eng | Likely yes, with debounce |
 | OQ-4 | How do we handle multi-repo projects (monorepo with sub-projects)? | Eng | v2 scope |
 | OQ-5 | Is the SQLite bus sufficient for 10+ concurrent CLI sessions or do we need migration to Postgres? | Ops | Profile in Phase 2 |
-| OQ-6 | Should the Decision Graph be visualizable in real-time (web UI)? | Product | Stretch goal |
+| OQ-6 | Should the Decision Graph be visualizable in real-time (web UI)? | Product | **Resolved** — FastAPI+SSE dashboard built (`dashboard/`); 3 visual themes |
 | OQ-7 | Privacy: does the project context loader respect repo `.bridgeignore` if present? | Security | Should add for v1.1 |
+| OQ-8 | What is the convergence time for pattern-inferred agent identification with no metadata? | Eng | Needs controlled-test data (FR-AR-5) |
+| OQ-9 | Should per-agent governance profiles be user-editable (YAML/TOML config) or purely learned? | Product | Pending; leaning toward learned-with-defaults |
+| OQ-10 | How should SM handle an agent that exceeds its profile scope repeatedly — escalate mode or flag for human review? | Eng | Pending alpha data |
 
 ---
 
@@ -396,3 +592,8 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | Version | Date | Author | Notes |
 |---------|------|--------|-------|
 | 1.0 | 2026-05-01 | initial | First complete draft, all sections present |
+| 1.1 | 2026-05-01 | SeanHoppe | Add FR-AR (Agent Registry), FR-OG (Orchestration Governance), FR-PC-7/8/9 (full *.md context + live refresh); ADR-7, ADR-8; updated architecture diagram; SM repositioned as governance + PM layer for Desktop sub-agent orchestration |
+| 1.2 | 2026-05-01 | SeanHoppe | FR-PC-7: replace naive ALL-*.md with three-tier root/spotlight/exclude strategy; FR-AR-6: add frontend_architect, researcher, strategic_advisor, health_monitor, sub_agent roles from certPortal agent topology recon |
+| 1.3 | 2026-05-01 | SeanHoppe | Add FR-HITL (§4.9): hybrid sync/async HITL with mode switch, three sync triggers (new_pattern, low_confidence, desktop_pause), feedback loop via hitl_overrides, WAL schema additions, ADR-9 |
+| 1.4 | 2026-05-01 | SeanHoppe | FR-AR-7: JSONL log tail as second signal path; attributionPlugin/attributionSkill eliminate pattern inference; isSidechain→sub_agent; stopReason→primary desktop_pause signal; FR-HITL-2 amended with JSONL-primary/heuristic-fallback detection hierarchy |
+| 1.5 | 2026-05-01 | SeanHoppe | §5.6 NFR-M1–M5: tiered model routing (no-LLM L0–L1, Haiku L2–L3, Sonnet-floor L4); ADR-10; model logged per-decision; convergence alert NFR-M4 |

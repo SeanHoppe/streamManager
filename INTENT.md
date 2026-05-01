@@ -6,11 +6,17 @@
 
 ## What this project is
 
-A resource-efficient governance and adaptive-learning bridge between Claude
-Desktop and a Claude CLI session. It monitors bidirectional traffic, applies
-static + learned guardrails, builds a bottom-up L0→L4 decision graph, and
-hooks into the governed project's repo to make decisions that reference
-*that* project's intent rather than generic heuristics.
+A governance and adaptive-learning bridge between Claude Desktop sub-agent
+orchestration and a Claude CLI executor. SM is the **project manager layer**:
+it reads the full set of `*.md` files from the governed project, discovers the
+Desktop's sub-agent topology (Prompt Constructor, Developer, Code Reviewer,
+Tester, and others) via hybrid metadata + pattern inference, and governs each
+agent independently per its role scope.
+
+SM enforces two things beyond raw safety: **plan alignment** (does this
+orchestration prompt move toward stated requirements?) and **cadence**
+(is the session making forward progress?). Pipeline ordering remains with
+Desktop orchestration. SM governs messages, not transitions.
 
 ## Safety priorities (highest first)
 
@@ -41,6 +47,22 @@ hooks into the governed project's repo to make decisions that reference
   a migration story.
 - `src/stream_manager/project_context.py` — defines what "intent" means
   for governed repos.
+
+## Sub-agent governance principles
+
+- Each sub-agent is governed **independently** by its role profile.
+- SM MUST NOT gate one agent based on another's completion state.
+- Reviewer agents: SUGGEST scope only; direct CLI execution from a reviewer → BLOCK.
+- Developer agents near protected files (auth, bus schema, governance core): GUIDE → INTERVENE.
+- Unknown agents: treated as `unknown` role under standard engine rules until pattern inference resolves their profile.
+- Agent profiles that repeatedly exceed scope MUST escalate governance mode for that agent specifically.
+
+## Project context loading
+
+- All `*.md` files in the governed project root are loaded, ranked by governance relevance.
+- Rank order: INTENT > REQUIREMENTS > CLAUDE.md > README > others.
+- Context refreshes mid-session (10 s debounce) when any monitored file changes.
+- The 400-token budget for alignment checks is consumed by ranked excerpts, not full file dumps.
 
 ## What governance should learn from this project
 
