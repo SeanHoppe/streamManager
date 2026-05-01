@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
-from stream_manager.api_governance import ApiGovernor, is_enabled as _api_enabled
+from stream_manager.cli_governance import CliGovernor, is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.messages import Message
 from stream_manager.project_context import ProjectContextSnapshot, fast_precheck
@@ -42,7 +42,7 @@ MIN_INTERVENTIONS_FOR_PROMOTE = 3
 # Sources where the engine actually exercised judgment. The "default" branch
 # returning ALLOW with confidence 0.1 carries no information about engine
 # accuracy and must not contribute to the rolling window.
-ELIGIBLE_SOURCES: frozenset[str] = frozenset({"precheck", "graph", "api"})
+ELIGIBLE_SOURCES: frozenset[str] = frozenset({"precheck", "graph", "cli"})
 INTERVENTION_ACTIONS: frozenset[str] = frozenset({"SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
 
 
@@ -61,7 +61,7 @@ class GovernanceEngine:
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_log: deque[float] = field(default_factory=lambda: deque(maxlen=120))
-    _api_governor: ApiGovernor | None = None
+    _cli_governor: CliGovernor | None = None
 
     def evaluate(self, msg: Message) -> GovDecision:
         pre = fast_precheck(msg.content, self.project_context)
@@ -99,15 +99,15 @@ class GovernanceEngine:
                 source="graph",
             )
 
-        api_decision = self._maybe_api_evaluate(msg.content)
-        if api_decision is not None:
+        cli_decision = self._maybe_cli_evaluate(msg.content)
+        if cli_decision is not None:
             decision = self._apply_mode(
                 GovDecision(
-                    action=api_decision.action,
-                    confidence=api_decision.confidence,
-                    reasoning=api_decision.reasoning,
+                    action=cli_decision.action,
+                    confidence=cli_decision.confidence,
+                    reasoning=cli_decision.reasoning,
                     mode=self.mode,
-                    source="api",
+                    source="cli",
                 )
             )
             if decision.action in {"INTERVENE", "BLOCK"} and self._rate_limited():
@@ -130,12 +130,12 @@ class GovernanceEngine:
             source="default",
         )
 
-    def _maybe_api_evaluate(self, content: str):
-        if not _api_enabled():
+    def _maybe_cli_evaluate(self, content: str):
+        if not _cli_enabled():
             return None
-        if self._api_governor is None:
-            self._api_governor = ApiGovernor(self.project_context)
-        return self._api_governor.evaluate(content)
+        if self._cli_governor is None:
+            self._cli_governor = CliGovernor(self.project_context)
+        return self._cli_governor.evaluate(content)
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:
