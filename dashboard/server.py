@@ -44,6 +44,14 @@ _hitl_runtime_settings: dict[str, object] = {
     "pause_detection_enabled": True,
 }
 
+# ── Phase 6 §1: Per-agent governance mode override ─────────────────────
+# In-memory map: session_id -> agent_id -> mode. Persists for the life
+# of the dashboard process only (no WAL persistence). Note: this map is
+# read by the dashboard UI via GET /api/agents; mid-flight enforcement
+# in the governance engine is out of scope for Phase 6 (follow-up).
+_VALID_OVERRIDE_MODES = {"OBSERVE", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"}
+_mode_overrides: dict[str, dict[str, str]] = {}
+
 
 def _get_bus():
     """Return a lazily-initialized shared MessageBus instance."""
@@ -250,15 +258,33 @@ async def api_stats():
 
 
 @app.get("/api/decisions")
-async def api_decisions(limit: int = 50):
-    """Seed: last N decisions newest-first (for page load before SSE connects)."""
+async def api_decisions(limit: int = 50, session_id: str | None = None):
+    """Seed: last N decisions newest-first (for page load before SSE connects).
+
+    Phase 6 §5: optional ?session_id= filter for the session selector.
+    """
     try:
         conn = _open()
-        rows = conn.execute(_seed_sql(conn), (min(limit, 200),)).fetchall()
+        base = _seed_sql(conn)
+        if session_id:
+            # Inject WHERE clause before ORDER BY
+            sql = base.replace(
+                "JOIN messages m ON d.message_id = m.id",
+                "JOIN messages m ON d.message_id = m.id WHERE m.session_id = ?",
+            )
+            rows = conn.execute(sql, (session_id, min(limit, 200))).fetchall()
+        else:
+            rows = conn.execute(base, (min(limit, 200),)).fetchall()
         conn.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
+        out = []
+        for r in rows:
+            d = dict(r)
+            # Phase 6 §7: alias profile_slug -> agent_profile_slug
+            d["agent_profile_slug"] = d.get("profile_slug")
+            out.append(d)
+        return out
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.get("/api/agents")
@@ -290,6 +316,13 @@ async def api_agents(session_id: str | None = None, limit: int = 50):
         for r in rows:
             d = dict(r)
             d["is_sidechain"] = bool(d.get("is_sidechain"))
+            # Phase 6 §1: surface active per-agent mode override (if any)
+            sess = d.get("session_id")
+            slug = d.get("profile_slug")
+            override = None
+            if sess and slug:
+                override = _mode_overrides.get(str(sess), {}).get(str(slug))
+            d["mode_override"] = override
             out.append(d)
         return out
     except Exception:
@@ -298,18 +331,42 @@ async def api_agents(session_id: str | None = None, limit: int = 50):
 
 @app.get("/api/sessions")
 async def api_sessions(limit: int = 10):
-    """Recent sessions, newest first."""
+    """Recent sessions, newest first.
+
+    Phase 6 §7: include hitl_mode + hitl_floor when those columns exist
+    (older DBs created before HITL settings landed will return None).
+    """
     try:
         conn = _open()
-        rows = conn.execute(
-            "SELECT id, project_slug, pid, started_at, ended_at "
-            "FROM sessions ORDER BY started_at DESC LIMIT ?",
-            (min(limit, 50),),
-        ).fetchall()
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        has_hitl = "hitl_mode" in cols and "hitl_floor" in cols
+        if has_hitl:
+            rows = conn.execute(
+                "SELECT id, project_slug, pid, started_at, ended_at, "
+                "hitl_mode, hitl_floor "
+                "FROM sessions ORDER BY started_at DESC LIMIT ?",
+                (min(limit, 50),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, project_slug, pid, started_at, ended_at "
+                "FROM sessions ORDER BY started_at DESC LIMIT ?",
+                (min(limit, 50),),
+            ).fetchall()
         conn.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
+        out = []
+        for r in rows:
+            d = dict(r)
+            if not has_hitl:
+                d["hitl_mode"] = None
+                d["hitl_floor"] = None
+            out.append(d)
+        return out
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ── FR-HITL §4.9 dashboard endpoints ─────────────────────────────────
@@ -761,6 +818,136 @@ async def api_maturity():
     }
 
 
+# ── Phase 6 §1: per-agent mode override endpoint ───────────────────────
+
+
+@app.post("/api/agents/{agent_id}/override-mode")
+async def api_agent_override_mode(agent_id: str, request: Request):
+    """Set or clear a per-agent governance mode override.
+
+    Body: ``{"mode": "OBSERVE"|"SUGGEST"|"GUIDE"|"INTERVENE"|"BLOCK"|null,
+             "session_id": "..."}``.
+
+    If ``mode`` is null, the override is removed (revert to profile
+    default). The map is in-memory (session_id -> agent_id -> mode);
+    no WAL persistence in Phase 6.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    mode = body.get("mode")
+    session_id = body.get("session_id")
+    # Resolve session implicitly when not provided.
+    if not isinstance(session_id, str) or not session_id:
+        try:
+            conn = _open()
+            session_id = _latest_active_session_id(conn)
+            conn.close()
+        except Exception:
+            session_id = None
+    if not session_id:
+        return JSONResponse(
+            {"error": "no active session to override"}, status_code=422
+        )
+    if mode is None:
+        # Clear override.
+        sess_map = _mode_overrides.get(session_id)
+        if sess_map and agent_id in sess_map:
+            del sess_map[agent_id]
+            if not sess_map:
+                _mode_overrides.pop(session_id, None)
+        return {"ok": True, "session_id": session_id, "agent_id": agent_id, "mode": None}
+    if not isinstance(mode, str) or mode not in _VALID_OVERRIDE_MODES:
+        return JSONResponse(
+            {"error": f"mode must be one of {sorted(_VALID_OVERRIDE_MODES)} or null"},
+            status_code=422,
+        )
+    _mode_overrides.setdefault(session_id, {})[agent_id] = mode
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "mode": mode,
+    }
+
+
+# ── Phase 6 §2: NDJSON decisions export ────────────────────────────────
+
+
+@app.get("/api/decisions/export")
+async def api_decisions_export(session_id: str | None = None):
+    """Stream decisions as NDJSON (Content-Type application/x-ndjson).
+
+    Each line is one decision JSON record with fields:
+    decision_id, session_id, timestamp, action, confidence, reasoning,
+    matched_hash, model_used, layer, agent_profile_slug, trigger_reason.
+    """
+    try:
+        conn = _open()
+        has_agents = _has_agents_table(conn)
+        has_routing = _has_decision_routing_cols(conn)
+
+        model_expr = "COALESCE(d.model_used, '')" if has_routing else "''"
+        layer_expr = "COALESCE(d.layer, 0)" if has_routing else "0"
+        if has_agents:
+            slug_expr = (
+                "(SELECT a.profile_slug FROM agents a "
+                "WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp "
+                "ORDER BY a.last_seen DESC LIMIT 1)"
+            )
+        else:
+            slug_expr = "NULL"
+        # trigger_reason is on hitl_pending; left-join when the table exists.
+        has_hitl = _has_table(conn, "hitl_pending")
+        if has_hitl:
+            trig_expr = (
+                "(SELECT hp.trigger_reason FROM hitl_pending hp "
+                "WHERE hp.message_id = d.message_id ORDER BY hp.id DESC LIMIT 1)"
+            )
+        else:
+            trig_expr = "NULL"
+
+        sql = (
+            "SELECT d.id AS decision_id, m.session_id AS session_id, "
+            "d.timestamp AS timestamp, d.action AS action, "
+            "d.confidence AS confidence, d.reasoning AS reasoning, "
+            "d.matched_hash AS matched_hash, "
+            f"{model_expr} AS model_used, "
+            f"{layer_expr} AS layer, "
+            f"{slug_expr} AS agent_profile_slug, "
+            f"{trig_expr} AS trigger_reason "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+        )
+        params: tuple = ()
+        if session_id:
+            sql += "WHERE m.session_id = ? "
+            params = (session_id,)
+        sql += "ORDER BY d.rowid ASC"
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    def gen():
+        for r in rows:
+            yield json.dumps(dict(r), separators=(",", ":")) + "\n"
+
+    import datetime as _dt
+    fname = f"sm-decisions-{_dt.datetime.now(_dt.timezone.utc).date().isoformat()}.jsonl"
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+# ── Phase 6 §3/§7: SSE forwards ALL bus event types ────────────────────
+# NB: previously filtered to hitl_* + decisions; broaden so the dashboard
+# event-log panel can render the full bus stream.
 _HITL_EVENT_TYPES = ("hitl_sync_queued", "hitl_async_flagged", "hitl_timeout")
 
 
@@ -804,19 +991,20 @@ async def sse_events(request: Request):
                     yield f"data: {json.dumps(dict(row))}\n\n"
             except Exception:
                 pass
-            # FR-HITL §4.9: forward hitl_sync_queued and hitl_async_flagged
-            # bus events as SSE messages so the dashboard can update the
-            # HITL Queue panel in real time.
+            # Phase 6 §3/§7: forward ALL bus event types (not just HITL)
+            # so the dashboard event-log panel can render the full
+            # stream. Bus events use direction='internal' (user content
+            # uses 'inbound'); skip inbound rows so we don't duplicate
+            # the decisions feed and don't ship raw user input.
             try:
-                placeholders = ",".join("?" for _ in _HITL_EVENT_TYPES)
-                hitl_rows = conn.execute(
-                    f"SELECT rowid AS rid, id, session_id, type, content, "
-                    f"metadata, timestamp FROM messages "
-                    f"WHERE rowid > ? AND type IN ({placeholders}) "
-                    f"ORDER BY rowid ASC",
-                    (last_msg_rid, *_HITL_EVENT_TYPES),
+                msg_rows = conn.execute(
+                    "SELECT rowid AS rid, id, session_id, type, content, "
+                    "metadata, timestamp, direction FROM messages "
+                    "WHERE rowid > ? AND direction != 'inbound' "
+                    "ORDER BY rowid ASC",
+                    (last_msg_rid,),
                 ).fetchall()
-                for hr in hitl_rows:
+                for hr in msg_rows:
                     last_msg_rid = hr["rid"]
                     payload = dict(hr)
                     payload["event_type"] = payload.pop("type")

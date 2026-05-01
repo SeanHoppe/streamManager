@@ -1051,6 +1051,270 @@ body::after{
 .ring-sweep{font-size:9px;color:var(--text-dim)}
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   PHASE 6 — global mode bar, session selector, override
+   dropdown, JSONL export, event log, empty/error/loading
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+/* global governance mode bar (under header) */
+.gmode-bar{
+  height:6px;
+  width:100%;
+  background:var(--text-dim);
+  border:1px solid var(--border);
+  border-top:none;
+  margin:-22px 0 22px;
+  transition:background .35s;
+  cursor:help;
+}
+.gmode-bar[data-mode="OBSERVE"]   {background:var(--text-dim)}
+.gmode-bar[data-mode="SUGGEST"]   {background:var(--c-suggest)}
+.gmode-bar[data-mode="GUIDE"]     {background:var(--c-guide)}
+.gmode-bar[data-mode="INTERVENE"] {background:var(--c-intervene)}
+.gmode-bar[data-mode="BLOCK"]     {
+  background:var(--c-block);
+  animation:blockPulse 1s ease-in-out infinite;
+}
+@keyframes blockPulse{
+  0%,100%{opacity:1;box-shadow:0 0 0 var(--c-block)}
+  50%   {opacity:.55;box-shadow:0 0 14px var(--c-block)}
+}
+
+/* session selector */
+.sess-select{
+  font-family:var(--font-d);
+  font-size:10px;
+  background:var(--bg-card);
+  color:var(--text);
+  border:1px solid var(--border);
+  padding:4px 8px;
+  letter-spacing:.06em;
+  outline:none;
+  max-width:280px;
+  display:none;
+}
+.sess-select:focus{border-color:var(--accent)}
+.sess-select.show{display:inline-block}
+
+/* per-agent mode override dropdown */
+.agent-badge-name.clickable{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.agent-badge-name.clickable:hover{color:var(--text-bright)}
+.agent-override-bolt{
+  color:var(--c-guide);
+  font-size:11px;
+  margin-left:4px;
+  text-shadow:0 0 6px var(--c-guide);
+}
+.override-popover{
+  position:absolute;
+  z-index:60;
+  background:var(--bg-card);
+  border:1px solid var(--border-hi);
+  box-shadow:0 4px 18px rgba(0,0,0,.45);
+  padding:6px;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  min-width:130px;
+}
+[data-theme="paper"] .override-popover{box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.override-popover button{
+  font-family:var(--font-d);
+  font-size:10px;
+  padding:4px 8px;
+  background:transparent;
+  color:var(--text);
+  border:1px solid var(--border);
+  text-align:left;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  cursor:pointer;
+  transition:background .12s,color .12s,border-color .12s;
+}
+.override-popover button:hover{border-color:var(--accent);color:var(--accent)}
+.override-popover button.current{
+  background:var(--accent-dim);
+  color:var(--accent);
+  border-color:var(--accent);
+}
+.override-popover .reset{
+  border-top:1px solid var(--border);
+  margin-top:3px;
+  padding-top:6px;
+  color:var(--text-ui);
+}
+
+/* JSONL export button (decisions table header) */
+.feed-toolbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:6px;
+}
+.feed-toolbar-spacer{flex:1}
+.export-btn{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  letter-spacing:0.08em;
+  padding:4px 10px;
+  border:1px solid var(--border);
+  background:transparent;
+  color:var(--text);
+  cursor:pointer;
+  text-transform:uppercase;
+  transition:all .15s;
+}
+.export-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* event log panel */
+.evlog{
+  margin-top:22px;
+  border:1px solid var(--border);
+  background:var(--bg-card);
+}
+.evlog-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:8px 12px;
+  border-bottom:1px solid var(--border);
+}
+.evlog-toggle{
+  font-family:var(--font-h);
+  font-size:11px;
+  letter-spacing:0.22em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+  background:transparent;
+  border:1px solid var(--border);
+  padding:4px 12px;
+  cursor:pointer;
+  transition:color .15s,border-color .15s;
+}
+.evlog-toggle:hover{color:var(--accent);border-color:var(--accent)}
+.evlog-toggle.on{color:var(--accent);border-color:var(--accent)}
+[data-theme="paper"] .evlog-toggle{font-family:'Courier Prime',monospace;font-size:10px}
+.evlog-ctrls{display:flex;gap:6px}
+.evlog-ctrl-btn{
+  font-family:var(--font-d);
+  font-size:9px;
+  letter-spacing:0.08em;
+  padding:3px 9px;
+  border:1px solid var(--border);
+  background:transparent;
+  color:var(--text);
+  cursor:pointer;
+  text-transform:uppercase;
+}
+.evlog-ctrl-btn:hover{border-color:var(--accent);color:var(--accent)}
+.evlog-ctrl-btn.on{color:var(--accent);border-color:var(--accent);background:var(--accent-dim)}
+.evlog-body{
+  max-height:0;
+  overflow:hidden;
+  transition:max-height .3s ease;
+}
+.evlog-body.open{max-height:340px;overflow-y:auto}
+.evlog-body::-webkit-scrollbar{width:3px}
+.evlog-body::-webkit-scrollbar-track{background:var(--bg)}
+.evlog-body::-webkit-scrollbar-thumb{background:var(--border)}
+.evlog-row{
+  display:grid;
+  grid-template-columns:90px 180px 1fr;
+  gap:10px;
+  padding:4px 12px;
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text);
+  border-bottom:1px solid var(--bg-row-alt);
+  align-items:baseline;
+}
+.evlog-ts{color:var(--text-dim)}
+.evlog-type{
+  font-size:9px;
+  letter-spacing:0.05em;
+  padding:1px 6px;
+  border:1px solid currentColor;
+  text-transform:lowercase;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  overflow:hidden;
+  display:inline-block;
+}
+.evlog-content{
+  color:var(--text);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-size:10px;
+}
+/* color-coding by event type — all driven by theme vars so 3 themes match */
+.evt-governance_negative_regression{color:var(--c-block)}
+.evt-governance_variance_alert     {color:var(--c-intervene)}
+.evt-nfr_model_routing_alert       {color:var(--c-guide)}
+.evt-hitl_sync_queued              {color:#60a5fa}
+.evt-hitl_async_flagged            {color:#14b8a6}
+.evt-agent_identified              {color:var(--text-ui)}
+.evt-desktop_pause                 {color:var(--text-bright)}
+.evt-default                        {color:var(--text-dim)}
+.evlog-empty{
+  padding:36px 18px;
+  text-align:center;
+  color:var(--text-dim);
+  font-family:var(--font-d);
+  font-size:10px;
+  letter-spacing:0.08em;
+}
+
+/* shared empty / error / loading helpers */
+.panel-msg{
+  padding:30px 20px;
+  text-align:center;
+  font-family:var(--font-d);
+  font-size:10.5px;
+  letter-spacing:0.06em;
+  color:var(--text-dim);
+}
+.panel-msg.error{color:var(--c-block)}
+.panel-msg .retry-btn{
+  margin-left:10px;
+  font-family:var(--font-d);
+  font-size:9.5px;
+  padding:3px 10px;
+  border:1px solid var(--c-block);
+  color:var(--c-block);
+  background:transparent;
+  cursor:pointer;
+  text-transform:uppercase;
+}
+.panel-msg .retry-btn:hover{background:rgba(239,68,68,.08)}
+.ellipsis-anim::after{
+  content:'…';
+  display:inline-block;
+  width:1em;
+  text-align:left;
+  animation:ellipsisDots 1.4s steps(4,end) infinite;
+}
+@keyframes ellipsisDots{
+  0%  {content:''}
+  25% {content:'.'}
+  50% {content:'..'}
+  75% {content:'...'}
+  100%{content:''}
+}
+.skeleton{
+  background:linear-gradient(90deg, var(--bg-row) 0%, var(--bg-row-hover) 50%, var(--bg-row) 100%);
+  background-size:200% 100%;
+  animation:skelPulse 1.4s ease-in-out infinite;
+  height:14px;
+  border-radius:2px;
+  margin:6px 14px;
+}
+@keyframes skelPulse{
+  0%  {background-position:200% 0}
+  100%{background-position:-200% 0}
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    FOOTER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .footer{
@@ -1076,6 +1340,7 @@ body::after{
       <div class="logo-sub">STREAM MANAGER // GOVERNANCE MONITOR</div>
     </div>
     <div class="header-right">
+      <select class="sess-select" id="sessSelect" aria-label="session selector"></select>
       <div class="theme-switcher">
         <button class="theme-btn on"  data-t="obsidian" title="Obsidian (dark/amber)"></button>
         <button class="theme-btn"     data-t="phosphor" title="Phosphor (CRT green)"></button>
@@ -1085,6 +1350,10 @@ body::after{
       <button class="gear-btn" id="gearBtn" title="Settings" aria-label="settings">⚙</button>
     </div>
   </header>
+
+  <!-- ── PHASE 6: GLOBAL GOVERNANCE MODE BAR ────────────── -->
+  <div class="gmode-bar" id="gmodeBar" data-mode="OBSERVE"
+       title="Worst active governance mode across all agents in session"></div>
 
   <!-- ── STATS BAR ──────────────────────────────────────── -->
   <div class="stats-bar">
@@ -1156,15 +1425,18 @@ body::after{
     </div>
   </section>
 
-  <!-- ── FILTER BAR ─────────────────────────────────────── -->
-  <div class="filter-bar">
-    <button class="fbtn on"  data-f="ALL">ALL</button>
-    <div class="filter-sep"></div>
-    <button class="fbtn" data-f="ALLOW">ALLOW</button>
-    <button class="fbtn" data-f="SUGGEST">SUGGEST</button>
-    <button class="fbtn" data-f="GUIDE">GUIDE</button>
-    <button class="fbtn" data-f="INTERVENE">INTERVENE</button>
-    <button class="fbtn" data-f="BLOCK">BLOCK</button>
+  <!-- ── FILTER + EXPORT TOOLBAR ─────────────────────────── -->
+  <div class="feed-toolbar">
+    <div class="filter-bar">
+      <button class="fbtn on"  data-f="ALL">ALL</button>
+      <div class="filter-sep"></div>
+      <button class="fbtn" data-f="ALLOW">ALLOW</button>
+      <button class="fbtn" data-f="SUGGEST">SUGGEST</button>
+      <button class="fbtn" data-f="GUIDE">GUIDE</button>
+      <button class="fbtn" data-f="INTERVENE">INTERVENE</button>
+      <button class="fbtn" data-f="BLOCK">BLOCK</button>
+    </div>
+    <button class="export-btn" id="exportJsonlBtn" title="Export decisions as NDJSON">⬇ EXPORT JSONL</button>
   </div>
 
   <!-- ── FEED ───────────────────────────────────────────── -->
@@ -1179,8 +1451,22 @@ body::after{
     <div class="fh-col">Session</div>
   </div>
   <div class="feed" id="feed">
-    <div class="feed-empty" id="feedEmpty">AWAITING GOVERNANCE EVENTS…</div>
+    <div class="feed-empty" id="feedEmpty">No decisions yet. Start a governed session<span class="ellipsis-anim"></span></div>
   </div>
+
+  <!-- ── PHASE 6: EVENT LOG PANEL (collapsible) ─────────── -->
+  <section class="evlog" id="evlog">
+    <div class="evlog-head">
+      <button class="evlog-toggle" id="evlogToggle" aria-expanded="false">[ EVENT LOG ]</button>
+      <div class="evlog-ctrls">
+        <button class="evlog-ctrl-btn" id="evlogPause" title="Pause auto-scroll (events still queue)">PAUSE</button>
+        <button class="evlog-ctrl-btn" id="evlogClear" title="Clear visible log">CLEAR</button>
+      </div>
+    </div>
+    <div class="evlog-body" id="evlogBody" aria-hidden="true">
+      <div class="evlog-empty" id="evlogEmpty">No events yet.</div>
+    </div>
+  </section>
 
   <!-- ── SETTINGS PANEL ─────────────────────────────────── -->
   <div class="settings-overlay" id="settingsOverlay"></div>
@@ -1927,6 +2213,375 @@ async function fetchMaturity(){
 
 fetchMaturity();
 setInterval(fetchMaturity, 30000);
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   PHASE 6 — global mode bar, session selector, override
+   dropdown, JSONL export, event log
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+/* ── shared state ──────────────────────────────────────── */
+const PHASE6 = {
+  selectedSessionId: null,    // null = "latest"
+  agentSlug: null,
+  agentSessionId: null,
+  agentOverride: null,
+  worstMode: 'OBSERVE',
+};
+const MODE_RANK = { OBSERVE:0, SUGGEST:1, GUIDE:2, INTERVENE:3, BLOCK:4 };
+const ACTION_TO_MODE = {
+  ALLOW:     'OBSERVE',
+  SUGGEST:   'SUGGEST',
+  GUIDE:     'GUIDE',
+  INTERVENE: 'INTERVENE',
+  BLOCK:     'BLOCK',
+};
+
+/* ── global mode bar ─────────────────────────────────── */
+const gmodeBar = $('gmodeBar');
+function bumpGlobalMode(action){
+  const m = ACTION_TO_MODE[action];
+  if(!m) return;
+  if (MODE_RANK[m] > MODE_RANK[PHASE6.worstMode]){
+    PHASE6.worstMode = m;
+    gmodeBar.dataset.mode = m;
+  }
+}
+// Decay worst-mode every 60s back to OBSERVE so the bar reflects
+// "recent" activity, not the lifetime worst.
+setInterval(()=>{
+  PHASE6.worstMode = 'OBSERVE';
+  gmodeBar.dataset.mode = 'OBSERVE';
+}, 60000);
+
+/* ── session selector ────────────────────────────────── */
+const sessSelect = $('sessSelect');
+let _lastSessionList = [];
+
+async function refreshSessionSelector(){
+  try{
+    const r = await fetch('/api/sessions?limit=20');
+    if(!r.ok) return;
+    const rows = await r.json();
+    if(!Array.isArray(rows)) return;
+    _lastSessionList = rows;
+    if(rows.length < 2){
+      sessSelect.classList.remove('show');
+      return;
+    }
+    // Re-render only when the id list changes
+    const ids = rows.map(s=>s.id||'').join('|');
+    if(sessSelect.dataset.ids === ids) return;
+    sessSelect.dataset.ids = ids;
+    sessSelect.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = '';
+    optAll.textContent = '— all sessions —';
+    sessSelect.appendChild(optAll);
+    rows.forEach(s=>{
+      const opt = document.createElement('option');
+      opt.value = s.id || '';
+      const when = s.started_at ? new Date(s.started_at*1000).toLocaleTimeString() : '–';
+      opt.textContent = `${s.project_slug || s.id?.slice(0,8) || '?'} — ${when}`;
+      sessSelect.appendChild(opt);
+    });
+    if(PHASE6.selectedSessionId){
+      sessSelect.value = PHASE6.selectedSessionId;
+    }
+    sessSelect.classList.add('show');
+  }catch(_){ /* ignore */ }
+}
+sessSelect.addEventListener('change', ()=>{
+  PHASE6.selectedSessionId = sessSelect.value || null;
+  // Re-fetch all session-scoped panels.
+  fetchHitlPending();
+  fetchAgents();
+  // Hint: browser users can hard-refresh to reseed feed; SSE filtering
+  // happens client-side via shouldShowForSession() below.
+});
+
+function shouldShowForSession(sessId){
+  if(!PHASE6.selectedSessionId) return true;
+  return sessId === PHASE6.selectedSessionId;
+}
+
+refreshSessionSelector();
+setInterval(refreshSessionSelector, 15000);
+
+/* ── per-agent mode override ─────────────────────────── */
+const agentBadge = $('agentBadge');
+let _overridePopover = null;
+
+function closeOverridePopover(){
+  if(_overridePopover){
+    _overridePopover.remove();
+    _overridePopover = null;
+  }
+}
+document.addEventListener('click', e=>{
+  if(_overridePopover && !e.target.closest('.override-popover') &&
+     !e.target.closest('.agent-badge-name')){
+    closeOverridePopover();
+  }
+});
+
+function openOverridePopover(anchorEl){
+  closeOverridePopover();
+  if(!PHASE6.agentSlug) return;
+  const pop = document.createElement('div');
+  pop.className = 'override-popover';
+  const modes = ['OBSERVE','SUGGEST','GUIDE','INTERVENE','BLOCK'];
+  modes.forEach(m=>{
+    const b = document.createElement('button');
+    b.textContent = m;
+    if(m === PHASE6.agentOverride) b.classList.add('current');
+    b.addEventListener('click', ()=>setOverride(m));
+    pop.appendChild(b);
+  });
+  if(PHASE6.agentOverride){
+    const reset = document.createElement('button');
+    reset.className = 'reset';
+    reset.textContent = '↺ reset to default';
+    reset.addEventListener('click', ()=>setOverride(null));
+    pop.appendChild(reset);
+  }
+  document.body.appendChild(pop);
+  const r = anchorEl.getBoundingClientRect();
+  pop.style.left = (window.scrollX + r.left) + 'px';
+  pop.style.top  = (window.scrollY + r.bottom + 4) + 'px';
+  _overridePopover = pop;
+}
+
+async function setOverride(mode){
+  if(!PHASE6.agentSlug) return;
+  try{
+    const body = { mode: mode };
+    if(PHASE6.agentSessionId) body.session_id = PHASE6.agentSessionId;
+    const r = await fetch(`/api/agents/${encodeURIComponent(PHASE6.agentSlug)}/override-mode`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if(!r.ok){
+      const err = await r.json().catch(()=>({error:'failed'}));
+      console.warn('override failed', err);
+      return;
+    }
+    PHASE6.agentOverride = mode || null;
+    closeOverridePopover();
+    fetchAgents();
+  }catch(_){}
+}
+
+/* Hijack fetchAgents to also wire override badge + click target. */
+const _origFetchAgents = fetchAgents;
+async function _fetchAgentsP6(){
+  try{
+    const url = PHASE6.selectedSessionId
+      ? `/api/agents?limit=1&session_id=${encodeURIComponent(PHASE6.selectedSessionId)}`
+      : '/api/agents?limit=1';
+    const r = await fetch(url);
+    const rows = await r.json();
+    const badge = agentBadge;
+    if(!rows||!rows.length){
+      PHASE6.agentSlug = null;
+      PHASE6.agentSessionId = null;
+      PHASE6.agentOverride = null;
+      badge.className='agent-badge-empty';
+      badge.innerHTML='<span class="ellipsis-anim">Waiting for agent identification</span>';
+      return;
+    }
+    const a = rows[0];
+    PHASE6.agentSlug = a.profile_slug || null;
+    PHASE6.agentSessionId = a.session_id || null;
+    PHASE6.agentOverride = a.mode_override || null;
+    const sidechainSuffix = a.is_sidechain ? ' [side]' : '';
+    const bolt = PHASE6.agentOverride
+      ? ` <span class="agent-override-bolt" title="Override: ${esc(PHASE6.agentOverride)}">⚡${esc(PHASE6.agentOverride)}</span>`
+      : '';
+    badge.className='';
+    badge.innerHTML =
+      `<span class="agent-badge-name clickable" id="agentBadgeName" title="click to override mode">${esc(a.attribution_plugin||'?')}</span>` +
+      ` <span class="agent-badge-slug">${esc(a.profile_slug||'unknown')}${esc(sidechainSuffix)}</span>${bolt}`;
+    const nameEl = document.getElementById('agentBadgeName');
+    if(nameEl){
+      nameEl.addEventListener('click', e=>{
+        e.stopPropagation();
+        openOverridePopover(nameEl);
+      });
+    }
+  }catch(_){
+    const badge = agentBadge;
+    badge.className='agent-badge-empty';
+    badge.innerHTML='<span style="color:var(--c-block)">⚠ Failed to load agent</span> <button class="retry-btn" onclick="fetchAgents()">RETRY</button>';
+  }
+}
+window.fetchAgents = _fetchAgentsP6;
+// Fire once now to overlay the previous version's render.
+_fetchAgentsP6();
+
+/* ── JSONL export ────────────────────────────────────── */
+$('exportJsonlBtn').addEventListener('click', async ()=>{
+  try{
+    const url = PHASE6.selectedSessionId
+      ? `/api/decisions/export?session_id=${encodeURIComponent(PHASE6.selectedSessionId)}`
+      : '/api/decisions/export';
+    const r = await fetch(url);
+    if(!r.ok){
+      alert('Export failed: ' + r.status);
+      return;
+    }
+    const text = await r.text();
+    const blob = new Blob([text], {type:'application/x-ndjson'});
+    const a = document.createElement('a');
+    const dl = URL.createObjectURL(blob);
+    a.href = dl;
+    const today = new Date().toISOString().slice(0,10);
+    a.download = `sm-decisions-${today}.jsonl`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{
+      document.body.removeChild(a);
+      URL.revokeObjectURL(dl);
+    }, 250);
+  }catch(e){
+    alert('Export failed: ' + e);
+  }
+});
+
+/* ── event log ───────────────────────────────────────── */
+const evlog       = $('evlog');
+const evlogBody   = $('evlogBody');
+const evlogEmpty  = $('evlogEmpty');
+const evlogToggle = $('evlogToggle');
+const evlogPause  = $('evlogPause');
+const evlogClear  = $('evlogClear');
+
+const EVLOG = {
+  open: false,
+  paused: false,
+  pendingQueue: [],   // events captured while paused
+  count: 0,           // DOM rows
+  MAX: 200,
+};
+
+evlogToggle.addEventListener('click', ()=>{
+  EVLOG.open = !EVLOG.open;
+  evlogBody.classList.toggle('open', EVLOG.open);
+  evlogToggle.classList.toggle('on', EVLOG.open);
+  evlogToggle.setAttribute('aria-expanded', EVLOG.open ? 'true' : 'false');
+  evlogBody.setAttribute('aria-hidden', EVLOG.open ? 'false' : 'true');
+  if(EVLOG.open) drainPaused();
+});
+
+evlogPause.addEventListener('click', ()=>{
+  EVLOG.paused = !EVLOG.paused;
+  evlogPause.classList.toggle('on', EVLOG.paused);
+  evlogPause.textContent = EVLOG.paused ? 'RESUME' : 'PAUSE';
+  if(!EVLOG.paused) drainPaused();
+});
+
+evlogClear.addEventListener('click', ()=>{
+  // Remove all rows (keep empty placeholder).
+  Array.from(evlogBody.querySelectorAll('.evlog-row')).forEach(n=>n.remove());
+  EVLOG.count = 0;
+  if(!evlogEmpty.parentNode) evlogBody.appendChild(evlogEmpty);
+});
+
+function fmtEvTs(ts){
+  if(ts == null) return '--:--:--.---';
+  let d;
+  if(typeof ts === 'number') d = new Date(ts*1000);
+  else d = new Date(ts);
+  if(isNaN(d.getTime())) return '--:--:--.---';
+  const p = n => String(n).padStart(2,'0');
+  const ms = String(d.getMilliseconds()).padStart(3,'0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${ms}`;
+}
+
+const _KNOWN_EVT_CLASSES = new Set([
+  'governance_negative_regression','governance_variance_alert',
+  'nfr_model_routing_alert','hitl_sync_queued','hitl_async_flagged',
+  'agent_identified','desktop_pause',
+]);
+
+function drainPaused(){
+  if(!EVLOG.pendingQueue.length) return;
+  const queued = EVLOG.pendingQueue;
+  EVLOG.pendingQueue = [];
+  queued.forEach(ev => appendEvlogRow(ev, /*forceFlush=*/true));
+  if(EVLOG.open && evlogBody) evlogBody.scrollTop = evlogBody.scrollHeight;
+}
+
+function appendEvlogRow(ev, forceFlush=false){
+  if(EVLOG.paused && !forceFlush){
+    EVLOG.pendingQueue.push(ev);
+    if(EVLOG.pendingQueue.length > EVLOG.MAX) EVLOG.pendingQueue.shift();
+    return;
+  }
+  if(evlogEmpty.parentNode === evlogBody) evlogBody.removeChild(evlogEmpty);
+  const t = String(ev.event_type || ev.type || 'unknown');
+  const cls = _KNOWN_EVT_CLASSES.has(t) ? `evt-${t}` : 'evt-default';
+  const row = document.createElement('div');
+  row.className = 'evlog-row';
+  const content = String(ev.content || '');
+  const trunc = content.length > 100 ? content.slice(0,100)+'…' : content;
+  row.innerHTML = `
+    <span class="evlog-ts">${esc(fmtEvTs(ev.timestamp))}</span>
+    <span class="evlog-type ${cls}">${esc(t)}</span>
+    <span class="evlog-content">${esc(trunc)}</span>
+  `;
+  evlogBody.appendChild(row);
+  EVLOG.count++;
+  while(EVLOG.count > EVLOG.MAX){
+    const first = evlogBody.querySelector('.evlog-row');
+    if(!first) break;
+    first.remove();
+    EVLOG.count--;
+  }
+  if(EVLOG.open) evlogBody.scrollTop = evlogBody.scrollHeight;
+}
+
+/* ── intercept SSE: route to event log + global mode bar ── */
+// The existing es.onmessage handler dispatches to prependRow / handleHitlEvent.
+// We piggy-back by wrapping it.
+(function wrapSSE(){
+  // Replace connect() so subsequent reconnects also wrap.
+  const _origConnect = connect;
+  window.connect = function(){
+    if(es){ es.close(); es=null; }
+    es = new EventSource('/events');
+    es.onopen = ()=>{
+      liveDot.classList.remove('off');
+      footStat.textContent=`connected — ${new Date().toLocaleTimeString()}`;
+    };
+    es.onmessage = e=>{
+      try{
+        const d = JSON.parse(e.data);
+        if(d.error) return;
+        // event_type set => non-decision bus event
+        if(d.event_type){
+          appendEvlogRow(d);
+          handleHitlEvent(d);
+          return;
+        }
+        // decision row
+        appendEvlogRow({event_type:'decision', timestamp:d.timestamp,
+                        content:`${d.action||'?'} — ${(d.reasoning||'').slice(0,60)}`});
+        bumpGlobalMode(d.action);
+        if(!shouldShowForSession(d.session_id)) return;
+        prependRow(d);
+      }catch(_){}
+    };
+    es.onerror = ()=>{
+      liveDot.classList.add('off');
+      footStat.textContent=`disconnected — retry in 3s`;
+      es.close(); es=null;
+      setTimeout(window.connect, 3000);
+    };
+  };
+  // Restart with the wrapped version.
+  window.connect();
+})();
 </script>
 </body>
 </html>
