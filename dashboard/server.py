@@ -32,6 +32,49 @@ ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("GOV_DB", str(ROOT / ".claude" / "gov.db")))
 STATIC = Path(__file__).resolve().parent / "static"
 
+# ── FR-HITL §4.9: shared HitlQueue + MessageBus instances ───────────────
+# Module-level singletons wired lazily on first access. The dashboard
+# server is read-mostly against gov.db, but HITL settings/resolutions need
+# the same MessageBus instance so notes/feedback land in WAL the same way
+# the governance engine writes them.
+_bus = None  # type: ignore[var-annotated]
+_hitl_queue = None  # type: HitlQueue | None
+_hitl_runtime_settings: dict[str, object] = {
+    "timeout_seconds": 60.0,
+    "pause_detection_enabled": True,
+}
+
+
+def _get_bus():
+    """Return a lazily-initialized shared MessageBus instance."""
+    global _bus
+    if _bus is None:
+        try:
+            from stream_manager.message_bus import MessageBus
+            _bus = MessageBus(str(DB_PATH))
+        except Exception:
+            _bus = None
+    return _bus
+
+
+def _get_hitl_queue():
+    """Return a lazily-initialized shared HitlQueue instance."""
+    global _hitl_queue
+    if _hitl_queue is None:
+        bus = _get_bus()
+        if bus is None:
+            return None
+        try:
+            from stream_manager.hitl import HitlQueue
+            _hitl_queue = HitlQueue(
+                bus=bus,
+                timeout_seconds=float(_hitl_runtime_settings["timeout_seconds"]),
+            )
+        except Exception:
+            _hitl_queue = None
+    return _hitl_queue
+
+
 app = FastAPI(title="StreamManager Governance Dashboard")
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +84,8 @@ app.add_middleware(
 )
 
 _SEED_SQL = """
-    SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
+    SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
+           d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
            m.content, m.direction, m.session_id,
            (SELECT a.profile_slug FROM agents a
@@ -56,7 +100,8 @@ _SEED_SQL = """
 """
 
 _TAIL_SQL = """
-    SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
+    SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
+           d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
            m.content, m.direction, m.session_id,
            (SELECT a.profile_slug FROM agents a
@@ -107,7 +152,8 @@ def _has_agents_table(conn: sqlite3.Connection) -> bool:
 
 
 _SEED_SQL_NO_AGENTS = """
-    SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
+    SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
+           d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
            m.content, m.direction, m.session_id,
            NULL AS profile_slug, NULL AS attribution_plugin
@@ -117,7 +163,8 @@ _SEED_SQL_NO_AGENTS = """
 """
 
 _TAIL_SQL_NO_AGENTS = """
-    SELECT d.rowid AS rid, d.action, d.confidence, d.reasoning,
+    SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
+           d.action, d.confidence, d.reasoning,
            d.matched_hash, d.timestamp,
            m.content, m.direction, m.session_id,
            NULL AS profile_slug, NULL AS attribution_plugin
@@ -377,27 +424,53 @@ async def api_hitl_annotate(request: Request):
 _DEFAULT_TIMEOUT_S = 60.0
 
 
+def _runtime_settings_payload(extra: dict[str, object] | None = None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "timeout_seconds": float(_hitl_runtime_settings.get("timeout_seconds", _DEFAULT_TIMEOUT_S)),
+        "pause_detection_enabled": bool(_hitl_runtime_settings.get("pause_detection_enabled", True)),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _latest_active_session_id(conn: sqlite3.Connection) -> str | None:
+    try:
+        row = conn.execute(
+            "SELECT id FROM sessions WHERE ended_at IS NULL "
+            "ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+        return str(row["id"]) if row else None
+    except Exception:
+        return None
+
+
 @app.get("/api/hitl/settings")
 async def api_hitl_settings(session_id: str | None = None):
-    if not session_id:
-        return {
-            "hitl_mode": "async",
-            "hitl_floor": 0.60,
-            "timeout_seconds": _DEFAULT_TIMEOUT_S,
-        }
+    default = {
+        "hitl_mode": "async",
+        "hitl_floor": 0.60,
+    }
     try:
         conn = _open()
+        if not session_id:
+            session_id = _latest_active_session_id(conn)
+        if not session_id:
+            conn.close()
+            return _runtime_settings_payload(default)
         cols = {
             row[1]
             for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
         }
         if "hitl_mode" not in cols or "hitl_floor" not in cols:
             conn.close()
-            return {
-                "hitl_mode": "async",
-                "hitl_floor": 0.60,
-                "timeout_seconds": _DEFAULT_TIMEOUT_S,
-            }
+            out = dict(default)
+            out["session_id"] = session_id
+            return _runtime_settings_payload(out)
         row = conn.execute(
             "SELECT hitl_mode, hitl_floor FROM sessions WHERE id=?",
             (session_id,),
@@ -406,16 +479,14 @@ async def api_hitl_settings(session_id: str | None = None):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     if row is None:
-        return {
-            "hitl_mode": "async",
-            "hitl_floor": 0.60,
-            "timeout_seconds": _DEFAULT_TIMEOUT_S,
-        }
-    return {
+        out = dict(default)
+        out["session_id"] = session_id
+        return _runtime_settings_payload(out)
+    return _runtime_settings_payload({
+        "session_id": session_id,
         "hitl_mode": str(row["hitl_mode"]) if row["hitl_mode"] else "async",
         "hitl_floor": float(row["hitl_floor"]) if row["hitl_floor"] is not None else 0.60,
-        "timeout_seconds": _DEFAULT_TIMEOUT_S,
-    }
+    })
 
 
 @app.post("/api/hitl/settings")
@@ -427,26 +498,94 @@ async def api_hitl_settings_update(request: Request):
     session_id = body.get("session_id")
     hitl_mode = body.get("hitl_mode")
     hitl_floor = body.get("hitl_floor")
+    timeout_seconds = body.get("timeout_seconds")
+    pause_detection_enabled = body.get("pause_detection_enabled")
+
+    # Resolve session implicitly if not provided — settings panel doesn't
+    # always know the active session id, especially before any decisions
+    # have been recorded.
     if not isinstance(session_id, str) or not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
-    if hitl_mode not in ("sync", "async"):
-        raise HTTPException(status_code=400, detail="hitl_mode must be 'sync' or 'async'")
-    try:
-        floor_f = float(hitl_floor)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="hitl_floor must be a number")
-    if floor_f < 0.0 or floor_f > 1.0:
-        raise HTTPException(status_code=400, detail="hitl_floor must be in [0.0, 1.0]")
-    try:
-        conn = _open_rw()
-        conn.execute(
-            "UPDATE sessions SET hitl_mode=?, hitl_floor=? WHERE id=?",
-            (hitl_mode, floor_f, session_id),
-        )
-        conn.close()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    return {"ok": True, "session_id": session_id, "hitl_mode": hitl_mode, "hitl_floor": floor_f}
+        try:
+            conn = _open()
+            session_id = _latest_active_session_id(conn)
+            conn.close()
+        except Exception:
+            session_id = None
+
+    # Update runtime-only settings (in-memory; no WAL persistence required).
+    if timeout_seconds is not None:
+        try:
+            t = float(timeout_seconds)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="timeout_seconds must be a number")
+        if t < 1.0 or t > 3600.0:
+            raise HTTPException(status_code=400, detail="timeout_seconds out of range")
+        _hitl_runtime_settings["timeout_seconds"] = t
+        # Propagate to the live HitlQueue if one is wired.
+        try:
+            hq = _get_hitl_queue()
+            if hq is not None:
+                hq.timeout_seconds = t
+        except Exception:
+            pass
+
+    if pause_detection_enabled is not None:
+        if not isinstance(pause_detection_enabled, bool):
+            raise HTTPException(status_code=400, detail="pause_detection_enabled must be bool")
+        _hitl_runtime_settings["pause_detection_enabled"] = pause_detection_enabled
+
+    # Update session-scoped HITL mode + floor only when a session is in scope.
+    if hitl_mode is not None or hitl_floor is not None:
+        if hitl_mode is not None and hitl_mode not in ("sync", "async"):
+            raise HTTPException(status_code=400, detail="hitl_mode must be 'sync' or 'async'")
+        floor_f: float | None = None
+        if hitl_floor is not None:
+            try:
+                floor_f = float(hitl_floor)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="hitl_floor must be a number")
+            if floor_f < 0.0 or floor_f > 1.0:
+                raise HTTPException(status_code=400, detail="hitl_floor must be in [0.0, 1.0]")
+        if session_id:
+            # Read current values to preserve unspecified fields.
+            try:
+                conn = _open_rw()
+                cur = conn.execute(
+                    "SELECT hitl_mode, hitl_floor FROM sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+                cur_mode = (str(cur["hitl_mode"]) if cur and cur["hitl_mode"] else "async")
+                cur_floor = (float(cur["hitl_floor"]) if cur and cur["hitl_floor"] is not None else 0.60)
+                new_mode = hitl_mode if hitl_mode is not None else cur_mode
+                new_floor = floor_f if floor_f is not None else cur_floor
+                # Prefer the bus-level setter when available so we share
+                # the same write path as the governance engine.
+                bus = _get_bus()
+                if bus is not None:
+                    try:
+                        bus.set_hitl_mode(session_id, new_mode, new_floor)
+                    except Exception:
+                        conn.execute(
+                            "UPDATE sessions SET hitl_mode=?, hitl_floor=? WHERE id=?",
+                            (new_mode, new_floor, session_id),
+                        )
+                else:
+                    conn.execute(
+                        "UPDATE sessions SET hitl_mode=?, hitl_floor=? WHERE id=?",
+                        (new_mode, new_floor, session_id),
+                    )
+                conn.close()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "hitl_mode": hitl_mode,
+        "hitl_floor": hitl_floor,
+        "timeout_seconds": _hitl_runtime_settings["timeout_seconds"],
+        "pause_detection_enabled": _hitl_runtime_settings["pause_detection_enabled"],
+    }
 
 
 def _iso_now() -> str:
