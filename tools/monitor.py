@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -50,20 +51,27 @@ def cmd_list(db_path: str) -> int:
 def cmd_watch(db_path: str, session_id: str, poll_ms: int) -> int:
     print(f"Watching {session_id!r}  db={db_path!r}  poll={poll_ms}ms  (Ctrl-C to stop)")
     reader = WalReader(db_path, session_id, poll_ms=poll_ms)
+    dec_conn = sqlite3.connect(db_path)
+    dec_conn.row_factory = sqlite3.Row
+    dec_conn.execute("PRAGMA journal_mode=WAL")
     try:
         for row in reader:
             ts = _fmt_ts(row["timestamp"])
-            action = ""
-            # decisions are a separate table; show content type + direction here
-            print(
-                f"[{ts}] seq={row['sequence']:>4}  {row['type']:<20} {row['direction']}"
-            )
+            print(f"[{ts}] seq={row['sequence']:>4}  {row['type']:<20} {row['direction']}")
             preview = (row["content"] or "")[:140].replace("\n", " ")
             print(f"  {preview}")
+            dec = dec_conn.execute(
+                "SELECT action, confidence, reasoning FROM decisions WHERE message_id=?",
+                (row["id"],),
+            ).fetchone()
+            if dec:
+                reasoning = (dec["reasoning"] or "")[:100]
+                print(f"  -> {dec['action']}  conf={dec['confidence']:.2f}  {reasoning}")
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
         reader.close()
+        dec_conn.close()
     return 0
 
 
