@@ -34,3 +34,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Replay reports (may contain transcript-derived path/file names)
+reports/
