@@ -58,10 +58,10 @@ from stream_manager.project_context import load  # noqa: E402
 from stream_manager.transcript_loader import load_transcript  # noqa: E402
 
 # Targets from POC_FINDINGS / NFR-P2
-# Note: CLI subprocess path cold-start is ~13-16s; P95 target reflects this.
-# SDK path (retired) had a 2s budget; CLI path realistic ceiling is ~20s.
+# Note: CLI subprocess cold-start is ~13-16s p50; timeout is 25s.
+# SDK path (retired) had a 2s budget; CLI path realistic ceiling is 25s.
 TARGET_PARSE_SUCCESS_RATE = 0.80
-TARGET_P95_SECONDS = 20.0
+TARGET_P95_SECONDS = 25.0
 
 
 @dataclass

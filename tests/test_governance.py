@@ -94,7 +94,8 @@ def test_demotion_on_low_eligible_accuracy() -> None:
 
 def test_evaluate_returns_default_source_for_novel_content() -> None:
     engine = _engine()
-    decision = engine.evaluate(Message.new("user", "completely novel content nothing risky"))
+    # Must have an actionable signal (file path) so precheck no-signal rule doesn't fire
+    decision = engine.evaluate(Message.new("user", "cat /tmp/novel_xyzzy_12345.log | head -5"))
     assert decision.source == "default"
     assert decision.action == "ALLOW"
 
