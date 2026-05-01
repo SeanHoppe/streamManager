@@ -82,3 +82,26 @@ def test_match_returns_existing_pattern_when_similar(tmp_path) -> None:  # type:
     m = g.match("git status")
     assert m is not None
     assert "git" in m.canonical_text
+
+
+def test_promoted_pattern_continues_to_match_same_content() -> None:
+    g = DecisionGraph()
+    for _ in range(10):
+        g.observe("pytest tests/", success=True)
+    content_patterns = [p for p in g.patterns.values() if "pytest" in p.canonical_text]
+    assert len(content_patterns) == 1, (
+        "promoted patterns must keep matching their own content "
+        f"(got {len(content_patterns)} fragments: {[(p.level.name, p.occurrences) for p in content_patterns]})"
+    )
+    assert content_patterns[0].occurrences == 10
+
+
+def test_pattern_chain_promotes_through_levels() -> None:
+    g = DecisionGraph()
+    for _ in range(5):
+        g.observe("git status", success=True)
+    content = [p for p in g.patterns.values() if "git" in p.canonical_text]
+    levels = {p.level for p in content}
+    assert PatternLevel.L2 in levels, (
+        f"5 same-content observations should chain L0->L1->L2; got levels {levels}"
+    )

@@ -80,7 +80,7 @@ class DecisionGraph:
 
     def observe(self, content: str, success: bool) -> Pattern:
         vec = project(content)
-        match = self._best_l0_match(vec)
+        match = self._best_match(vec)
         if match is not None:
             match.occurrences += 1
             if success:
@@ -110,14 +110,17 @@ class DecisionGraph:
 
     def match(self, content: str) -> Pattern | None:
         vec = project(content)
-        return self._best_l0_match(vec)
+        return self._best_match(vec)
 
-    def _best_l0_match(self, vec: list[float]) -> Pattern | None:
+    def _best_match(self, vec: list[float]) -> Pattern | None:
+        # Match content patterns at any level so that promotions don't
+        # cause the pattern store to fragment. Sequence/cluster patterns
+        # carry zero vectors, so cosine = 0 against any content vector
+        # and they're naturally excluded without an explicit filter.
+        # (Hardening item #1.5 from POC_FINDINGS.md.)
         best: Pattern | None = None
         best_sim = 0.0
         for p in self.patterns.values():
-            if p.level != PatternLevel.L0:
-                continue
             sim = cosine(vec, p.vector)
             if sim > best_sim:
                 best, best_sim = p, sim
