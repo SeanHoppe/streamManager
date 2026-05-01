@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 
 ENV_FLAG = "BRIDGE_API_GOV"
 MODEL = "claude-haiku-4-5"
-TIMEOUT_SECONDS = 20.0
+TIMEOUT_SECONDS = 25.0
 CLI_BIN = "claude"
 
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
@@ -62,6 +62,9 @@ _SYSTEM_TEMPLATE = (
     "Choose ALLOW for routine safe actions, SUGGEST for borderline cases worth "
     "flagging, GUIDE/INTERVENE for actions that should be redirected, and BLOCK "
     "only for clearly destructive or intent-violating actions.\n\n"
+    "If the content is not a proposed action — for example, it is an explanation, "
+    "status update, code output, assistant narration, or chain-of-thought — "
+    "respond with action=ALLOW and confidence=0.5.\n\n"
     "Reply with a JSON object only — no prose, no markdown fences:\n"
     "{{\"action\": \"ALLOW|SUGGEST|GUIDE|INTERVENE|BLOCK\", "
     "\"confidence\": <0.0-1.0>, \"reasoning\": \"<short string>\"}}\n\n"

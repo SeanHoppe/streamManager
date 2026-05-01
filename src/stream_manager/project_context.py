@@ -48,6 +48,20 @@ _CONVERSATIONAL_ONLY = re.compile(
     re.IGNORECASE,
 )
 
+# Patterns that indicate governable content — shell ops, file paths, URLs, DB commands.
+# Content with NONE of these signals is conversational/explanatory and safe to ALLOW
+# without spending a CLI escalation (avoids "inner JSON parse failed" degradations).
+_ACTIONABLE_SIGNAL = re.compile(
+    r'[|&;$`]'
+    r'|\b(?:rm|git|mv|cp|curl|wget|ssh|sudo|chmod|chown|kill|'
+    r'python3?|node|npm|pip|docker|kubectl|make|bash|sh|eval|exec|'
+    r'SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\b'
+    r'|https?://|file://'
+    r'|\b\w+\.(?:py|js|ts|jsx|tsx|json|yaml|yml|toml|sh|sql|md|db|env)\b'
+    r'|(?:token|secret|api[_\-]?key|password|passwd|credential)\s*=',
+    re.IGNORECASE,
+)
+
 
 _DESTRUCTIVE: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\brm\s+-rf\s+/(?!\w)"), "BLOCK", "destructive root rm"),
@@ -148,6 +162,15 @@ def fast_precheck(content: str, snap: ProjectContextSnapshot) -> FastPrecheckDec
             return FastPrecheckDecision(
                 action="ALLOW", reasoning="meta-content: conversational-ack"
             )
+
+    # No actionable signals (shell ops, file paths, URLs, DB commands) → content is
+    # conversational or explanatory. ALLOW without CLI escalation to avoid the model
+    # returning non-JSON "I cannot evaluate this" responses.
+    # Destructive patterns have already run above, so this path is safe.
+    if stripped and not _ACTIONABLE_SIGNAL.search(stripped):
+        return FastPrecheckDecision(
+            action="ALLOW", reasoning="meta-content: no-actionable-signal"
+        )
 
     if snap.has_intent_file and snap.intent_text:
         intent_lower = snap.intent_text.lower()

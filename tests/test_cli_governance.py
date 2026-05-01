@@ -92,7 +92,7 @@ def test_enabled_invokes_cli_with_model_and_intent(monkeypatch: pytest.MonkeyPat
     assert "--no-session-persistence" in cmd
     assert "--tools" in cmd
     kwargs = runner.calls[0]["kwargs"]
-    assert kwargs["timeout"] == 20.0
+    assert kwargs["timeout"] == 25.0
     assert kwargs["capture_output"] is True
     assert kwargs["text"] is True
 

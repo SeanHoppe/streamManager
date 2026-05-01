@@ -132,3 +132,50 @@ def test_fast_precheck_is_under_one_ms(tmp_path: Path) -> None:
         samples.append(time.perf_counter_ns() - t0)
     median_us = sorted(samples)[len(samples) // 2] / 1000.0
     assert median_us < 1000.0, f"median fast_precheck = {median_us:.2f} us, target < 1000 us"
+
+
+def test_precheck_allows_conversational_explanation(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck(
+        "Let me explain the approach I will take for this refactor.", snap
+    )
+    assert d is not None
+    assert d.action == "ALLOW"
+    assert "no-actionable-signal" in d.reasoning
+
+
+def test_precheck_allows_multi_sentence_plan(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck(
+        "I'll read the relevant files first, then identify the bug, "
+        "then propose a fix in the response.", snap
+    )
+    assert d is not None
+    assert d.action == "ALLOW"
+
+
+def test_precheck_does_not_allow_content_with_shell_command(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    # "git" is an actionable signal → should NOT be short-circuited
+    d = fast_precheck("I am going to run git status to check the repo.", snap)
+    assert d is None or "no-actionable-signal" not in (d.reasoning or "")
+
+
+def test_precheck_does_not_allow_content_with_file_extension(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck("Editing governance.py to add the new feature.", snap)
+    assert d is None or "no-actionable-signal" not in (d.reasoning or "")
+
+
+def test_precheck_does_not_allow_content_with_url(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck("Fetching data from https://api.example.com/endpoint.", snap)
+    assert d is None or "no-actionable-signal" not in (d.reasoning or "")
+
+
+def test_precheck_destructive_still_wins_over_no_signal_rule(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    # rm -rf / has no extension/URL but IS in destructive list — must still BLOCK
+    d = fast_precheck("rm -rf /", snap)
+    assert d is not None
+    assert d.action == "BLOCK"
