@@ -157,43 +157,50 @@ subprocess.
 
 ## Hardening followups for `poc/brain` → `main`
 
-### Critical (architectural — block merge to main)
+### Critical (architectural — block merge to main) — DONE
 
-1. **Defer sequence-pattern materialization.** Don't store a sequence
-   pattern until it's been observed twice; or hash by normalized
-   semantic intent of the pair rather than the raw L0 hash chain.
-   Restores sub-linear pattern growth.
+1. **Defer sequence-pattern materialization.** ✅ Shipped 2026-04-30
+   (`82a6193`). Singletons live in `_sequence_candidates` until their
+   second observation. Validated on a real 1,483-msg session: ratio
+   0.297 (target < 1.0; pre-fix synthetic fixture was 1.53).
 
-2. **Intervention-weighted mode promotion.** The rolling-accuracy
-   window should be over intervention-eligible decisions, not all
-   decisions. Add a minimum-intervention-count gate (e.g., ≥ 3
-   actual interventions in the window) before promoting up the ladder.
-   Stops the BLOCK-after-70-routine-messages pathology.
+2. **Intervention-weighted mode promotion.** ✅ Shipped 2026-04-30
+   (`d44021d`). `ELIGIBLE_SOURCES` filters the rolling window to
+   precheck/graph/api decisions; `MIN_INTERVENTIONS_FOR_PROMOTE = 3`
+   gate added. Validated on the same real session: 600+ routine ALLOWs
+   left mode in OBSERVE (pre-fix would have walked to BLOCK).
 
-### Important (production readiness — can land post-merge)
+### Production readiness — DONE
 
-3. **Real-session fixture.** Replace the synthetic 70-msg fixture with
-   a recorded real Claude CLI session. Validate the same A/B and
-   threshold math on real data.
+3. **Real-session fixture.** ✅ Shipped 2026-05-01 (`a008f7b`).
+   `transcript_loader.py` ingests Claude Code JSONL transcripts;
+   `tools/replay_transcript.py` runs them through `GovernanceEngine`
+   and reports growth ratio + mode timeline + level distribution.
+   Test fixture in `tests/fixtures/mini_session.jsonl`.
 
-4. **Wire the Anthropic API.** Hybrid stub-by-default per the plan;
-   add real API call gated on `BRIDGE_API_GOV=true`. Use
-   `claude-haiku-4-5-20251001` for the latency budget (NFR-P2 ≤ 2 s p95).
+4. **Wire the Anthropic API.** ✅ Shipped 2026-05-01 (`ea105b5`).
+   `api_governance.py` adds an L2 escalation path gated on
+   `BRIDGE_API_GOV=true`; uses `claude-haiku-4-5` with a 2 s wall-clock
+   budget, structured `output_config.format` (json_schema), and
+   prompt-cached system+intent prefix. Stub-by-default — env unset
+   means the engine path is byte-identical to pre-wiring.
 
-5. **L3/L4 promotion validation.** The 70-msg fixture is too short to
-   drive these. Need a longer fixture or a synthetic multi-session
-   scenario.
+5. **L3/L4 promotion validation.** ✅ Shipped 2026-05-01 (`20cece4`).
+   `tests/test_l3_l4_promotion.py` walks a single content pattern to
+   L4 (20 occurrences), asserts L4 is terminal, and validates
+   sub-linear ratio + OBSERVE-mode-stable on a 600-msg, 8-routine
+   synthetic multi-session fixture.
 
 ### Re-incorporate from other spikes (when needed)
 
 - **From `poc/pipe`:** the SQLite WAL bus + 2-WS router. Re-implement
-  on top of brain when transport is needed (after items 1–2 land).
-  Reference: `spikes/poc_pipe/RESULTS.md` on the deleted branch — its
-  numbers and shape are captured above and in this file.
+  on top of brain when transport is needed. Reference:
+  `spike-a-final` tag (commit `23f707d`) — its numbers and shape are
+  captured above and in this file.
 
 - **From `poc/wire`:** the WireCLI subprocess wrapper. Re-implement on
   top of brain when subprocess wrapping is needed. Reference:
-  `spikes/poc_wire/RESULTS.md` — same captured-numbers note as above.
+  `spike-c-final` tag (commit `f05febb`).
 
 ---
 
@@ -235,3 +242,42 @@ spike-a-final` years from now if a question comes up.
   user-greenlit step.
 - **Does not modify** INTENT.md, the project skeleton, or any spike
   branch beyond adding this file on `main`.
+
+---
+
+## 2026-05-01 status update
+
+All 5 hardening followups landed. Test count: 41 passing. Branch
+cleanup proposal executed: `poc/pipe` and `poc/wire` deleted (local +
+remote); tags `spike-a-final`, `spike-b-final`, `spike-c-final`
+preserved. `main` is the active development line.
+
+Outstanding work this doc does NOT cover:
+- Re-incorporation of the SQLite WAL bus (from `spike-a-final`) when
+  transport is needed.
+- Re-incorporation of WireCLI (from `spike-c-final`) when subprocess
+  wrapping is needed.
+- Real-API soak test with `BRIDGE_API_GOV=true` against a live Anthropic
+  endpoint — current Item 4 tests use an injected mock client.
+
+## 2026-05-01 follow-up: API → CLI migration
+
+Item #4's transport was migrated from the `anthropic` Python SDK to a
+`claude` CLI subprocess invocation. `src/stream_manager/api_governance.py`
+deleted; `src/stream_manager/cli_governance.py` introduced. Engine path
+unchanged: same `BRIDGE_API_GOV` env flag, same stub-by-default semantics,
+same five-action decision schema. Source tag in `GovDecision` changed
+`"api"` → `"cli"` (also reflected in `ELIGIBLE_SOURCES`). Wall-clock
+budget bumped 2.0s → 5.0s to absorb CLI cold-start. The `anthropic`
+dependency was removed from `pyproject.toml` runtime deps.
+
+Why: operator runs locally via the logged-in Claude Code CLI and does
+not maintain an Anthropic API key for this project. Rejected the
+"keep both backends" option in favor of a single transport that matches
+the actual deployment.
+
+Test count after migration: 47 passing (12 new CLI-subprocess tests
+replace the 6 SDK-mock tests). Real-CLI soak harness is the next
+demand-driven step — replays a JSONL transcript with `BRIDGE_API_GOV=true`
+and reports p50/p95 latency, schema-fail rate, and action-distribution
+drift vs the local-only path.

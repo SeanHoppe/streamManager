@@ -1,0 +1,9 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-04-01T00:00:00Z","sessionId":"S1","content":"start"}
+{"type":"user","sessionId":"S1","timestamp":"2026-04-01T00:00:01Z","message":{"role":"user","content":"please run the tests"}}
+{"type":"assistant","sessionId":"S1","timestamp":"2026-04-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"pytest -q"}}]}}
+{"type":"user","sessionId":"S1","timestamp":"2026-04-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","is_error":false,"content":"3 passed"}]}}
+{"type":"assistant","sessionId":"S1","timestamp":"2026-04-01T00:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"all green"}]}}
+{"type":"user","sessionId":"S1","timestamp":"2026-04-01T00:00:05Z","message":{"role":"user","content":"now lint"}}
+{"type":"assistant","sessionId":"S1","timestamp":"2026-04-01T00:00:06Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ruff check ."}}]}}
+{"type":"user","sessionId":"S1","timestamp":"2026-04-01T00:00:07Z","message":{"role":"user","content":[{"type":"tool_result","is_error":true,"content":"E501 line too long"}]}}
+{"type":"assistant","sessionId":"S1","timestamp":"2026-04-01T00:00:08Z","message":{"role":"assistant","content":[{"type":"text","text":"will fix"}]}}
