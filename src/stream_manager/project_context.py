@@ -15,6 +15,40 @@ MANIFEST_FILES: tuple[str, ...] = (
 )
 
 
+_META_CONTENT: list[tuple[re.Pattern[str], str]] = [
+    # Claude chain-of-thought / extended thinking blocks
+    (re.compile(r"</?thinking[\s>]"), "claude-thinking-block"),
+    # Claude Code CLI internal metadata tags (local-command-caveat, slash-command XML)
+    (
+        re.compile(
+            r"<(?:local-command-caveat|command-name|command-message|command-args|local-command-stdout)[\s>]"
+        ),
+        "claude-cli-metadata",
+    ),
+    # Tool-use XML parameter tags
+    (re.compile(r"<parameter\s+name="), "tool-use-xml"),
+    # Plugin mode switches (caveman, etc.) — conversational UI state, not code actions
+    (
+        re.compile(
+            r"\bCAVEMAN\s+MODE\s+ACTIVE\b|\bcaveman\s+(?:mode\s+)?(?:ultra|full|lite)\b",
+            re.IGNORECASE,
+        ),
+        "plugin-mode-switch",
+    ),
+]
+
+_HAS_SHELL_SYNTAX = re.compile(
+    r'[|&;$`]|\b(?:rm|git|mv|cp|curl|wget|ssh|sudo|chmod|chown|kill|'
+    r'python3?|node|npm|pip|docker|kubectl|make|bash|sh|eval|exec)\b'
+)
+
+_CONVERSATIONAL_ONLY = re.compile(
+    r"^(?:go|yes|ok|okay|sure|continue|proceed|done|thanks|thank\s+you|good|great|"
+    r"perfect|sounds\s+good|got\s+it|understood|acknowledged|noted)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
 _DESTRUCTIVE: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\brm\s+-rf\s+/(?!\w)"), "BLOCK", "destructive root rm"),
     (re.compile(r"\brm\s+-rf\s+~"), "BLOCK", "destructive home rm"),
@@ -101,6 +135,19 @@ def fast_precheck(content: str, snap: ProjectContextSnapshot) -> FastPrecheckDec
         m = pat.search(content)
         if m:
             return FastPrecheckDecision(action=action, reasoning=reason, matched_pattern=m.group(0))
+
+    # Known non-actionable content: thinking blocks, CLI metadata tags, plugin mode
+    # switches. Short-circuit to ALLOW so CLI escalation budget is not spent on these.
+    for pat, reason in _META_CONTENT:
+        if pat.search(content):
+            return FastPrecheckDecision(action="ALLOW", reasoning=f"meta-content: {reason}")
+
+    stripped = content.strip()
+    if stripped and len(stripped) <= 60 and not _HAS_SHELL_SYNTAX.search(stripped):
+        if _CONVERSATIONAL_ONLY.match(stripped):
+            return FastPrecheckDecision(
+                action="ALLOW", reasoning="meta-content: conversational-ack"
+            )
 
     if snap.has_intent_file and snap.intent_text:
         intent_lower = snap.intent_text.lower()

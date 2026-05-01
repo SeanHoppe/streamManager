@@ -84,11 +84,15 @@ def test_enabled_invokes_cli_with_model_and_intent(monkeypatch: pytest.MonkeyPat
     assert "--output-format" in cmd and "json" in cmd
     assert "--model" in cmd
     assert "claude-haiku-4-5" in cmd
-    prompt = cmd[cmd.index("-p") + 1]
-    assert "Project intent: no force-push" in prompt
-    assert "git push --force origin main" in prompt
+    user_prompt = cmd[cmd.index("-p") + 1]
+    assert "git push --force origin main" in user_prompt
+    assert "--system-prompt" in cmd
+    system_prompt = cmd[cmd.index("--system-prompt") + 1]
+    assert "Project intent: no force-push" in system_prompt
+    assert "--no-session-persistence" in cmd
+    assert "--tools" in cmd
     kwargs = runner.calls[0]["kwargs"]
-    assert kwargs["timeout"] == 5.0
+    assert kwargs["timeout"] == 20.0
     assert kwargs["capture_output"] is True
     assert kwargs["text"] is True
 

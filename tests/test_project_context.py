@@ -49,6 +49,79 @@ def test_fast_precheck_intent_rule_only_fires_with_intent(tmp_path: Path) -> Non
     assert d_without is None
 
 
+# ---------------------------------------------------------------------------
+# Meta-content precheck — must ALLOW without CLI escalation
+# ---------------------------------------------------------------------------
+
+def test_precheck_allows_thinking_block(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck("<thinking>\nSome chain-of-thought here.\n</thinking>", snap)
+    assert d is not None
+    assert d.action == "ALLOW"
+    assert "thinking" in d.reasoning
+
+
+def test_precheck_allows_local_command_caveat(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck(
+        "<local-command-caveat>These messages generated locally.</local-command-caveat>", snap
+    )
+    assert d is not None
+    assert d.action == "ALLOW"
+    assert "cli-metadata" in d.reasoning
+
+
+def test_precheck_allows_command_name_tag(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck("<command-name>/compact</command-name>", snap)
+    assert d is not None
+    assert d.action == "ALLOW"
+
+
+def test_precheck_allows_tool_use_xml(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck('<parameter name="command">ls -la</parameter>', snap)
+    assert d is not None
+    assert d.action == "ALLOW"
+
+
+def test_precheck_allows_caveman_mode_active(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck("CAVEMAN MODE ACTIVE — level: ultra", snap)
+    assert d is not None
+    assert d.action == "ALLOW"
+    assert "plugin-mode-switch" in d.reasoning
+
+
+def test_precheck_allows_caveman_ultra(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    d = fast_precheck("caveman ultra ON.", snap)
+    assert d is not None
+    assert d.action == "ALLOW"
+
+
+def test_precheck_allows_short_conversational_ack(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    for ack in ("go", "yes", "ok", "continue", "proceed", "done", "got it"):
+        d = fast_precheck(ack, snap)
+        assert d is not None and d.action == "ALLOW", f"ack {ack!r} should be ALLOW"
+
+
+def test_precheck_does_not_allow_shell_in_short_message(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    # "rm" is a shell command — must NOT be short-circuited by conversational rule
+    d = fast_precheck("rm", snap)
+    assert d is None or d.action != "ALLOW" or "meta-content" not in d.reasoning
+
+
+def test_precheck_destructive_still_fires_before_meta(tmp_path: Path) -> None:
+    snap = load(tmp_path)
+    # Even if message contains a thinking tag, destructive pattern wins
+    d = fast_precheck("rm -rf / <thinking>oops</thinking>", snap)
+    assert d is not None
+    assert d.action == "BLOCK"
+
+
 def test_fast_precheck_is_under_one_ms(tmp_path: Path) -> None:
     (tmp_path / "INTENT.md").write_text("No force-push.", encoding="utf-8")
     snap = load(tmp_path)

@@ -9,13 +9,16 @@ user's logged-in CLI session.
 
 Design choices:
 
-  • Transport: ``claude -p <prompt> --output-format json --model <id>``.
-    Subprocess run with a wall-clock timeout. The CLI cold-start dominates
-    latency, so the budget is 5s (vs. the SDK path's old 2s).
-  • Output shape: the CLI emits ``{"type": "result", "result": "<text>", ...}``.
-    The inner ``result`` string is what the model produced; we parse it as
-    JSON against ``_DECISION_SCHEMA``. Schema enforcement is prompt-only —
-    the CLI does not pass through json_schema constraints to the model.
+  • Transport: ``claude -p <content> --system-prompt <gov>
+    --output-format json --model <id> --no-session-persistence --tools ""``.
+    --system-prompt keeps governance instructions out of the user turn, avoiding
+    Claude's injection-defense refusals. --tools "" disables all built-in tools
+    so the model returns a direct JSON response in one turn. --no-session-persistence
+    skips session disk writes for lower overhead. Markdown code fences are stripped
+    from the inner result before JSON parsing.
+  • Output shape: the CLI emits ``{"type": "result", "result": <data>, ...}``.
+    With --json-schema the inner ``result`` may be a dict or a JSON string;
+    _parse_envelope handles both.
   • Errors: any failure (CLI missing, non-zero exit, timeout, malformed
     JSON, action-enum mismatch) returns ``None`` so the engine degrades
     cleanly to local-only behavior.
@@ -26,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -35,7 +39,7 @@ log = logging.getLogger(__name__)
 
 ENV_FLAG = "BRIDGE_API_GOV"
 MODEL = "claude-haiku-4-5"
-TIMEOUT_SECONDS = 5.0
+TIMEOUT_SECONDS = 20.0
 CLI_BIN = "claude"
 
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
@@ -54,12 +58,13 @@ _DECISION_SCHEMA: dict = {
 _SYSTEM_TEMPLATE = (
     "You are a code-action governance evaluator. Given a proposed action a "
     "developer assistant is about to take, decide whether it aligns with "
-    "the project's intent. Choose ALLOW for routine safe actions, SUGGEST "
-    "for borderline cases worth flagging, GUIDE/INTERVENE for actions that "
-    "should be redirected, and BLOCK only for clearly destructive or "
-    "intent-violating actions. Reply ONLY with a single JSON object matching "
-    "this schema (no prose, no markdown fence):\n"
-    "{schema}\n\n"
+    "the project's intent.\n\n"
+    "Choose ALLOW for routine safe actions, SUGGEST for borderline cases worth "
+    "flagging, GUIDE/INTERVENE for actions that should be redirected, and BLOCK "
+    "only for clearly destructive or intent-violating actions.\n\n"
+    "Reply with a JSON object only — no prose, no markdown fences:\n"
+    "{{\"action\": \"ALLOW|SUGGEST|GUIDE|INTERVENE|BLOCK\", "
+    "\"confidence\": <0.0-1.0>, \"reasoning\": \"<short string>\"}}\n\n"
     "Project intent:\n{intent}"
 )
 
@@ -96,18 +101,22 @@ class CliGovernor:
         if self._system is not None:
             return self._system
         intent = self.project_context.intent_text or "(no INTENT.md loaded)"
-        self._system = _SYSTEM_TEMPLATE.format(
-            schema=json.dumps(_DECISION_SCHEMA),
-            intent=intent[:8000],
-        )
+        self._system = _SYSTEM_TEMPLATE.format(intent=intent[:8000])
         return self._system
 
     def evaluate(self, content: str) -> CliDecision | None:
         if not is_enabled():
             return None
 
-        prompt = f"{self._system_prompt()}\n\nEvaluate this proposed action:\n\n{content[:4000]}"
-        cmd = [CLI_BIN, "-p", prompt, "--output-format", "json", "--model", MODEL]
+        user_prompt = f"Evaluate this proposed action:\n\n{content[:4000]}"
+        cmd = [
+            CLI_BIN, "-p", user_prompt,
+            "--system-prompt", self._system_prompt(),
+            "--output-format", "json",
+            "--model", MODEL,
+            "--no-session-persistence",
+            "--tools", "",
+        ]
 
         try:
             result = self._runner(
@@ -146,14 +155,21 @@ def _parse_envelope(stdout: str) -> CliDecision | None:
         log.warning("cli governance: envelope is_error=true; degrading")
         return None
 
-    inner_text = envelope.get("result")
-    if not isinstance(inner_text, str) or not inner_text:
+    inner = envelope.get("result")
+    if inner is None:
         return None
-
-    try:
-        data = json.loads(inner_text)
-    except json.JSONDecodeError:
-        log.warning("cli governance: inner JSON parse failed; degrading")
+    if isinstance(inner, dict):
+        data = inner
+    elif isinstance(inner, str) and inner:
+        # Strip markdown code fences the model sometimes emits despite instructions
+        cleaned = re.sub(r"^```(?:json)?\s*\n?", "", inner.strip())
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            log.warning("cli governance: inner JSON parse failed; degrading")
+            return None
+    else:
         return None
 
     action = data.get("action")
