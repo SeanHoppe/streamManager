@@ -11,6 +11,7 @@ from stream_manager import message_bus as _msg_bus
 from stream_manager.agent_registry import AgentProfile, AgentRegistry
 from stream_manager.cli_governance import CliGovernor, is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
+from stream_manager.hitl import HitlQueue
 from stream_manager.messages import Message
 from stream_manager.project_context import ProjectContextSnapshot, fast_precheck
 
@@ -150,11 +151,22 @@ class GovernanceEngine:
     bus: _msg_bus.MessageBus | None = None
     session_id: str = ""
     registry: AgentRegistry | None = None
+    hitl: HitlQueue | None = None
 
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
     _intervention_log: deque[float] = field(default_factory=lambda: deque(maxlen=120))
     _cli_governor: CliGovernor | None = None
+    _desktop_pause_active: bool = False
+
+    def signal_desktop_pause(self) -> None:
+        """Mark the next evaluate() as following a Desktop end_turn pause.
+
+        FR-HITL-2 trigger 3 primary signal. The flag is consumed (reset to
+        False) by `evaluate()` after each call so a single pause only
+        triggers once.
+        """
+        self._desktop_pause_active = True
 
     def evaluate(self, msg: Message) -> GovDecision:
         bus_msg: _msg_bus.Message | None = None
@@ -168,6 +180,35 @@ class GovernanceEngine:
             )
             self.bus.publish(bus_msg)
         decision = self._evaluate_inner(msg)
+
+        # FR-HITL §4.9: route through the HITL queue if one is wired AND
+        # we have a bus message to anchor the pending row to. The
+        # classify_trigger pre-check is cheap and avoids a route() call
+        # when no trigger fires. The desktop-pause flag is consumed
+        # (reset) at the end of evaluate so a single pause only triggers
+        # once.
+        if self.hitl is not None and bus_msg is not None and self.session_id:
+            try:
+                trigger = self.hitl.classify_trigger(
+                    decision, msg.content, self._desktop_pause_active
+                )
+            except Exception:
+                log.exception("hitl: classify_trigger raised; skipping route")
+                trigger = None
+            if trigger is not None:
+                try:
+                    decision = self.hitl.route(
+                        decision,
+                        bus_msg.id,
+                        msg.content,
+                        self.session_id,
+                        self._desktop_pause_active,
+                    )
+                except Exception:
+                    log.exception("hitl: route raised; using original decision")
+        # Always reset the pause flag, whether or not we routed.
+        self._desktop_pause_active = False
+
         if self.bus is not None and bus_msg is not None:
             self.bus.record_decision(
                 message_id=bus_msg.id,
@@ -291,7 +332,21 @@ class GovernanceEngine:
                 source="graph",
             )
 
-        cli_decision = self._maybe_cli_evaluate(msg.content)
+        # FR-HITL-7: inject the most recent HITL notes for this hash
+        # (≤50 tokens each, capped at N=5) as a short prefix to the CLI
+        # prompt so prior human guidance shapes the next decision.
+        cli_content = msg.content
+        if self.hitl is not None and match is not None and match.hash:
+            try:
+                notes = self.hitl.get_active_notes(match.hash)
+            except Exception:
+                notes = []
+            if notes:
+                # Cheap string slice: cap to 250 chars total to stay well
+                # within the existing 4000-char content budget.
+                joined = " | ".join(notes)[:250]
+                cli_content = f"[HITL notes: {joined}]\n\n{msg.content}"
+        cli_decision = self._maybe_cli_evaluate(cli_content)
         if cli_decision is not None:
             decision = self._apply_mode(
                 GovDecision(
