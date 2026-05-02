@@ -746,7 +746,14 @@ def _get_maturity_reader():
 
         project_root_env = os.environ.get("SM_PROJECT_ROOT")
         project_root = Path(project_root_env) if project_root_env else ROOT
-        ctx = load_sm_context(project_root)
+        # FR-OG-7 loud-degrade: pass bus so absent `.sm-context.yaml`
+        # emits a one-shot `og7_unconfigured` event the dashboard can
+        # surface as a banner.
+        ctx = load_sm_context(
+            project_root,
+            bus=_get_bus(),
+            session_id=os.environ.get("SM_OWN_SESSION_ID", "sm-system"),
+        )
         if ctx is None:
             _maturity_reader = None
             return None

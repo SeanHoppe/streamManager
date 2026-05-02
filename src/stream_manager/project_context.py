@@ -208,12 +208,57 @@ def _safe_read(fp: Path, max_bytes: int = 64 * 1024) -> str:
 # an exception path.
 
 
-def load_sm_context(project_root: Path) -> dict[str, object] | None:
+# Module-level guard: emit `og7_unconfigured` exactly once per project_root
+# per Python process. Tracks resolved string paths.
+_OG7_UNCONFIGURED_EMITTED: set[str] = set()
+
+
+def _emit_og7_unconfigured(bus: object, session_id: str, project_root: Path, expected_path: Path) -> None:
+    """Loud-degrade signal: SM dashboard renders a banner when FR-OG-7 is
+    dormant because `.sm-context.yaml` is missing. Idempotent per
+    project_root for the lifetime of this process.
+    """
+    key = str(Path(project_root).resolve())
+    if key in _OG7_UNCONFIGURED_EMITTED:
+        return
+    _OG7_UNCONFIGURED_EMITTED.add(key)
+    if bus is None:
+        return
+    try:
+        from stream_manager import message_bus as _msg_bus
+
+        bus.publish(  # type: ignore[attr-defined]
+            _msg_bus.Message.new(
+                session_id=session_id or "sm-system",
+                type="og7_unconfigured",
+                direction="internal",
+                content="FR-OG-7 inactive: .sm-context.yaml missing",
+                metadata={
+                    "project_root": str(project_root),
+                    "expected_path": str(expected_path),
+                },
+            )
+        )
+    except Exception:
+        # Never let observability emit break the load() contract.
+        pass
+
+
+def load_sm_context(
+    project_root: Path,
+    bus: object | None = None,
+    session_id: str = "sm-system",
+) -> dict[str, object] | None:
     """Load `.sm-context.yaml` from project root. Returns None if absent
     or unparseable. Never raises.
+
+    When ``bus`` is supplied and the file is absent, emits a one-shot
+    ``og7_unconfigured`` bus event per ``project_root`` so the dashboard
+    can surface a loud-degrade banner instead of silently no-op'ing.
     """
     path = Path(project_root) / ".sm-context.yaml"
     if not path.exists():
+        _emit_og7_unconfigured(bus, session_id, Path(project_root), path)
         return None
     try:
         import yaml  # type: ignore[import-untyped]
