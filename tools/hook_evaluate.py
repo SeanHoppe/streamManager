@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from stream_manager.decision_graph import DecisionGraph  # noqa: E402
-from stream_manager.governance import GovernanceEngine  # noqa: E402
+from stream_manager.governance import EngineRegistry  # noqa: E402
 from stream_manager.message_bus import MessageBus  # noqa: E402
 from stream_manager.messages import Message  # noqa: E402
 from stream_manager.project_context import load  # noqa: E402
@@ -69,19 +69,28 @@ def main() -> int:
 
     try:
         snap = load(ROOT)
-        graph = DecisionGraph.load(bus_path) if bus_path else DecisionGraph()
         bus: MessageBus | None = None
         if bus_path:
             bus = MessageBus(bus_path)
             if session_id:
                 bus.open_session(session_id, project_slug=ROOT.name, pid=os.getpid())
 
-        engine = GovernanceEngine(project_context=snap, graph=graph, bus=bus, session_id=session_id)
+        # Per-session engine via registry. The hook process is short-lived,
+        # so the registry holds at most one engine per invocation; the
+        # routing pattern matches long-lived contexts (dashboard, soak).
+        registry = EngineRegistry(
+            bus=bus,
+            project_context=snap,
+            graph_factory=(
+                (lambda: DecisionGraph.load(bus_path)) if bus_path else (lambda: DecisionGraph())
+            ),
+        )
+        engine = registry.get_or_create(session_id or "default")
         decision = engine.evaluate(Message.new("tool", content))
         engine.observe_for_learning(Message.new("tool", content), success=True)
 
         if bus_path:
-            graph.save(bus_path)
+            engine.graph.save(bus_path)
         if bus is not None:
             bus.close()
 

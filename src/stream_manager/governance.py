@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
@@ -785,3 +788,93 @@ class GovernanceEngine:
             "interventions_in_window": sum(self._intervention_window),
             "interventions_last_min": sum(1 for t in self._intervention_log if t > cutoff),
         }
+
+
+# ── EngineRegistry: per-session engine instancing (Task B) ─────────────
+#
+# Long-lived processes (dashboard, soak driver, future SM daemon) need
+# one GovernanceEngine per governed session_id. The registry constructs
+# engines lazily on first `get_or_create(session_id)` and isolates all
+# in-memory state (mode ladder, rolling windows, convergence monitor,
+# DecisionGraph) per instance — no shared mutable globals across sessions.
+#
+# SM-never-self-monitor enforcement (Task B spec §4): if a caller passes
+# the SM's own session_id (via SM_OWN_SESSION_ID env var, set at SM boot),
+# get_or_create raises ValueError. This blocks the eval feedback loop where
+# SM would govern its own bus events.
+#
+# Hook payload integration: callers route incoming hook events with
+#     registry.get_or_create(session_id).evaluate(msg)
+# instead of holding a singleton engine.
+
+DecisionGraphFactory = Callable[[], DecisionGraph]
+
+
+class EngineRegistry:
+    """Holds one GovernanceEngine per session_id. Thread-safe."""
+
+    def __init__(
+        self,
+        bus: _msg_bus.MessageBus | None,
+        project_context: ProjectContextSnapshot,
+        graph_factory: DecisionGraphFactory | None = None,
+        agent_registry: AgentRegistry | None = None,
+        hitl: HitlQueue | None = None,
+        maturity: MaturityReader | None = None,
+        rate_limit_per_min: int = DEFAULT_RATE_LIMIT_PER_MIN,
+    ) -> None:
+        self._bus = bus
+        self._project_context = project_context
+        self._graph_factory: DecisionGraphFactory = graph_factory or (lambda: DecisionGraph())
+        self._agent_registry = agent_registry
+        self._hitl = hitl
+        self._maturity = maturity
+        self._rate_limit_per_min = rate_limit_per_min
+        self._engines: dict[str, GovernanceEngine] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _sm_own_session_id() -> str:
+        return os.environ.get("SM_OWN_SESSION_ID", "")
+
+    def get_or_create(self, session_id: str) -> GovernanceEngine:
+        if not session_id:
+            raise ValueError("session_id required")
+        sm_own = self._sm_own_session_id()
+        if sm_own and session_id == sm_own:
+            raise ValueError(
+                f"SM cannot self-monitor: session_id matches SM_OWN_SESSION_ID ({sm_own!r})"
+            )
+        with self._lock:
+            eng = self._engines.get(session_id)
+            if eng is not None:
+                return eng
+            eng = GovernanceEngine(
+                project_context=self._project_context,
+                graph=self._graph_factory(),
+                bus=self._bus,
+                session_id=session_id,
+                registry=self._agent_registry,
+                hitl=self._hitl,
+                maturity=self._maturity,
+                rate_limit_per_min=self._rate_limit_per_min,
+            )
+            self._engines[session_id] = eng
+            return eng
+
+    def close(self, session_id: str) -> None:
+        """Drop the engine for a session. Idempotent."""
+        with self._lock:
+            self._engines.pop(session_id, None)
+
+    def active_session_ids(self) -> list[str]:
+        with self._lock:
+            return list(self._engines.keys())
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._engines)
+
+    def __contains__(self, session_id: object) -> bool:
+        with self._lock:
+            return session_id in self._engines
