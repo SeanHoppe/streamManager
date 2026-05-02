@@ -86,26 +86,32 @@ def _canonical_json(payload: dict) -> bytes:
     )
 
 
-def sign(payload: dict) -> str:
+def sign(payload: dict, secret: bytes | None = None) -> str:
     """Return the HMAC-SHA256 hex digest of canonical-JSON(payload).
 
     The signed payload includes ``id``, ``session_id``, ``kind``,
     ``args``, and ``sent_at`` — the row primary key plus the body. The
     ``signature`` column on the desktop_commands row stores the digest
     of these exact fields.
+
+    When ``secret`` is supplied, use it directly. Otherwise resolve via
+    ``_load_or_gen_secret()`` (env → file → generate).
     """
-    secret = _load_or_gen_secret()
-    return hmac.new(secret, _canonical_json(payload), hashlib.sha256).hexdigest()
+    key = secret if secret is not None else _load_or_gen_secret()
+    return hmac.new(key, _canonical_json(payload), hashlib.sha256).hexdigest()
 
 
-def validate(payload: dict, signature: str) -> bool:
+def validate(payload: dict, signature: str, secret: bytes | None = None) -> bool:
     """Constant-time signature check via ``hmac.compare_digest``.
 
     Returns True iff ``signature`` matches ``sign(payload)``. Never use
     ``==`` here — that would leak information byte-by-byte to a remote
     attacker.
+
+    Pass ``secret`` to avoid the global env/file lookup; useful for
+    consumers that already hold the key in process memory.
     """
-    expected = sign(payload)
+    expected = sign(payload, secret=secret)
     return hmac.compare_digest(expected, signature)
 
 

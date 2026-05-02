@@ -14,6 +14,7 @@ never touches the real ``.bridge/secret`` file.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import threading
 from typing import Any
@@ -331,6 +332,36 @@ def test_default_executors_cover_full_allowlist(
     # Each is callable with a dict and returns None without raising.
     for fn in execs.values():
         assert fn({}) is None
+
+
+def test_consumer_does_not_touch_sm_desktop_secret_env(
+    consumer_module, monkeypatch
+):
+    """Constructing a CommandConsumer must NOT set ``SM_DESKTOP_SECRET``."""
+    monkeypatch.delenv("SM_DESKTOP_SECRET", raising=False)
+    consumer = consumer_module.CommandConsumer(
+        sm_url="http://example",
+        session_id="s-x",
+        secret=b"ctor-secret",
+        executors={},
+    )
+    assert "SM_DESKTOP_SECRET" not in os.environ
+    consumer.close()
+
+
+def test_consumer_does_not_overwrite_existing_env(
+    consumer_module, monkeypatch
+):
+    """Constructing a CommandConsumer must NOT overwrite a pre-existing
+    ``SM_DESKTOP_SECRET`` set by the operator."""
+    monkeypatch.setenv("SM_DESKTOP_SECRET", "operator-set")
+    consumer_module.CommandConsumer(
+        sm_url="http://example",
+        session_id="s-y",
+        secret=b"ctor-secret",
+        executors={},
+    ).close()
+    assert os.environ["SM_DESKTOP_SECRET"] == "operator-set"
 
 
 def test_constructor_validates_inputs(consumer_module):
