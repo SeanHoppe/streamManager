@@ -184,6 +184,10 @@ class GovernanceEngine:
     # Phase 5 / FR-OG-7: optional MaturityReader. When None, all FR-OG-7
     # signals are dormant (gate condition).
     maturity: MaturityReader | None = None
+    # Task J / v1.1: optional CLI warm-pool. When supplied, the lazily-built
+    # CliGovernor inherits this pool and routes escalation through it
+    # instead of spawning a fresh subprocess per call. None = legacy path.
+    cli_pool: object | None = None
     _sweep_job_agents_seen: list[str] = field(default_factory=list)
 
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
@@ -696,6 +700,7 @@ class GovernanceEngine:
                 self.project_context,
                 bus=self.bus,
                 session_id=self.session_id or None,
+                pool=self.cli_pool,  # type: ignore[arg-type]
             )
         # Phase 4 / NFR-M2: caller selects the model tier via the
         # pre-routing pass in _evaluate_inner_core. When omitted, fall back
@@ -894,6 +899,7 @@ class EngineRegistry:
         rate_limit_per_min: int = DEFAULT_RATE_LIMIT_PER_MIN,
         auto_refresh: bool = False,
         refresh_interval_s: float = 60.0,
+        cli_pool: object | None = None,
     ) -> None:
         self._bus = bus
         self._project_context = project_context
@@ -902,6 +908,9 @@ class EngineRegistry:
         self._hitl = hitl
         self._maturity = maturity
         self._rate_limit_per_min = rate_limit_per_min
+        # Task J / v1.1: optional shared CLI warm-pool, propagated to every
+        # engine instantiated by this registry.
+        self._cli_pool = cli_pool
         self._engines: dict[str, GovernanceEngine] = {}
         self._lock = threading.RLock()
         # Task F: cross-session pattern refresh. Disabled by default —
@@ -938,6 +947,7 @@ class EngineRegistry:
                 hitl=self._hitl,
                 maturity=self._maturity,
                 rate_limit_per_min=self._rate_limit_per_min,
+                cli_pool=self._cli_pool,
             )
             self._engines[session_id] = eng
             # Task F: spawn cross-session Hydrator (daemon) so the engine

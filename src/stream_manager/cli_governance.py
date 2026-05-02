@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 from stream_manager.project_context import ProjectContextSnapshot
 
 if TYPE_CHECKING:
+    from stream_manager.cli_pool import CliPool
     from stream_manager.message_bus import MessageBus
 
 log = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ class CliGovernor:
         runner=None,
         bus: "MessageBus | None" = None,
         session_id: str | None = None,
+        pool: "CliPool | None" = None,
     ) -> None:
         self.project_context = project_context
         self._runner = runner or subprocess.run
@@ -137,6 +139,12 @@ class CliGovernor:
         # all governance_call event publishing is skipped silently.
         self._bus = bus
         self._session_id = session_id
+        # Task J / v1.1: optional warm-pool. When supplied, evaluate() routes
+        # through pool.acquire() instead of spawning a fresh subprocess per
+        # call. When None (default), the legacy spawn-per-call path is used
+        # so existing tests/callers that don't know about the pool keep
+        # working unchanged.
+        self._pool = pool
 
     def _system_prompt(self) -> str:
         if self._system is not None:
@@ -187,6 +195,43 @@ class CliGovernor:
         # JSON parsing, event publishing, and any other Python work must NOT
         # be included so the metric reflects external CLI cost only.
         start = time.monotonic()
+
+        # Task J / v1.1: warm-pool fast path. The pool returns the same
+        # JSON envelope shape that ``claude -p --output-format json`` emits,
+        # so downstream parsing (_parse_envelope, _extract_usage) is shared
+        # between the spawn-per-call and pool paths.
+        if self._pool is not None:
+            try:
+                with self._pool.acquire() as worker:
+                    stdout = worker.send(user_prompt, timeout=TIMEOUT_SECONDS)
+                latency_ms = int((time.monotonic() - start) * 1000)
+                in_tok, out_tok, cost = _extract_usage(stdout)
+                self._publish_event(
+                    model=chosen_model,
+                    tier=tier,
+                    status="exited",
+                    trigger=trigger,
+                    latency_ms=latency_ms,
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    cost_usd=cost,
+                )
+                return _parse_envelope(stdout)
+            except Exception as exc:
+                latency_ms = int((time.monotonic() - start) * 1000)
+                log.warning("cli_pool path failed (%s); degrading", exc)
+                self._publish_event(
+                    model=chosen_model,
+                    tier=tier,
+                    status="failed",
+                    trigger=trigger,
+                    latency_ms=latency_ms,
+                    input_tokens=None,
+                    output_tokens=None,
+                    cost_usd=None,
+                )
+                return None
+
         try:
             result = self._runner(
                 cmd,

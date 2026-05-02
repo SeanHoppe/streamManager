@@ -73,6 +73,26 @@ cold-start across calls. Target outcomes:
 - p95: meaningful reduction; alignment path still bounded by model TTFT
 - Re-issue ADR-5 (or a successor) with the warm-pool measurements.
 
+### v1.1 status (Task J — CLI warm-pool)
+
+- **Implemented:** `src/stream_manager/cli_pool.py` + `CliGovernor(pool=...)`
+  + `EngineRegistry(cli_pool=...)` wiring + dashboard startup/shutdown
+  lifecycle. PID-file at `.bridge/cli-pool.pids` with boot-time reaper.
+- **Pending budget revision:** awaiting paired 5-min and 30-min soaks
+  with `--cli-pool-size 2`. Per `docs/v1.1-scope.md`, revised target is:
+
+  | Metric        | v1.1 target |
+  |---------------|-------------|
+  | p50           | ≤ 3 s       |
+  | p95           | ≤ 8 s       |
+  | hard timeout  | 25 s (unchanged) |
+
+  The v1.0 budget (p50 ≤ 7 s, p95 ≤ 15 s) remains in force until a
+  measured warm-pool soak either confirms or re-baselines the v1.1
+  target. If measured numbers fall short, document and re-baseline
+  rather than block release (per `docs/v1.1-scope.md` §"Latency budget
+  targets").
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
