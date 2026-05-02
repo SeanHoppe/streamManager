@@ -1606,6 +1606,25 @@ button:focus-visible, select:focus-visible,
 input:focus-visible, textarea:focus-visible{
   outline: 2px solid #d97706; outline-offset: 2px;
 }
+
+/* FR-UI-4: per-card Take action affordance for HITL OFF (async) cards.
+   Uses OBSERVING badge palette (slate). Hidden when feed is in sync mode. */
+.card-take-action{
+  display:inline-block;
+  margin-top:4px;
+  padding:2px 8px;
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:0.02em;
+  color:#475569;
+  background:#f1f5f9;
+  border:1px solid #cbd5e1;
+  border-radius:4px;
+  cursor:pointer;
+}
+.card-take-action:hover{ background:#e2e8f0; }
+.card-take-action:disabled{ opacity:0.6; cursor:wait; }
+#feed.mode-sync .card-take-action{ display:none; }
 </style>
 </head>
 <body>
@@ -1975,6 +1994,11 @@ function buildRow(row, isNew=false){
   const layerTip = (layerNum <= 1)
     ? 'no LLM'
     : (row.model_used || 'no LLM');
+  // FR-UI-4: render Take action only when this row has a decision id
+  // (graceful-degrade — without an id the suggestions endpoint can't be hit).
+  const takeActionBtn = row.id
+    ? `<button type="button" class="card-take-action" data-take-action="1" title="Promote to HITL ON sync mode and open override tray">Take action</button>`
+    : '';
   el.innerHTML = `
     <div class="c-ts">${fmtTs(row.timestamp)}</div>
     <div><span class="badge badge-${esc(row.action||'?')}">${esc(row.action||'?')}</span></div>
@@ -1985,6 +2009,7 @@ function buildRow(row, isNew=false){
     <div class="c-content">
       <div class="ct" title="${esc(row.content||'')}">${esc(clip(row.content||''))}</div>
       <div class="cr" title="${esc(row.reasoning||'')}">${esc(clip(row.reasoning||'',60))}</div>
+      ${takeActionBtn}
     </div>
     <div class="c-sess" title="${esc(row.session_id||'')}">${esc(sid)||'–'}</div>
   `;
@@ -2339,11 +2364,18 @@ function handleHitlEvent(d){
   }
 }
 
+// FR-HITL-1 mode badge state — canonical name is `updateModeBadge`. Earlier
+// spec/audit notes referenced `updateHitlModeBadge`; that name is documentation
+// drift only, not present in code. Also drives FR-UI-4 visibility of the
+// per-card Take action button via the #feed.mode-sync class toggle.
 function updateModeBadge(){
   if(!hitlModeBadge) return;
   const n = HITL.pending.length;
   if(HITL.mode === 'sync' && n > 0) hitlModeBadge.textContent = `[SYNC · ${n}]`;
   else hitlModeBadge.textContent = HITL.mode === 'sync' ? '[SYNC]' : '[ASYNC]';
+  if(typeof feed !== 'undefined' && feed){
+    feed.classList.toggle('mode-sync', HITL.mode === 'sync');
+  }
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2448,8 +2480,27 @@ function openTray(rowEl){
 
 feed.addEventListener('click', e=>{
   if(e.target.closest('.tray')) return; // ignore clicks inside tray
+  const takeBtn = e.target.closest('.card-take-action');
   const row = e.target.closest('.row');
   if(!row) return;
+  if(takeBtn){
+    // FR-UI-4: per-card Take action — promote to HITL ON sync mode then open
+    // the override tray (FR-UI-5) for this decision. Reuses postHitlMode +
+    // openTray; no new endpoints. Graceful-degrade: if persistence fails,
+    // leave mode as-is and don't open the tray.
+    e.stopPropagation();
+    if(takeBtn.disabled) return;
+    takeBtn.disabled = true;
+    postHitlMode('sync', 'take_action').then(ok => {
+      takeBtn.disabled = false;
+      if(!ok) return;
+      HITL.mode = 'sync';
+      if(typeof modeSync !== 'undefined' && modeSync) modeSync.checked = true;
+      updateModeBadge();
+      openTray(row);
+    }).catch(()=>{ takeBtn.disabled = false; });
+    return;
+  }
   if(row.classList.contains('tray-open')){
     closeAnyTray();
     return;
