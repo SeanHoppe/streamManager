@@ -158,8 +158,10 @@ body::after{
   mix-blend-mode:multiply;
 }
 html[data-scanlines="on"] body::after{ opacity:.06; }
+/* NFR-UI-7: respect prefers-reduced-motion EXCEPT when user explicitly
+   force-allows motion via the FR-UI-9 override (data-motion="allow"). */
 @media (prefers-reduced-motion: reduce){
-  html[data-scanlines="on"] body::after{ opacity:0; }
+  html[data-scanlines="on"]:not([data-motion="allow"]) body::after{ opacity:0; }
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1637,14 +1639,27 @@ body{ font-size:14px; }
   0%, 100%{ box-shadow: 0 0 0 0 rgba(217,119,6,0.55); }
   50%     { box-shadow: 0 0 0 5px rgba(217,119,6,0);   }
 }
+/* NFR-UI-7: prefers-reduced-motion applies UNLESS the user has set
+   `force-allow` via the FR-UI-9 override. The `:not([data-motion="allow"])`
+   qualifier suppresses the media query in that case. */
 @media (prefers-reduced-motion: reduce){
-  .ar-action-required, .card.action-required{ animation:none; }
-  .ar-action-required{ box-shadow: 0 0 0 1px #d97706 inset; }
+  html:not([data-motion="allow"]) .ar-action-required,
+  html:not([data-motion="allow"]) .card.action-required{ animation:none; }
+  html:not([data-motion="allow"]) .ar-action-required{
+    box-shadow: 0 0 0 1px #d97706 inset;
+  }
 }
+/* `force-reduce` applies the no-pulse rules unconditionally. */
 html[data-motion="reduce"] .ar-action-required,
-html[data-motion="reduce"] .card.action-required{ animation:none; }
-html[data-motion="allow"]  .ar-action-required{
-  animation: pulseAR 1.6s ease-in-out infinite;
+html[data-motion="reduce"] .card.action-required{ animation:none !important; }
+html[data-motion="reduce"] .ar-action-required{
+  box-shadow: 0 0 0 1px #d97706 inset;
+}
+/* `force-allow` re-asserts the pulse animation even if the OS reports
+   reduced-motion. */
+html[data-motion="allow"]  .ar-action-required,
+html[data-motion="allow"]  .card.action-required{
+  animation: pulseAR 1.6s ease-in-out infinite !important;
 }
 
 /* NFR-UI-5: focus rings */
