@@ -156,11 +156,59 @@ class CliGovernor:
         return _parse_envelope(result.stdout or "")
 
 
+def _extract_json_object(text: str) -> dict | None:
+    """Extract first JSON object from text. Tolerates code fences + trailing prose.
+
+    Strategy:
+      1. Strip leading fence if present.
+      2. Use json.JSONDecoder.raw_decode to consume the first valid JSON value
+         from the start of the (post-fence) string, ignoring trailing content.
+      3. Fall back to scanning for ``{`` and trying raw_decode at each position
+         (handles models that prepend a sentence before the JSON).
+    """
+    s = text.strip()
+    fence_match = re.match(r"^```(?:json)?\s*\n", s)
+    if fence_match:
+        s = s[fence_match.end():]
+    decoder = json.JSONDecoder()
+    try:
+        obj, _ = decoder.raw_decode(s)
+    except json.JSONDecodeError:
+        for idx in range(len(s)):
+            if s[idx] != "{":
+                continue
+            try:
+                obj, _ = decoder.raw_decode(s[idx:])
+                break
+            except json.JSONDecodeError:
+                continue
+        else:
+            return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _debug_dump(stage: str, payload: str) -> None:
+    """Append failing CLI payload to reports/cli_failures.jsonl when SM_CLI_DEBUG_DUMP=1."""
+    if os.environ.get("SM_CLI_DEBUG_DUMP", "").lower() not in ("1", "true", "yes"):
+        return
+    import time as _t
+    from pathlib import Path as _Path
+    out_dir = _Path("reports")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    record = {"ts": _t.time(), "stage": stage, "payload": payload[:8000]}
+    try:
+        with (out_dir / "cli_failures.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError:
+        pass
+
+
 def _parse_envelope(stdout: str) -> CliDecision | None:
     try:
         envelope = json.loads(stdout)
     except json.JSONDecodeError:
         log.warning("cli governance: outer JSON parse failed; degrading")
+        _debug_dump("outer", stdout)
         return None
 
     if envelope.get("is_error"):
@@ -173,19 +221,17 @@ def _parse_envelope(stdout: str) -> CliDecision | None:
     if isinstance(inner, dict):
         data = inner
     elif isinstance(inner, str) and inner:
-        # Strip markdown code fences the model sometimes emits despite instructions
-        cleaned = re.sub(r"^```(?:json)?\s*\n?", "", inner.strip())
-        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
+        data = _extract_json_object(inner)
+        if data is None:
             log.warning("cli governance: inner JSON parse failed; degrading")
+            _debug_dump("inner", inner)
             return None
     else:
         return None
 
     action = data.get("action")
     if action not in _VALID_ACTIONS:
+        _debug_dump("action_enum", json.dumps(data))
         return None
     try:
         confidence = float(data.get("confidence", 0.0))
