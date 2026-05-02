@@ -1,0 +1,840 @@
+#!/usr/bin/env python
+"""Task 6 real-CLI soak driver.
+
+Runs a 30-minute soak with ``BRIDGE_API_GOV=1``:
+
+    1. Spawns the dashboard server (uvicorn) on the requested port.
+    2. Spawns the SSE consumer (``tools/soak_sse_consumer.py``) so a hang
+       in the driver doesn't break event-count metrics.
+    3. Constructs a GovernanceEngine wired to a soak-only WAL DB
+       (``tmp/soak_gov.db`` by default) and pumps 60 synthetic messages
+       through ``engine.evaluate`` — one every 30s for 30 minutes.
+       The mix is 50× routine ALLOW patterns + 5× L2/L3-trigger prose +
+       5× longer L4-alignment prose.
+    4. Tracks per-minute psutil metrics for the dashboard server PID
+       (RSS, FD/handle count, gov.db row counts).
+    5. After the publish loop, drains a short tail window so the SSE
+       consumer can flush in-flight events, then shuts everything down
+       and writes a markdown report to ``reports/soak-{ISO-ts}.md``.
+
+Usage::
+
+    BRIDGE_API_GOV=1 python tools/soak_driver.py \\
+        --port 8766 \\
+        --gov-db tmp/soak_gov.db \\
+        --total-seconds 1800 \\
+        --interval-seconds 30
+
+Writes ``reports/soak-{ISO-ts}.md`` and exits 0 on PASS / 2 on FAIL.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import json
+import os
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import sqlite3
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+import psutil  # noqa: E402
+
+from stream_manager.governance import GovernanceEngine  # noqa: E402
+from stream_manager.message_bus import MessageBus  # noqa: E402
+from stream_manager.messages import Message  # noqa: E402
+from stream_manager.project_context import load as load_project_context  # noqa: E402
+
+
+# ---- synthetic load mix --------------------------------------------------
+# 50 routine ALLOW patterns + 5 escalation triggers + 5 alignment triggers.
+# Order is shuffled deterministically so a single soak window sees a
+# representative interleave; same seed = same order across runs.
+
+_ROUTINE = [
+    "ruff check src/",
+    "pytest tests/ -q",
+    "git status",
+    "git diff --stat",
+    "ls src/stream_manager",
+    "python -m pytest tests/test_message_bus.py -k publish",
+    "ruff format --check src/",
+    "git log --oneline -n 5",
+    "mypy src/stream_manager",
+    "pre-commit run --all-files",
+    "pytest tests/test_governance.py -q",
+    "git branch --show-current",
+    "git rev-parse HEAD",
+    "ruff check tools/",
+    "pytest tests/test_cli_governance.py -q",
+    "git fetch --prune",
+    "ls -la reports/",
+    "python -c 'import stream_manager; print(stream_manager.__version__)'",
+    "ruff check dashboard/",
+    "pytest -q --collect-only",
+    "git status -sb",
+    "git stash list",
+    "python -m compileall src",
+    "ruff check --fix-only src/",
+    "git diff HEAD~1",
+    "pytest tests/test_decision_graph.py -q",
+    "git log --since=yesterday",
+    "ruff check tests/",
+    "pytest tests/test_hitl.py -q",
+    "git remote -v",
+    "git tag --list",
+    "ls dashboard/static",
+    "git config --get user.email",
+    "pytest tests/test_model_router.py -q",
+    "git show --stat HEAD",
+    "ruff check --select E,F src/",
+    "pytest tests/test_agent_registry.py -q",
+    "git diff --name-only",
+    "ls tools/",
+    "pytest tests/test_project_context.py -q",
+    "ruff check --statistics src/",
+    "git log --all --oneline -n 10",
+    "pytest tests/test_message_bus.py -q",
+    "git config --list --local",
+    "python -m pytest -x -q",
+    "ls src/",
+    "git rev-list --count HEAD",
+    "ruff check . --no-fix",
+    "pytest --version",
+    "git --version",
+]
+
+# Force CLI/L2 escalation: ambiguous prose that won't match precheck or
+# graph patterns. The CLI judge has to reason about whether to ALLOW.
+_L2_L3_TRIGGER = [
+    "I'm not sure whether to refactor this module or extract a new helper -- the boundary feels off.",
+    "This change touches the auth flow; I think it's safe but the test coverage is thin.",
+    "Considering renaming the public API of the bus class -- might break downstream callers.",
+    "Some of the existing patterns suggest one approach but the recent ADR says another.",
+    "Maybe we should drop the legacy compat shim now that the deprecation window has elapsed?",
+]
+
+# Longer / divergent prose intended to flag the L4 alignment layer:
+# multi-step plans, mixed concerns, ambiguous intent.
+_L4_ALIGNMENT = [
+    (
+        "Plan: rip out the old SDK governance path entirely, swap every callsite to the CLI subprocess "
+        "shim, then collapse the two evaluation pipelines into one. While we're in there, also rewrite "
+        "the rate-limit bookkeeping to use a token bucket because the rolling-window approach is "
+        "leaking memory under sustained load and the FR-OG-7 sweep keeps tripping false positives "
+        "when the maturity dashboard is being regenerated mid-flight."
+    ),
+    (
+        "Proposing a wide refactor: collapse messages.py and message_bus.py into a single module, "
+        "drop the dataclass facade, switch to TypedDict everywhere, and migrate the WAL writes to "
+        "asyncio so the dashboard SSE loop can share the same connection pool. This will simplify "
+        "the agent registry interactions and unblock the per-agent override persistence work."
+    ),
+    (
+        "Going to delete the legacy precheck table, regenerate from the latest transcripts, and "
+        "switch the default mode from OBSERVE to SUGGEST in production -- I think the convergence "
+        "monitor is conservative enough now to handle the increased intervention rate without "
+        "regressing the rolling-window stats. Will also flip the HITL floor from 0.60 to 0.50."
+    ),
+    (
+        "Going to silently drop FR-OG-7 maturity tracking from the engine when .sm-context.yaml is "
+        "absent, but also re-enable it for the SM repo itself by hard-coding a fallback artifact "
+        "path -- the dashboard panel is broken on fresh clones and the silent-degrade behaviour is "
+        "confusing on review."
+    ),
+    (
+        "Want to rewrite the CLI governance subprocess to skip the JSON-validation step entirely "
+        "when the model returns more than 200 tokens of prose -- the parse-failure-degrade path "
+        "always reaches ALLOW anyway, so we can shave ~5s off p95 by short-circuiting. Trading a "
+        "small loss of audit signal for a meaningful latency improvement seems fine."
+    ),
+]
+
+
+def _build_payload_sequence(seed: int = 4242) -> list[tuple[str, str]]:
+    """Return a deterministic 60-item interleave of (kind, content)."""
+    import random
+    items: list[tuple[str, str]] = []
+    items.extend(("routine", c) for c in _ROUTINE[:50])
+    items.extend(("l2_l3", c) for c in _L2_L3_TRIGGER)
+    items.extend(("l4", c) for c in _L4_ALIGNMENT)
+    rng = random.Random(seed)
+    rng.shuffle(items)
+    return items
+
+
+# ---- metrics bookkeeping -------------------------------------------------
+
+@dataclass
+class _MinuteSample:
+    minute: int
+    wall: str
+    rss_mb: float | None
+    fd_count: int | None
+    msg_count: int | None
+    decision_count: int | None
+    error: str | None = None
+
+
+@dataclass
+class _DriverState:
+    publish_latencies_s: list[float] = field(default_factory=list)
+    escalation_latencies_s: list[float] = field(default_factory=list)
+    alignment_latencies_s: list[float] = field(default_factory=list)
+    publish_errors: list[str] = field(default_factory=list)
+    samples: list[_MinuteSample] = field(default_factory=list)
+    events_emitted: int = 0
+    decision_actions: dict[str, int] = field(default_factory=dict)
+
+
+def _safe_db_count(db_path: Path, table: str) -> int | None:
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            return int(row[0])
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _safe_proc_metrics(proc: psutil.Process) -> tuple[float | None, int | None, str | None]:
+    rss_mb: float | None = None
+    fds: int | None = None
+    err: str | None = None
+    try:
+        rss_mb = proc.memory_info().rss / (1024 * 1024)
+    except Exception as exc:
+        err = f"rss:{exc}"
+    try:
+        if hasattr(proc, "num_fds"):
+            fds = proc.num_fds()
+        else:
+            fds = proc.num_handles()  # Windows
+    except Exception as exc:
+        err = (err + ";" if err else "") + f"fds:{exc}"
+    return rss_mb, fds, err
+
+
+def _wait_dashboard_ready(port: int, timeout_s: float = 30.0) -> bool:
+    """Probe the dashboard ``/api/stats`` endpoint until 200 or timeout."""
+    import urllib.request
+    import urllib.error
+    deadline = time.monotonic() + timeout_s
+    url = f"http://127.0.0.1:{port}/api/stats"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2.0) as resp:  # noqa: S310
+                if resp.status == 200:
+                    return True
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _spawn_dashboard(port: int, gov_db: Path, log_path: Path) -> subprocess.Popen:
+    env = dict(os.environ)
+    env["GOV_DB"] = str(gov_db)
+    # Ensure the worker process can import the governance package layout.
+    env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fp = log_path.open("w", encoding="utf-8")
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "dashboard.server:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--log-level",
+        "info",
+    ]
+    return subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        env=env,
+        stdout=log_fp,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def _spawn_sse_consumer(
+    port: int, log_path: Path, duration_s: float, stdout_path: Path
+) -> subprocess.Popen:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_fp = stdout_path.open("w", encoding="utf-8")
+    cmd = [
+        sys.executable,
+        str(ROOT / "tools" / "soak_sse_consumer.py"),
+        "--url",
+        f"http://127.0.0.1:{port}/events",
+        "--log",
+        str(log_path),
+        "--duration",
+        str(duration_s),
+    ]
+    return subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        stdout=stdout_fp,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def _terminate(proc: subprocess.Popen | None, label: str, timeout_s: float = 10.0) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            # On Windows, signal.CTRL_BREAK_EVENT requires a new process group.
+            # Plain terminate() is the cleanest portable option.
+            proc.terminate()
+        else:
+            proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            print(f"[soak] {label} did not exit; killing", file=sys.stderr)
+            proc.kill()
+            proc.wait(timeout=5.0)
+    except Exception as exc:
+        print(f"[soak] terminate({label}) raised: {exc}", file=sys.stderr)
+
+
+def _count_sse_events(consumer_log: Path) -> tuple[int, int]:
+    received = 0
+    errors = 0
+    if not consumer_log.exists():
+        return 0, 0
+    with consumer_log.open("r", encoding="utf-8") as fp:
+        for line in fp:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("event") == "sse_event":
+                received += 1
+            elif rec.get("event") == "consumer_error":
+                errors += 1
+    return received, errors
+
+
+def _percentile(data: list[float], pct: int) -> float:
+    if not data:
+        return 0.0
+    s = sorted(data)
+    k = (len(s) - 1) * pct / 100
+    lo, hi = int(k), min(int(k) + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (k - lo)
+
+
+def _write_report(
+    report_path: Path,
+    state: _DriverState,
+    *,
+    started_at_iso: str,
+    ended_at_iso: str,
+    total_runtime_s: float,
+    payloads: list[tuple[str, str]],
+    sse_received: int,
+    sse_errors: int,
+    dashboard_log_path: Path,
+    consumer_log_path: Path,
+    gov_db: Path,
+    server_log_excerpt: str,
+    rss_start: float | None,
+    rss_end: float | None,
+    rss_peak: float | None,
+    fd_start: int | None,
+    fd_end: int | None,
+    cli_present: bool,
+) -> dict[str, object]:
+    emitted = state.events_emitted
+    received = sse_received
+    pct_received = (received / emitted * 100.0) if emitted else 0.0
+
+    rss_drift = None
+    if rss_start is not None and rss_end is not None:
+        rss_drift = rss_end - rss_start
+    fd_drift = None
+    if fd_start is not None and fd_end is not None:
+        fd_drift = fd_end - fd_start
+
+    # Acceptance: 100% events received OR documented loss; RSS drift < 50 MB;
+    # no uncaught exceptions in server log.
+    has_uncaught = (
+        "Traceback (most recent call last)" in server_log_excerpt
+        or "ERROR:" in server_log_excerpt
+    )
+    pass_events = received >= emitted and emitted > 0
+    pass_rss = rss_drift is not None and rss_drift < 50.0
+    pass_no_exc = not has_uncaught
+    overall_pass = pass_events and pass_rss and pass_no_exc
+
+    n_routine = sum(1 for k, _ in payloads if k == "routine")
+    n_l2 = sum(1 for k, _ in payloads if k == "l2_l3")
+    n_l4 = sum(1 for k, _ in payloads if k == "l4")
+
+    lines: list[str] = []
+    lines.append(f"# Soak report -- {started_at_iso}")
+    lines.append("")
+    lines.append(f"- BRIDGE_API_GOV: {os.environ.get('BRIDGE_API_GOV', '')!r}")
+    lines.append(f"- claude CLI on PATH: {cli_present}")
+    lines.append(f"- gov DB: `{gov_db}`")
+    lines.append(f"- dashboard log: `{dashboard_log_path}`")
+    lines.append(f"- consumer log: `{consumer_log_path}`")
+    lines.append(f"- started_at: {started_at_iso}")
+    lines.append(f"- ended_at:   {ended_at_iso}")
+    lines.append(f"- runtime:    {total_runtime_s:.1f}s ({total_runtime_s/60:.1f} min)")
+    lines.append("")
+
+    lines.append("## Verdict")
+    lines.append("")
+    lines.append(f"- **Overall: {'PASS' if overall_pass else 'FAIL'}**")
+    lines.append(
+        f"- 100% events via SSE: {'PASS' if pass_events else 'FAIL'} "
+        f"(emitted={emitted}, received={received}, {pct_received:.1f}%)"
+    )
+    lines.append(
+        f"- RSS drift < 50 MB:    {'PASS' if pass_rss else 'FAIL'} "
+        f"(drift={rss_drift:.2f} MB)" if rss_drift is not None
+        else "- RSS drift < 50 MB:    UNKNOWN (no samples)"
+    )
+    lines.append(
+        f"- No uncaught exceptions in server log: {'PASS' if pass_no_exc else 'FAIL'}"
+    )
+    lines.append("")
+
+    lines.append("## Load mix (planned)")
+    lines.append("")
+    lines.append(f"- routine ALLOW: {n_routine}")
+    lines.append(f"- L2/L3 escalation triggers: {n_l2}")
+    lines.append(f"- L4 alignment triggers: {n_l4}")
+    lines.append(f"- total planned: {len(payloads)}")
+    lines.append(f"- total actually emitted: {emitted}")
+    lines.append("")
+
+    lines.append("## Decision-action distribution")
+    lines.append("")
+    if state.decision_actions:
+        total = sum(state.decision_actions.values()) or 1
+        for action, n in sorted(state.decision_actions.items(), key=lambda kv: -kv[1]):
+            lines.append(f"- {action}: {n} ({n/total*100:.1f}%)")
+    else:
+        lines.append("- (none recorded)")
+    lines.append("")
+
+    lines.append("## Latency (engine.evaluate wall-clock)")
+    lines.append("")
+    if state.publish_latencies_s:
+        lats = state.publish_latencies_s
+        lines.append(f"- count: {len(lats)}")
+        lines.append(f"- min:   {min(lats):.3f}s")
+        lines.append(f"- p50:   {_percentile(lats, 50):.3f}s")
+        lines.append(f"- p95:   {_percentile(lats, 95):.3f}s")
+        lines.append(f"- max:   {max(lats):.3f}s")
+        lines.append(f"- mean:  {statistics.fmean(lats):.3f}s")
+    else:
+        lines.append("- (no latencies recorded)")
+    lines.append("")
+
+    if state.escalation_latencies_s or state.alignment_latencies_s:
+        lines.append("### Per-trigger latency")
+        lines.append("")
+        if state.escalation_latencies_s:
+            e = state.escalation_latencies_s
+            lines.append(
+                f"- L2/L3 trigger n={len(e)} "
+                f"p50={_percentile(e, 50):.2f}s p95={_percentile(e, 95):.2f}s"
+            )
+        if state.alignment_latencies_s:
+            a = state.alignment_latencies_s
+            lines.append(
+                f"- L4 alignment n={len(a)} "
+                f"p50={_percentile(a, 50):.2f}s p95={_percentile(a, 95):.2f}s"
+            )
+        lines.append("")
+
+    lines.append("## Process metrics (per-minute samples on dashboard server PID)")
+    lines.append("")
+    lines.append("| min | wall | RSS MB | FDs | messages | decisions | error |")
+    lines.append("|----:|------|------:|----:|---------:|---------:|------|")
+    for s in state.samples:
+        rss_str = f"{s.rss_mb:.2f}" if s.rss_mb is not None else "n/a"
+        fds_str = str(s.fd_count) if s.fd_count is not None else "n/a"
+        msg_str = str(s.msg_count) if s.msg_count is not None else "n/a"
+        dec_str = str(s.decision_count) if s.decision_count is not None else "n/a"
+        err_str = (s.error or "").replace("|", "/")
+        lines.append(
+            f"| {s.minute} | {s.wall} | {rss_str} | {fds_str} | "
+            f"{msg_str} | {dec_str} | {err_str} |"
+        )
+    lines.append("")
+
+    lines.append("## RSS / FD summary")
+    lines.append("")
+    lines.append(
+        f"- RSS start: {rss_start:.2f} MB" if rss_start is not None
+        else "- RSS start: n/a"
+    )
+    lines.append(
+        f"- RSS end:   {rss_end:.2f} MB" if rss_end is not None
+        else "- RSS end:   n/a"
+    )
+    lines.append(
+        f"- RSS peak:  {rss_peak:.2f} MB" if rss_peak is not None
+        else "- RSS peak:  n/a"
+    )
+    lines.append(
+        f"- RSS drift: {rss_drift:+.2f} MB (acceptance < 50 MB)"
+        if rss_drift is not None else "- RSS drift: n/a"
+    )
+    lines.append(f"- FD start: {fd_start}, FD end: {fd_end}, drift: {fd_drift}")
+    lines.append("")
+
+    lines.append("## SSE consumer")
+    lines.append("")
+    lines.append(f"- received: {received}")
+    lines.append(f"- errors:   {sse_errors}")
+    if emitted:
+        diff = emitted - received
+        if diff > 0:
+            lines.append(
+                f"- LOSS: {diff} bus events emitted by the driver were not "
+                f"observed via SSE during the window. (Note: each evaluate() "
+                f"emits >=1 internal bus message via governance_eval; the "
+                f"dashboard SSE forwards bus events with direction != 'inbound'.)"
+            )
+        elif diff < 0:
+            lines.append(
+                f"- received MORE than emitted ({-diff}); seed-replay (last 25 "
+                f"decisions on connect) and engine-internal bus events "
+                f"(governance_eval, model routing, etc.) account for this."
+            )
+        else:
+            lines.append("- 100% match (or better) across emitted vs received")
+    lines.append("")
+
+    if state.publish_errors:
+        lines.append("## Driver errors")
+        lines.append("")
+        for e in state.publish_errors:
+            lines.append(f"- {e}")
+        lines.append("")
+
+    lines.append("## Dashboard server log (tail)")
+    lines.append("")
+    lines.append("```")
+    lines.append(server_log_excerpt[-4000:] if server_log_excerpt else "(empty)")
+    lines.append("```")
+    lines.append("")
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+
+    return {
+        "overall_pass": overall_pass,
+        "emitted": emitted,
+        "received": received,
+        "rss_drift_mb": rss_drift,
+        "fd_drift": fd_drift,
+        "report_path": str(report_path),
+    }
+
+
+def _check_cli_on_path() -> bool:
+    return shutil.which("claude") is not None or shutil.which("claude.exe") is not None
+
+
+def _write_deferral_report(reason: str) -> Path:
+    path = ROOT / "reports" / "soak-deferred.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    path.write_text(
+        "\n".join(
+            [
+                f"# Soak deferred -- {iso}",
+                "",
+                "Task 6 real-CLI soak could not be run.",
+                "",
+                f"- reason: {reason}",
+                "- BRIDGE_API_GOV requires the `claude` CLI on PATH; without it",
+                "  the L2/L3/L4 escalation path cannot be exercised end-to-end.",
+                "",
+                "## Action",
+                "",
+                "Install `claude` (per https://docs.anthropic.com/) and re-run:",
+                "",
+                "    BRIDGE_API_GOV=1 python tools/soak_driver.py --port 8766",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=8766)
+    ap.add_argument("--gov-db", default="tmp/soak_gov.db")
+    ap.add_argument("--total-seconds", type=float, default=1800.0)
+    ap.add_argument("--interval-seconds", type=float, default=30.0)
+    ap.add_argument(
+        "--drain-seconds",
+        type=float,
+        default=20.0,
+        help="Extra time to keep SSE consumer running after publish loop ends",
+    )
+    ap.add_argument("--seed", type=int, default=4242)
+    ap.add_argument(
+        "--skip-cli-check",
+        action="store_true",
+        help="Don't write a deferral report when claude CLI is missing (testing only)",
+    )
+    args = ap.parse_args()
+
+    cli_present = _check_cli_on_path()
+    if not cli_present and not args.skip_cli_check:
+        path = _write_deferral_report(
+            "`claude` CLI not on PATH; cannot exercise BRIDGE_API_GOV path end-to-end."
+        )
+        print(f"[soak] DEFERRED -- wrote {path}")
+        return 0
+
+    # Force CLI escalation on for the engine.
+    os.environ["BRIDGE_API_GOV"] = "1"
+
+    gov_db = (ROOT / args.gov_db).resolve()
+    gov_db.parent.mkdir(parents=True, exist_ok=True)
+    # Soak should not pollute existing DB. Remove any stale soak DB.
+    for ext in ("", "-wal", "-shm"):
+        p = Path(str(gov_db) + ext)
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+    iso_ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    started_at_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    report_path = ROOT / "reports" / f"soak-{iso_ts}.md"
+    dashboard_log = ROOT / "tmp" / f"soak-dashboard-{iso_ts}.log"
+    consumer_log = ROOT / "tmp" / f"soak-sse-{iso_ts}.ndjson"
+    consumer_stdout = ROOT / "tmp" / f"soak-sse-{iso_ts}.stdout"
+
+    print(f"[soak] starting; report -> {report_path}")
+    print(f"[soak] gov_db = {gov_db}")
+    print(f"[soak] port   = {args.port}")
+    print(f"[soak] runtime= {args.total_seconds:.0f}s")
+
+    dashboard_proc: subprocess.Popen | None = None
+    consumer_proc: subprocess.Popen | None = None
+    bus: MessageBus | None = None
+    state = _DriverState()
+    payloads = _build_payload_sequence(args.seed)[:60]
+    rss_peak: float | None = None
+    rss_start: float | None = None
+    rss_end: float | None = None
+    fd_start: int | None = None
+    fd_end: int | None = None
+    start_mono = time.monotonic()
+
+    try:
+        # 1. Dashboard
+        dashboard_proc = _spawn_dashboard(args.port, gov_db, dashboard_log)
+        if not _wait_dashboard_ready(args.port):
+            raise RuntimeError(
+                f"dashboard did not become ready on port {args.port}; "
+                f"check {dashboard_log}"
+            )
+        try:
+            dash_psutil = psutil.Process(dashboard_proc.pid)
+            rss_start, fd_start, _ = _safe_proc_metrics(dash_psutil)
+            rss_peak = rss_start
+        except Exception as exc:
+            print(f"[soak] could not bind psutil to dashboard PID: {exc}", file=sys.stderr)
+            dash_psutil = None
+
+        # 2. SSE consumer (give it a generous duration covering drain + publish)
+        consumer_duration = args.total_seconds + args.drain_seconds + 30.0
+        consumer_proc = _spawn_sse_consumer(
+            args.port, consumer_log, consumer_duration, consumer_stdout
+        )
+
+        # 3. Engine + bus on the soak DB
+        bus = MessageBus(str(gov_db))
+        session_id = f"soak-{iso_ts}"
+        bus.open_session(session_id, project_slug="soak", pid=os.getpid())
+        snap = load_project_context(str(ROOT))
+        engine = GovernanceEngine(
+            project_context=snap, bus=bus, session_id=session_id
+        )
+
+        # 4. Publish loop with per-minute psutil sampling
+        start_mono = time.monotonic()  # reset to first publish boundary
+        next_publish = start_mono
+        next_sample = start_mono + 60.0
+        next_idx = 0
+        minute = 0
+        deadline = start_mono + args.total_seconds
+
+        # Take an initial sample (minute 0).
+        if dash_psutil is not None:
+            rss_mb, fds, err = _safe_proc_metrics(dash_psutil)
+        else:
+            rss_mb, fds, err = None, None, "no-dash-proc"
+        if rss_mb is not None and (rss_peak is None or rss_mb > rss_peak):
+            rss_peak = rss_mb
+        state.samples.append(
+            _MinuteSample(
+                minute=0,
+                wall=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+                rss_mb=rss_mb,
+                fd_count=fds,
+                msg_count=_safe_db_count(gov_db, "messages"),
+                decision_count=_safe_db_count(gov_db, "decisions"),
+                error=err,
+            )
+        )
+
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+
+            # Per-minute psutil sample
+            if now >= next_sample:
+                minute += 1
+                if dash_psutil is not None:
+                    try:
+                        rss_mb, fds, err = _safe_proc_metrics(dash_psutil)
+                    except Exception as exc:
+                        rss_mb, fds, err = None, None, f"sample:{exc}"
+                else:
+                    rss_mb, fds, err = None, None, "no-dash-proc"
+                if rss_mb is not None and (rss_peak is None or rss_mb > rss_peak):
+                    rss_peak = rss_mb
+                state.samples.append(
+                    _MinuteSample(
+                        minute=minute,
+                        wall=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+                        rss_mb=rss_mb,
+                        fd_count=fds,
+                        msg_count=_safe_db_count(gov_db, "messages"),
+                        decision_count=_safe_db_count(gov_db, "decisions"),
+                        error=err,
+                    )
+                )
+                next_sample += 60.0
+
+            # Publish next message
+            if now >= next_publish and next_idx < len(payloads):
+                kind, content = payloads[next_idx]
+                msg = Message.new(role="user", content=content)
+                t0 = time.perf_counter()
+                try:
+                    decision = engine.evaluate(msg)
+                    state.decision_actions[decision.action] = (
+                        state.decision_actions.get(decision.action, 0) + 1
+                    )
+                    elapsed = time.perf_counter() - t0
+                    state.publish_latencies_s.append(elapsed)
+                    if kind == "l2_l3":
+                        state.escalation_latencies_s.append(elapsed)
+                    elif kind == "l4":
+                        state.alignment_latencies_s.append(elapsed)
+                    state.events_emitted += 1
+                except Exception as exc:
+                    state.publish_errors.append(
+                        f"idx={next_idx} kind={kind}: {exc!r}"
+                    )
+                    print(f"[soak] publish error idx={next_idx}: {exc}", file=sys.stderr)
+                next_idx += 1
+                next_publish += args.interval_seconds
+
+            # Sleep a short tick; do not over-sleep so deadline-honor stays tight.
+            time.sleep(0.5)
+
+        # 5. Drain window so SSE consumer flushes any in-flight events.
+        print(f"[soak] publish loop done; draining {args.drain_seconds:.0f}s")
+        time.sleep(args.drain_seconds)
+
+        # Final sample
+        if dash_psutil is not None:
+            try:
+                rss_end, fd_end, _ = _safe_proc_metrics(dash_psutil)
+                if rss_end is not None and (rss_peak is None or rss_end > rss_peak):
+                    rss_peak = rss_end
+            except Exception:
+                pass
+
+    finally:
+        # Order: stop consumer first (so its log gets a clean consumer_stop),
+        # then dashboard. Read dashboard log AFTER terminating it so we get
+        # the full tail.
+        _terminate(consumer_proc, "sse_consumer")
+        _terminate(dashboard_proc, "dashboard")
+        if bus is not None:
+            try:
+                bus.close_session(session_id)
+            except Exception:
+                pass
+            try:
+                bus.close()
+            except Exception:
+                pass
+
+    ended_at_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    total_runtime = time.monotonic() - start_mono
+    sse_received, sse_errors = _count_sse_events(consumer_log)
+    server_log_excerpt = ""
+    try:
+        if dashboard_log.exists():
+            server_log_excerpt = dashboard_log.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        server_log_excerpt = ""
+
+    summary = _write_report(
+        report_path,
+        state,
+        started_at_iso=started_at_iso,
+        ended_at_iso=ended_at_iso,
+        total_runtime_s=total_runtime,
+        payloads=payloads,
+        sse_received=sse_received,
+        sse_errors=sse_errors,
+        dashboard_log_path=dashboard_log,
+        consumer_log_path=consumer_log,
+        gov_db=gov_db,
+        server_log_excerpt=server_log_excerpt,
+        rss_start=rss_start,
+        rss_end=rss_end,
+        rss_peak=rss_peak,
+        fd_start=fd_start,
+        fd_end=fd_end,
+        cli_present=cli_present,
+    )
+
+    print(f"[soak] wrote {summary['report_path']}")
+    print(
+        f"[soak] emitted={summary['emitted']} received={summary['received']} "
+        f"rss_drift_mb={summary['rss_drift_mb']} verdict="
+        f"{'PASS' if summary['overall_pass'] else 'FAIL'}"
+    )
+    return 0 if summary["overall_pass"] else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
