@@ -1,10 +1,10 @@
 # AdaptiveBridge — Requirements & Planning Document
 
 **Document type:** PRD + RFC + ADR hybrid
-**Version:** 1.0 (initial)
+**Version:** 1.10 (sync-comms scope freeze)
 **Status:** Draft for review
 **Owner:** TBD
-**Last updated:** 2026-05-01
+**Last updated:** 2026-05-02
 
 ---
 
@@ -97,6 +97,18 @@ Claude Desktop Orchestration
 | Orchestrator | Wires everything together, lifecycle, status, maintenance | `__main__.py` |
 | CLI Client | Wraps real `claude` subprocess; proxies stdin/stdout | `cli_client.py` |
 | Desktop Client | Reference implementation for Desktop-side WS connection | `desktop_client.py` |
+
+### 3.2 Multi-session model
+
+A single SM process governs N concurrent governed sessions. Per-session engine state is isolated; cross-session signal flows only through SQLite reads (never shared mutable memory). This preserves the SM-never-self-monitor invariant and prevents cross-session contamination of pattern confidence.
+
+**NFR-MS-1** — A single SM process MUST govern N concurrent sessions with isolated engine state per `session_id`. Each session has its own decision-graph, mode ladder, and HITL queue instance.
+
+**NFR-MS-2** — Patterns reaching L3 in any session MUST enter the HITL queue with `trigger_reason=cross_session_flag` for operator approval before they can influence other sessions.
+
+**NFR-MS-3** — New session engines MUST hydrate cross-session-flagged patterns from SQLite at L1 advisory only; promotion to L2+ in the new session requires local re-validation against that session's own observations.
+
+**NFR-MS-4** — No in-memory mutable state MUST be shared across session engines; all cross-session signal flows through SQLite reads. Per-session engines may read a shared `patterns` table but MUST NOT hold references to one another's in-process objects.
 
 ---
 
@@ -262,6 +274,8 @@ JSONL tail MUST be non-blocking: a lag or parse failure in the tail MUST NOT del
 
 FR-OG-7 activates only when `.sm-context.yaml` includes a maturity score artifact in its spotlight. Projects without a maturity harness are unaffected.
 
+**Loud-degrade behavior:** When `.sm-context.yaml` is missing entirely (e.g. fresh clone, CI environment, or untracked local-only file), SM MUST emit a single `og7_unconfigured` bus event at startup and the dashboard MUST surface a banner naming the missing config and the FR-OG-7 signals that are silently inactive. Loud-degrade is preferred over silent no-op so the operator sees that maturity-aware governance is off, rather than assuming the harness is running.
+
 ### 4.9 Human-in-the-Loop (FR-HITL)
 
 **FR-HITL-1** — SM MUST support two HITL operating modes, switchable at runtime via the dashboard UI:
@@ -414,6 +428,20 @@ Non-actionable cards MUST NOT render the pulsing border or the `ACTION REQUIRED`
 
 Settings changes MUST take effect without a page reload and emit a `dashboard_settings_changed` bus event for audit.
 
+### 4.11 Active orchestration (FR-DC)
+
+SM transitions from passive observer to active orchestrator via a control plane: HMAC-signed `desktop_command` events that the governed session's hook consumer validates and ack-replies. The control plane bypasses governance to avoid the meta-loop where SM governs SM (see ADR-12).
+
+**FR-DC-1** — SM MUST emit HMAC-SHA256-signed `desktop_command` events for the following kinds: `pause`, `foreground`, `flash`, `audible_cue`, `surface_hitl`, `request_attention`. The kind set is closed; unknown kinds MUST be rejected at emit time.
+
+**FR-DC-2** — The governed-session consumer (Claude Code hook) MUST validate the HMAC-SHA256 signature of every `desktop_command` against the shared secret. Signature mismatch MUST produce a `desktop_command_ack` with `status='rejected'` and reason `signature_invalid`; the command MUST NOT take effect.
+
+**FR-DC-3** — Every `desktop_command` MUST produce a `desktop_command_ack` within `TTL=30s` of emission. Beyond TTL the command status MUST transition to `expired`; the SM MUST record the expiry in the bus and surface it in the dashboard.
+
+**FR-DC-4** — The SM dashboard MUST render a **Session Mirror frame** that shows the governed-session tool stream live (`tool_call` + `tool_result` events as they arrive). The mirror is read-only; user input on the mirror is not forwarded to the governed session.
+
+**FR-DC-5** — The Session Mirror frame and the `desktop_command` emit endpoints MUST filter `session_id != SM_OWN_SESSION_ID`. SM MUST NOT mirror or command its own session — this enforces the SM-never-self-monitor invariant at the transport layer in addition to the engine layer.
+
 ---
 
 ## 5. Non-functional requirements
@@ -543,6 +571,18 @@ Settings changes MUST take effect without a page reload and emit a `dashboard_se
 **Decision:** Default UI is three independent frames (Interactive Sessions REPL, Sub-Agents, Background Jobs). Foreground escalation is severity-graded: only `desktop_pause`, `negative_regression`, and static-rule fires auto-foreground; `new_pattern`, `low_confidence`, and variance alerts flag in place via badges. HITL ON drives an `ACTION REQUIRED` ranked-suggestion flow (FR-UI-5); HITL OFF is monitor-only with per-card `Take action` opt-in.
 **Alternatives considered:** Single unified feed (rejected — mixes interactive vs. async vs. background concerns; user can't filter attention); modal popup on every flag (rejected — interrupts work, trains the user to dismiss reflexively); per-frame separate browser windows (rejected — loses the at-a-glance overview that catches cross-frame correlations).
 **Consequences:** User controls attention; badges enable async monitoring without losing critical events. Layout persistence per-session preserves user preference. Decision-suggestion API (FR-UI-5) creates a single contract that both the HITL Override panel and the HITL-OFF read-only card consume, so SM's memory is exposed identically in both modes. Adds one new API endpoint and one new local-storage key; no schema change required (suggestions derive from existing `patterns`, `decisions`, `hitl_overrides` tables).
+
+### ADR-12 — Control plane bypasses governance
+**Context:** Active orchestration (FR-DC-1..5) requires SM to emit `desktop_command` events to the governed session. If those commands flowed through `engine.evaluate()` like any other message, SM would be governing its own outbound control traffic — the exact meta-loop the SM-never-self-monitor invariant forbids. It would also race: a `pause` command blocked by governance would deadlock against the very pause it was trying to enact.
+**Decision:** `desktop_command` events skip `engine.evaluate()`. They undergo schema validation, HMAC signature validation (FR-DC-2), and a closed-kind allowlist check (FR-DC-1) only. They never enter the decision graph and never appear in the `decisions` table; their lifecycle is tracked in a dedicated `desktop_commands` table with the matching `desktop_command_ack` rows.
+**Alternatives considered:** Route control plane through governance with a special "is_control_plane" bypass flag (rejected — flag itself becomes a meta-loop attack surface); separate process for control plane (rejected — adds IPC complexity for what is already a signed message); no control plane, dashboard-only signalling (rejected — defeats the purpose of FR-DC active orchestration).
+**Consequences:** Clean separation: governance is for governed-session traffic; control plane is for SM→hook directives. Matches SM-never-self-monitor at the engine layer (FR-DC-5 enforces it at the transport layer). Schema + HMAC + allowlist gives three independent validation gates; an attacker would need to forge HMAC AND match the closed kind set to inject a command.
+
+### ADR-13 — Shared single-secret HMAC for v1.0
+**Context:** Per-instance keypairs (one keypair per SM ↔ hook pair) would be the textbook secure-by-default choice for FR-DC-2 signature validation. They also require key distribution, rotation, and per-instance bookkeeping that the v1.0 single-user single-laptop scope does not justify.
+**Decision:** v1.0 uses a single shared HMAC secret across all SM instances and all governed-session hooks on the user's machine. The secret is provisioned once via `BRIDGE_HMAC_SECRET` env var (or auto-generated to `~/.adaptivebridge/hmac.secret` with `0600` perms on first run). Per-instance keypairs are deferred indefinitely.
+**Alternatives considered:** Per-instance keypairs (rejected for v1.0 — overhead unjustified at single-user scope); no signature, only `localhost` binding (rejected — local malware on the same machine could forge `desktop_command` events into the bus); rotating shared secrets on a schedule (rejected — adds rotation machinery without changing the trust boundary).
+**Consequences:** One secret to provision and protect. Trust boundary is the user's local machine; any process able to read the secret file is trusted. Acceptable for v1.0 single-user scope. If multi-user or multi-machine scope is added later, ADR-13 is revisited and per-instance keypairs become the path forward.
 
 ---
 
@@ -720,3 +760,4 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | 1.7 | 2026-05-02 | SeanHoppe | §4.10 FR-UI: three-frame split-pane (Interactive REPL / Sub-Agents tabs / Background Jobs); FR-UI-3 severity-graded foreground (desktop_pause auto-foreground, new_pattern/low_conf/variance flag-in-place); FR-UI-4 HITL-on ranked suggestions vs HITL-off monitor-only with per-card Take action; FR-UI-5 decision-suggestion API; FR-UI-6 badge spec (ACTION REQUIRED / OBSERVING / DECIDED / BLOCKED / WARN / TIMEOUT); FR-HITL-4 extended with FR-UI-6 cues + suggestion list; §5.7 NFR-UI-1–7 legibility (WCAG AA, system fonts, solid color tokens, focus rings, reduced-motion); ADR-11 |
 | 1.8 | 2026-05-02 | SeanHoppe | FR-UI refinements: Bg Jobs frame = generic CLI subprocesses (job name + PID leading cell); Sub-Agents swim-lane = last 10 agents, active pinned top, agent name leading cell; FR-UI-4 `Take action` promotes session to HITL ON (not one-off); FR-UI-3 audible cue default OFF, UI-toggleable; FR-UI-5 ranking weights tunable via `.sm-context.yaml` `decision_suggestion_weights`; FR-UI-9 Settings panel spec |
 | 1.9 | 2026-05-02 | SeanHoppe | FR-UI follow-ups: FR-UI-1 frame B "active" = configurable activity window (default 10 s, set via FR-UI-9); FR-UI-4 `Take action` promotion explicit SYNC default + emits `hitl_mode_promoted` bus event; FR-UI-5 weights validation = **hard-fail startup** on bad config (not fallback); FR-UI-9 adds Sub-Agents activity window setting (1–600 s) |
+| 1.10 | 2026-05-02 | SeanHoppe | sync-comms scope freeze: §4.11 FR-DC-1..5 (HMAC-signed `desktop_command` control plane + Session Mirror frame + no-self-monitor transport filter); §3.2 NFR-MS-1..4 (multi-session model with isolated per-session engines, cross-session L3-flag HITL gate, SQLite-only cross-session signal); ADR-12 (control plane bypasses governance) + ADR-13 (shared single-secret HMAC for v1.0). ADR-5 latency budget revised for CLI subprocess path (NFR-P2: p50 ≤ 7s, p95 ≤ 15s, hard timeout 25s). FR-OG-7 loud-degrade behavior on missing `.sm-context.yaml`. Equivalent to ship-plan Task H "v1.7" — numbering advanced because v1.7–v1.9 were consumed by intervening FR-UI work. |
