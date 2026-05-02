@@ -37,12 +37,21 @@ class AgentProfile:
     example_agents: list[str]
 
 
+_VALID_OVERRIDE_MODES: frozenset[str] = frozenset(
+    {"OBSERVE", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"}
+)
+
+
 @dataclass
 class AgentRegistry:
     profiles_path: Path
     _profiles: dict[str, AgentProfile] = field(default_factory=dict)
     _by_example: dict[str, AgentProfile] = field(default_factory=dict)
     _active: dict[str, AgentProfile] = field(default_factory=dict)
+    # Phase 6 follow-up: per-agent mode override storage.
+    # session_id -> agent_id -> mode_str. Override applies to default_action
+    # only; profile blocked_ops/restricted_ops still fire (safety floor).
+    _overrides: dict[str, dict[str, str]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -148,3 +157,58 @@ class AgentRegistry:
     def all_active(self) -> dict[str, AgentProfile]:
         with self._lock:
             return dict(self._active)
+
+    # ── Phase 6 follow-up: per-agent mode override API ─────────────────
+    #
+    # Override applies to ``profile.default_action`` only. Profile
+    # ``blocked_ops`` / ``restricted_ops`` still fire — operators cannot
+    # downgrade safety constraints by setting OBSERVE. Storage is in-memory;
+    # writes take the registry lock, single-key reads are GIL-safe.
+
+    def set_mode_override(
+        self,
+        session_id: str,
+        agent_id: str,
+        mode: str | None,
+    ) -> None:
+        """Set or clear a per-agent governance mode override.
+
+        ``mode=None`` removes the override (revert to profile default).
+        Any other value must be one of OBSERVE/SUGGEST/GUIDE/INTERVENE/BLOCK
+        — otherwise raises ``ValueError``.
+        """
+        if mode is not None and mode not in _VALID_OVERRIDE_MODES:
+            raise ValueError(
+                f"mode must be one of {sorted(_VALID_OVERRIDE_MODES)} or None"
+            )
+        with self._lock:
+            if mode is None:
+                sess_map = self._overrides.get(session_id)
+                if sess_map and agent_id in sess_map:
+                    del sess_map[agent_id]
+                    if not sess_map:
+                        self._overrides.pop(session_id, None)
+                return
+            self._overrides.setdefault(session_id, {})[agent_id] = mode
+
+    def get_mode_override(
+        self, session_id: str, agent_id: str
+    ) -> str | None:
+        """Return the active mode override for (session, agent), or None."""
+        sess_map = self._overrides.get(session_id)
+        if not sess_map:
+            return None
+        return sess_map.get(agent_id)
+
+    def get_session_overrides(self, session_id: str) -> dict[str, str]:
+        """Return a copy of {agent_id: mode} for the session."""
+        sess_map = self._overrides.get(session_id)
+        if not sess_map:
+            return {}
+        with self._lock:
+            return dict(sess_map)
+
+    def clear_session_overrides(self, session_id: str) -> None:
+        """Drop all overrides for ``session_id`` (convenience for teardown)."""
+        with self._lock:
+            self._overrides.pop(session_id, None)

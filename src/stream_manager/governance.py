@@ -19,6 +19,7 @@ from stream_manager.model_router import (
     ConvergenceMonitor,
     ModelLayer,
     RoutingDecision,
+    get_l2_model,
     route,
 )
 from stream_manager.project_context import ProjectContextSnapshot, fast_precheck
@@ -126,6 +127,23 @@ def _classify_ops(content: str) -> set[str]:
     if _FILE_READ_RE.search(content):
         ops.add("file_read")
     return ops
+
+
+# Phase 4 follow-up / NFR-M2: keywords that mark a message as an
+# "alignment-requiring action" — i.e. a release/merge/deploy or an action
+# in oversight/ paths. When this fires AND maturity is active AND FR-OG-7
+# would consider the message, the pre-routing pass classifies the call as
+# L4 so the CLI subprocess runs against Sonnet (BRIDGE_L4_MODEL) instead
+# of Haiku. Heuristic only — substring match, no NLP.
+_ALIGNMENT_KEYWORDS: tuple[str, ...] = ("release", "merge", "deploy", "oversight/")
+
+
+def _looks_alignment_action(content: str) -> bool:
+    """True if message content appears to be an alignment-requiring action."""
+    if not content:
+        return False
+    lowered = content.lower()
+    return any(kw in lowered for kw in _ALIGNMENT_KEYWORDS)
 
 
 _ACTION_RANK: dict[str, int] = {
@@ -338,6 +356,19 @@ class GovernanceEngine:
         new_action = decision.action
         new_reason = decision.reasoning
 
+        # Phase 6 follow-up: a per-agent override replaces profile.default_action
+        # ONLY. blocked_ops/restricted_ops still fire — operators cannot lower
+        # the safety floor by setting OBSERVE.
+        override = None
+        if self.registry is not None and self.session_id:
+            try:
+                override = self.registry.get_mode_override(
+                    self.session_id, profile.slug
+                )
+            except Exception:
+                override = None
+        effective_default = override if override else profile.default_action
+
         # Restricted ops: cap final action at profile.escalate_to.
         restricted_hit = ops & set(profile.restricted_ops)
         if restricted_hit:
@@ -362,6 +393,20 @@ class GovernanceEngine:
                     f"{profile.confidence_floor:.2f} (got "
                     f"{decision.confidence:.2f}) -> escalated to GUIDE; "
                     f"{decision.reasoning}"
+                )
+                changed = True
+
+        # Default-action floor: when an operator override is set, ensure
+        # the final action is at least as restrictive as the override.
+        # Without an override we preserve Phase 1 behavior (no default_action
+        # enforcement) to keep backward compat.
+        if override:
+            floored_default = _cap_action(new_action, effective_default)
+            if floored_default != new_action:
+                new_action = floored_default
+                new_reason = (
+                    f"agent_profile {profile.slug} override={effective_default}"
+                    f" -> floored; {decision.reasoning}"
                 )
                 changed = True
 
@@ -583,7 +628,23 @@ class GovernanceEngine:
                 # within the existing 4000-char content budget.
                 joined = " | ".join(notes)[:250]
                 cli_content = f"[HITL notes: {joined}]\n\n{msg.content}"
-        cli_decision = self._maybe_cli_evaluate(cli_content)
+        # Phase 4 follow-up / NFR-M2: pre-route the CLI call so the
+        # subprocess uses the right tier. At this point precheck missed and
+        # no high-confidence graph match resolved it, so the source is "cli"
+        # (L3 by default). If the message looks like an alignment-requiring
+        # action AND maturity is wired (FR-OG-7 active), promote to L4 →
+        # Sonnet. Otherwise fall back to Haiku (L2/L3 model).
+        pre_requires_alignment = (
+            self.maturity is not None
+            and _looks_alignment_action(msg.content)
+        )
+        pre_routing = route(
+            source="cli",
+            confidence=0.0,
+            requires_alignment=pre_requires_alignment,
+        )
+        cli_model_id = pre_routing.model_id or get_l2_model()
+        cli_decision = self._maybe_cli_evaluate(cli_content, cli_model_id)
         if cli_decision is not None:
             decision = self._apply_mode(
                 GovDecision(
@@ -614,18 +675,17 @@ class GovernanceEngine:
             source="default",
         )
 
-    def _maybe_cli_evaluate(self, content: str):
+    def _maybe_cli_evaluate(self, content: str, model_id: str | None = None):
         if not _cli_enabled():
             return None
         if self._cli_governor is None:
             self._cli_governor = CliGovernor(self.project_context)
-        # Phase 4 / NFR-M2: CLI escalation occurs when neither precheck nor
-        # a high-confidence graph match resolved the message — that is the
-        # L3 (pattern inference) tier, which uses the Haiku model. We pass
-        # the routed model id explicitly so the subprocess uses --model
-        # {haiku} regardless of the CLI default.
-        from stream_manager.model_router import get_l2_model
-        return self._cli_governor.evaluate(content, model_id=get_l2_model())
+        # Phase 4 / NFR-M2: caller selects the model tier via the
+        # pre-routing pass in _evaluate_inner_core. When omitted, fall back
+        # to the L2/L3 Haiku default for backward compatibility with
+        # callers that haven't been updated.
+        chosen = model_id if model_id is not None else get_l2_model()
+        return self._cli_governor.evaluate(content, model_id=chosen)
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:

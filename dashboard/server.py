@@ -44,13 +44,12 @@ _hitl_runtime_settings: dict[str, object] = {
     "pause_detection_enabled": True,
 }
 
-# ── Phase 6 §1: Per-agent governance mode override ─────────────────────
-# In-memory map: session_id -> agent_id -> mode. Persists for the life
-# of the dashboard process only (no WAL persistence). Note: this map is
-# read by the dashboard UI via GET /api/agents; mid-flight enforcement
-# in the governance engine is out of scope for Phase 6 (follow-up).
+# ── Phase 6 §1 + follow-up: Per-agent governance mode override ─────────
+# Storage moved to AgentRegistry so the engine and dashboard share the
+# same source of truth. Override applies to profile.default_action only
+# (safety floor preserved — blocked_ops still fire).
 _VALID_OVERRIDE_MODES = {"OBSERVE", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"}
-_mode_overrides: dict[str, dict[str, str]] = {}
+_registry = None  # type: ignore[var-annotated]
 
 
 def _get_bus():
@@ -63,6 +62,28 @@ def _get_bus():
         except Exception:
             _bus = None
     return _bus
+
+
+def _get_registry():
+    """Return a lazily-initialized shared AgentRegistry singleton.
+
+    The registry holds per-agent mode overrides for the dashboard
+    process. The governance engine running in-process can be wired to
+    the same instance by having the engine accept a pre-built registry.
+    Returns None on import/load failure (override storage will degrade
+    gracefully — POST returns 422 in that case).
+    """
+    global _registry
+    if _registry is None:
+        try:
+            from stream_manager.agent_registry import AgentRegistry
+            profiles_path = (
+                ROOT / "src" / "stream_manager" / "agent_profiles.yaml"
+            )
+            _registry = AgentRegistry(profiles_path=profiles_path)
+        except Exception:
+            _registry = None
+    return _registry
 
 
 def _get_hitl_queue():
@@ -313,6 +334,7 @@ async def api_agents(session_id: str | None = None, limit: int = 50):
             ).fetchall()
         conn.close()
         out = []
+        registry = _get_registry()
         for r in rows:
             d = dict(r)
             d["is_sidechain"] = bool(d.get("is_sidechain"))
@@ -320,8 +342,8 @@ async def api_agents(session_id: str | None = None, limit: int = 50):
             sess = d.get("session_id")
             slug = d.get("profile_slug")
             override = None
-            if sess and slug:
-                override = _mode_overrides.get(str(sess), {}).get(str(slug))
+            if sess and slug and registry is not None:
+                override = registry.get_mode_override(str(sess), str(slug))
             d["mode_override"] = override
             out.append(d)
         return out
@@ -850,20 +872,16 @@ async def api_agent_override_mode(agent_id: str, request: Request):
         return JSONResponse(
             {"error": "no active session to override"}, status_code=422
         )
-    if mode is None:
-        # Clear override.
-        sess_map = _mode_overrides.get(session_id)
-        if sess_map and agent_id in sess_map:
-            del sess_map[agent_id]
-            if not sess_map:
-                _mode_overrides.pop(session_id, None)
-        return {"ok": True, "session_id": session_id, "agent_id": agent_id, "mode": None}
-    if not isinstance(mode, str) or mode not in _VALID_OVERRIDE_MODES:
+    registry = _get_registry()
+    if registry is None:
         return JSONResponse(
-            {"error": f"mode must be one of {sorted(_VALID_OVERRIDE_MODES)} or null"},
-            status_code=422,
+            {"error": "registry unavailable"}, status_code=503
         )
-    _mode_overrides.setdefault(session_id, {})[agent_id] = mode
+    # Validation lives in the registry (raises ValueError); surface as 422.
+    try:
+        registry.set_mode_override(session_id, agent_id, mode)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
     return {
         "ok": True,
         "session_id": session_id,

@@ -79,6 +79,99 @@ def test_blocked_ops_returns_block_in_governance_evaluate(
     assert decision.source == "agent_profile:code_reviewer"
 
 
+def test_set_mode_override_round_trip(registry: AgentRegistry) -> None:
+    assert registry.get_mode_override("s1", "developer") is None
+    registry.set_mode_override("s1", "developer", "BLOCK")
+    assert registry.get_mode_override("s1", "developer") == "BLOCK"
+    # Independent (session, agent) keys are isolated.
+    assert registry.get_mode_override("s2", "developer") is None
+    assert registry.get_mode_override("s1", "code_reviewer") is None
+
+
+def test_set_mode_override_clear_removes(registry: AgentRegistry) -> None:
+    registry.set_mode_override("s1", "developer", "GUIDE")
+    assert registry.get_mode_override("s1", "developer") == "GUIDE"
+    registry.set_mode_override("s1", "developer", None)
+    assert registry.get_mode_override("s1", "developer") is None
+    # Session map is also pruned when empty.
+    assert registry.get_session_overrides("s1") == {}
+
+
+def test_set_mode_override_rejects_invalid(registry: AgentRegistry) -> None:
+    with pytest.raises(ValueError):
+        registry.set_mode_override("s1", "developer", "FROBNICATE")
+    with pytest.raises(ValueError):
+        registry.set_mode_override("s1", "developer", "block")  # case-sensitive
+    # None is valid (clear).
+    registry.set_mode_override("s1", "developer", None)
+
+
+def test_get_session_overrides_shape(registry: AgentRegistry) -> None:
+    registry.set_mode_override("s1", "developer", "GUIDE")
+    registry.set_mode_override("s1", "code_reviewer", "BLOCK")
+    registry.set_mode_override("s2", "developer", "OBSERVE")
+    s1 = registry.get_session_overrides("s1")
+    assert s1 == {"developer": "GUIDE", "code_reviewer": "BLOCK"}
+    s2 = registry.get_session_overrides("s2")
+    assert s2 == {"developer": "OBSERVE"}
+    assert registry.get_session_overrides("nonexistent") == {}
+
+
+def test_clear_session_overrides_drops_all(registry: AgentRegistry) -> None:
+    registry.set_mode_override("s1", "developer", "GUIDE")
+    registry.set_mode_override("s1", "code_reviewer", "BLOCK")
+    registry.clear_session_overrides("s1")
+    assert registry.get_session_overrides("s1") == {}
+    assert registry.get_mode_override("s1", "developer") is None
+
+
+def test_override_block_enforced_in_governance(registry: AgentRegistry) -> None:
+    # developer profile default_action=ALLOW; override → BLOCK.
+    dev = registry.resolve("Dave", "", is_sidechain=False)
+    assert dev.slug == "developer"
+    engine = _engine(registry, mode=Mode.BLOCK)
+    registry.update_active("test-session", dev)
+    registry.set_mode_override("test-session", "developer", "BLOCK")
+
+    # Innocuous content that hits no precheck and no graph match — would
+    # normally hit the default ALLOW branch with confidence 0.1.
+    msg = Message.new(role="user", content="hello world")
+    decision = engine.evaluate(msg)
+    assert decision.action == "BLOCK"
+    assert decision.source == "agent_profile:developer"
+
+
+def test_override_none_falls_back_to_phase1_behavior(
+    registry: AgentRegistry,
+) -> None:
+    # No override → behavior matches Phase 1: default ALLOW for innocuous
+    # content under the developer profile.
+    dev = registry.resolve("Dave", "", is_sidechain=False)
+    engine = _engine(registry, mode=Mode.BLOCK)
+    registry.update_active("test-session", dev)
+    # Explicit no-override.
+    assert registry.get_mode_override("test-session", "developer") is None
+
+    msg = Message.new(role="user", content="hello world")
+    decision = engine.evaluate(msg)
+    assert decision.action == "ALLOW"
+
+
+def test_override_does_not_bypass_blocked_ops(registry: AgentRegistry) -> None:
+    # code_reviewer (Jen) blocks shell_command. Setting override=OBSERVE
+    # must NOT bypass blocked_ops — the safety floor is preserved.
+    jen = registry.resolve("Jen", "", is_sidechain=False)
+    assert "shell_command" in jen.blocked_ops
+    engine = _engine(registry, mode=Mode.BLOCK)
+    registry.update_active("test-session", jen)
+    registry.set_mode_override("test-session", "code_reviewer", "OBSERVE")
+
+    msg = Message.new(role="user", content="bash run pytest -v")
+    decision = engine.evaluate(msg)
+    assert decision.action == "BLOCK"
+    assert decision.source == "agent_profile:code_reviewer"
+
+
 def test_restricted_ops_caps_action_at_escalate_to(
     registry: AgentRegistry,
 ) -> None:
