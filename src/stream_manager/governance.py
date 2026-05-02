@@ -356,6 +356,19 @@ class GovernanceEngine:
         new_action = decision.action
         new_reason = decision.reasoning
 
+        # Phase 6 follow-up: a per-agent override replaces profile.default_action
+        # ONLY. blocked_ops/restricted_ops still fire — operators cannot lower
+        # the safety floor by setting OBSERVE.
+        override = None
+        if self.registry is not None and self.session_id:
+            try:
+                override = self.registry.get_mode_override(
+                    self.session_id, profile.slug
+                )
+            except Exception:
+                override = None
+        effective_default = override if override else profile.default_action
+
         # Restricted ops: cap final action at profile.escalate_to.
         restricted_hit = ops & set(profile.restricted_ops)
         if restricted_hit:
@@ -380,6 +393,20 @@ class GovernanceEngine:
                     f"{profile.confidence_floor:.2f} (got "
                     f"{decision.confidence:.2f}) -> escalated to GUIDE; "
                     f"{decision.reasoning}"
+                )
+                changed = True
+
+        # Default-action floor: when an operator override is set, ensure
+        # the final action is at least as restrictive as the override.
+        # Without an override we preserve Phase 1 behavior (no default_action
+        # enforcement) to keep backward compat.
+        if override:
+            floored_default = _cap_action(new_action, effective_default)
+            if floored_default != new_action:
+                new_action = floored_default
+                new_reason = (
+                    f"agent_profile {profile.slug} override={effective_default}"
+                    f" -> floored; {decision.reasoning}"
                 )
                 changed = True
 
