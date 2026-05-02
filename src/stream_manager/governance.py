@@ -195,6 +195,11 @@ class GovernanceEngine:
     # Phase 4: routing decision attached during _evaluate_inner so the outer
     # evaluate() can persist model_used/layer and feed the convergence monitor.
     _last_routing: RoutingDecision | None = None
+    # Task F: True once the cross-session Hydrator thread (or sync hydrate)
+    # has injected operator-approved cross_session=1 patterns. evaluate()
+    # does NOT block on this — pre-hydration decisions just skip the
+    # cross-session advisory (no graph entry → no match, like today).
+    hydrated: bool = False
 
     def signal_desktop_pause(self) -> None:
         """Mark the next evaluate() as following a Desktop end_turn pause.
@@ -749,7 +754,72 @@ class GovernanceEngine:
         self._update_mode()
 
     def observe_for_learning(self, msg: Message, success: bool) -> None:
-        self.graph.observe(msg.content, success)
+        # Snapshot levels before observe() so we can detect L2→L3 transitions
+        # for cross-session HITL flagging (Task F).
+        pre_levels = {h: int(p.level) for h, p in self.graph.patterns.items()}
+        pattern = self.graph.observe(msg.content, success)
+        self._maybe_emit_cross_session_hitl(msg, pattern, pre_levels)
+
+    def _maybe_emit_cross_session_hitl(
+        self,
+        msg: Message,
+        pattern: object,
+        pre_levels: dict[str, int],
+    ) -> None:
+        """Emit a HITL queue entry when a pattern transitions to L3.
+
+        OQ5/OQ6/OQ8: cross-session promotion is gated on operator approval.
+        Auto-flagging is replaced by a HITL row with trigger_reason
+        "cross_session_flag" and proposed_action "flag_cross_session:<hash>"
+        so the resolution dispatcher can recover the hash without a schema
+        change.
+        """
+        if self.bus is None or not self.session_id:
+            return
+        try:
+            new_level = int(getattr(pattern, "level", 0))
+            new_hash = str(getattr(pattern, "hash", ""))
+        except Exception:
+            return
+        if new_level < 3 or not new_hash:
+            return
+        if pre_levels.get(new_hash, -1) >= 3:
+            return  # already at L3+; not a fresh transition
+
+        # Persist the pattern to the bus so the Hydrator can find it once
+        # the operator approves the cross-session flag.
+        try:
+            self.bus.upsert_pattern(
+                hash=new_hash,
+                level=new_level,
+                occurrences=int(getattr(pattern, "occurrences", 0)),
+                success_rate=float(getattr(pattern, "success_rate", 0.0)),
+                last_seen=float(getattr(pattern, "last_seen", time.time())),
+                payload=str(getattr(pattern, "canonical_text", "")),
+            )
+        except Exception:
+            log.exception("cross-session: upsert_pattern failed")
+            return
+
+        # Anchor the HITL row to a fresh bus message so existing pending
+        # joins on messages.session_id continue to work for filtering.
+        try:
+            anchor = _msg_bus.Message.new(
+                session_id=self.session_id,
+                type="cross_session_promotion",
+                direction="internal",
+                content=str(getattr(pattern, "canonical_text", new_hash))[:200],
+                metadata={"matched_hash": new_hash, "level": new_level},
+            )
+            self.bus.publish(anchor)
+            self.bus.queue_hitl(
+                message_id=anchor.id,
+                proposed_action=f"flag_cross_session:{new_hash}",
+                proposed_confidence=0.9,
+                trigger_reason="cross_session_flag",
+            )
+        except Exception:
+            log.exception("cross-session: queue_hitl failed")
 
     def _update_mode(self) -> None:
         if len(self._eligible_window) < ROLLING_WINDOW:
@@ -822,6 +892,8 @@ class EngineRegistry:
         hitl: HitlQueue | None = None,
         maturity: MaturityReader | None = None,
         rate_limit_per_min: int = DEFAULT_RATE_LIMIT_PER_MIN,
+        auto_refresh: bool = False,
+        refresh_interval_s: float = 60.0,
     ) -> None:
         self._bus = bus
         self._project_context = project_context
@@ -832,6 +904,14 @@ class EngineRegistry:
         self._rate_limit_per_min = rate_limit_per_min
         self._engines: dict[str, GovernanceEngine] = {}
         self._lock = threading.RLock()
+        # Task F: cross-session pattern refresh. Disabled by default —
+        # auto-start causes timer-driven flakiness in tests. Long-lived
+        # processes opt in via auto_refresh=True or start_refresh().
+        self._refresh_interval_s = float(refresh_interval_s)
+        self._refresh_timer: threading.Timer | None = None
+        self._refresh_stopped = True
+        if auto_refresh:
+            self.start_refresh()
 
     @staticmethod
     def _sm_own_session_id() -> str:
@@ -860,6 +940,16 @@ class EngineRegistry:
                 rate_limit_per_min=self._rate_limit_per_min,
             )
             self._engines[session_id] = eng
+            # Task F: spawn cross-session Hydrator (daemon) so the engine
+            # picks up operator-approved cross_session=1 patterns. evaluate()
+            # does NOT block on hydrated — pre-hydration decisions just skip
+            # the cross-session advisory.
+            if self._bus is not None:
+                try:
+                    from stream_manager.cross_session_hydrator import Hydrator
+                    Hydrator(eng, self._bus).start()
+                except Exception:
+                    log.exception("registry: hydrator spawn failed")
             return eng
 
     def close(self, session_id: str) -> None:
@@ -878,3 +968,66 @@ class EngineRegistry:
     def __contains__(self, session_id: object) -> bool:
         with self._lock:
             return session_id in self._engines
+
+    # ── Task F: periodic cross-session pattern refresh ────────────────
+
+    def refresh_all(self) -> int:
+        """Re-hydrate every active engine from bus.cross_session=1 rows.
+
+        Idempotent: existing pattern hashes are not downgraded. Returns
+        the total number of newly-injected entries across all engines.
+        Tests call this directly to avoid timer races.
+        """
+        if self._bus is None:
+            return 0
+        try:
+            from stream_manager.cross_session_hydrator import hydrate_now
+        except Exception:
+            log.exception("registry: refresh_all import failed")
+            return 0
+        total = 0
+        with self._lock:
+            engines = list(self._engines.values())
+        for eng in engines:
+            try:
+                total += hydrate_now(eng, self._bus)
+            except Exception:
+                log.exception("registry: refresh_all engine hydrate failed")
+        return total
+
+    def start_refresh(self) -> None:
+        """Begin chained 60s timer that calls refresh_all() each tick."""
+        with self._lock:
+            self._refresh_stopped = False
+            if self._refresh_timer is None:
+                self._arm_refresh_locked()
+
+    def stop_refresh(self) -> None:
+        """Stop the periodic refresh timer. Idempotent."""
+        with self._lock:
+            self._refresh_stopped = True
+            if self._refresh_timer is not None:
+                try:
+                    self._refresh_timer.cancel()
+                except Exception:
+                    log.exception("registry: timer cancel failed")
+                self._refresh_timer = None
+
+    def _arm_refresh_locked(self) -> None:
+        # Caller holds self._lock.
+        if self._refresh_stopped:
+            return
+        t = threading.Timer(self._refresh_interval_s, self._on_refresh_tick)
+        t.daemon = True
+        self._refresh_timer = t
+        t.start()
+
+    def _on_refresh_tick(self) -> None:
+        try:
+            self.refresh_all()
+        except Exception:
+            log.exception("registry: refresh tick failed")
+        finally:
+            with self._lock:
+                self._refresh_timer = None
+                self._arm_refresh_locked()
