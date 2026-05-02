@@ -419,8 +419,8 @@ Settings changes MUST take effect without a page reload and emit a `dashboard_se
 ## 5. Non-functional requirements
 
 ### 5.1 Performance
-- **NFR-P1** — Median message latency through the bridge ≤ 50 ms (excluding governance API call).
-- **NFR-P2** — Governance API call latency ≤ 2 s p95 (depends on Anthropic API).
+- **NFR-P1** — Median message latency through the bridge ≤ 50 ms (excluding governance escalation).
+- **NFR-P2** — Governance escalation latency: p50 ≤ 7 s, p95 ≤ 15 s, hard timeout 25 s. Revised per ADR-5 (v1.0); CLI subprocess path. Original SDK-era budget (200 ms / 2 s p95) is superseded — see `docs/adr/ADR-5-latency-budget.md`.
 - **NFR-P3** — Bus throughput ≥ 500 messages/sec on commodity hardware.
 - **NFR-P4** — `fast_precheck()` ≤ 1 ms; cosine similarity match ≤ 5 ms over 1000 patterns.
 
