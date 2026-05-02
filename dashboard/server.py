@@ -283,7 +283,20 @@ def _tail_sql(conn: sqlite3.Connection) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    return (STATIC / "index.html").read_text(encoding="utf-8")
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    # Task C: inject SM_OWN_SESSION_ID meta tag so the Mirror frame can
+    # filter the SM's own session_id client-side as a defence-in-depth
+    # layer (the SSE handler already strips these rows server-side).
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    if sm_own:
+        # Escape HTML special chars in the env value.
+        sm_own_safe = (
+            sm_own.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;")
+        )
+        meta = f'<meta name="sm-own-session-id" content="{sm_own_safe}">'
+        html = html.replace("</head>", f"  {meta}\n</head>", 1)
+    return html
 
 
 @app.get("/api/stats")
@@ -1408,17 +1421,51 @@ def _parse_last_event_id(raw: str | None) -> tuple[int | None, int | None]:
         return None, None
 
 
+_MIRROR_TYPE_ALLOWLIST: frozenset[str] = frozenset({
+    "tool_call", "tool_result", "tool_use", "tool_use_result",
+})
+
+
+def _parse_types_param(raw: str | None) -> list[str]:
+    """Parse a ``?types=tool_call,tool_result`` query param into a clean list.
+
+    Strips whitespace, drops empties, intersects against an allowlist so
+    callers cannot use the param to widen the stream beyond mirror-relevant
+    types (defence-in-depth — the SQL query already binds parameters).
+    """
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return [p for p in parts if p in _MIRROR_TYPE_ALLOWLIST]
+
+
 @app.get("/events")
-async def sse_events(request: Request):
+async def sse_events(
+    request: Request,
+    session_id: str | None = None,
+    types: str | None = None,
+):
     """SSE stream: one JSON event per new decision row, 500ms poll.
 
     FR-UI-8: emits ``id: d{drid}:m{mrid}`` on every event so the browser
     resumes from the last seen cursor via ``Last-Event-ID`` after reconnect.
+
+    Task C (Session Mirror): optional ``?session_id=<id>&types=tool_call,tool_result``
+    narrows the messages branch to a single session and a fixed type allowlist.
+    The decisions branch is suppressed when either filter is supplied so the
+    Mirror panel sees only tool-call/result rows for the selected session.
+    Rows whose ``session_id`` matches ``SM_OWN_SESSION_ID`` are filtered
+    server-side regardless of params (no-self-monitor enforcement).
     """
 
     resume_drid, resume_mrid = _parse_last_event_id(
         request.headers.get("last-event-id")
     )
+
+    mirror_session = (session_id or "").strip() or None
+    mirror_types = _parse_types_param(types)
+    is_mirror = mirror_session is not None or bool(mirror_types)
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
 
     async def generate():
         try:
@@ -1436,18 +1483,23 @@ async def sse_events(request: Request):
         else:
             # Fresh connect: seed last 25 decisions (oldest→newest) and snap
             # the messages cursor to current max so we don't ship history.
-            try:
-                seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
-                last_rid = seed[0]["rid"] if seed else 0
-                for row in reversed(seed):
-                    payload = dict(row)
-                    last_rid_seed = payload["rid"]
-                    yield (
-                        f"id: d{last_rid_seed}:m0\n"
-                        f"data: {json.dumps(payload)}\n\n"
-                    )
-            except Exception:
+            # Mirror-mode (session_id or types filter) suppresses the
+            # decisions seed — Mirror only renders message rows.
+            if is_mirror:
                 last_rid = 0
+            else:
+                try:
+                    seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
+                    last_rid = seed[0]["rid"] if seed else 0
+                    for row in reversed(seed):
+                        payload = dict(row)
+                        last_rid_seed = payload["rid"]
+                        yield (
+                            f"id: d{last_rid_seed}:m0\n"
+                            f"data: {json.dumps(payload)}\n\n"
+                        )
+                except Exception:
+                    last_rid = 0
             try:
                 last_msg_rid = conn.execute(
                     "SELECT COALESCE(MAX(rowid), 0) FROM messages"
@@ -1455,19 +1507,51 @@ async def sse_events(request: Request):
             except Exception:
                 last_msg_rid = 0
 
+        # Build the messages-branch SQL once. Filters apply per request:
+        # - Mirror session_id pin
+        # - Mirror types allowlist
+        # - Always exclude SM_OWN_SESSION_ID (no-self-monitor)
+        msg_filters: list[str] = ["rowid > ?"]
+        msg_params_template: list = []
+        if is_mirror:
+            # In mirror mode we DO want inbound rows (tool_call rows are
+            # written with direction='inbound' from the hook). Skip the
+            # default "direction != 'inbound'" gate.
+            pass
+        else:
+            msg_filters.append("direction != 'inbound'")
+        if mirror_session is not None:
+            msg_filters.append("session_id = ?")
+            msg_params_template.append(mirror_session)
+        if mirror_types:
+            placeholders = ",".join(["?"] * len(mirror_types))
+            msg_filters.append(f"type IN ({placeholders})")
+            msg_params_template.extend(mirror_types)
+        if sm_own:
+            msg_filters.append("session_id != ?")
+            msg_params_template.append(sm_own)
+        msg_sql = (
+            "SELECT rowid AS rid, id, session_id, type, content, "
+            "metadata, timestamp, direction FROM messages "
+            f"WHERE {' AND '.join(msg_filters)} "
+            "ORDER BY rowid ASC"
+        )
+
         while True:
             if await request.is_disconnected():
                 break
-            try:
-                rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
-                for row in rows:
-                    last_rid = row["rid"]
-                    yield (
-                        f"id: d{last_rid}:m{last_msg_rid}\n"
-                        f"data: {json.dumps(dict(row))}\n\n"
-                    )
-            except Exception:
-                pass
+            # Mirror mode suppresses the decisions tail — only messages flow.
+            if not is_mirror:
+                try:
+                    rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
+                    for row in rows:
+                        last_rid = row["rid"]
+                        yield (
+                            f"id: d{last_rid}:m{last_msg_rid}\n"
+                            f"data: {json.dumps(dict(row))}\n\n"
+                        )
+                except Exception:
+                    pass
             # Phase 6 §3/§7: forward ALL bus event types (not just HITL)
             # so the dashboard event-log panel can render the full
             # stream. Bus events use direction='internal' (user content
@@ -1475,11 +1559,7 @@ async def sse_events(request: Request):
             # the decisions feed and don't ship raw user input.
             try:
                 msg_rows = conn.execute(
-                    "SELECT rowid AS rid, id, session_id, type, content, "
-                    "metadata, timestamp, direction FROM messages "
-                    "WHERE rowid > ? AND direction != 'inbound' "
-                    "ORDER BY rowid ASC",
-                    (last_msg_rid,),
+                    msg_sql, (last_msg_rid, *msg_params_template),
                 ).fetchall()
                 for hr in msg_rows:
                     last_msg_rid = hr["rid"]

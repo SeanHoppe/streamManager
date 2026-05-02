@@ -1583,6 +1583,75 @@ body{ font-size:14px; }
   .frame{ max-height:60vh; }
 }
 
+/* ── Task C / Session Mirror — collapsible terminal-style panel ──────
+   Lives below the three frames; subscribes to the filtered SSE
+   `/events?session_id=X&types=tool_call,tool_result`. Default-collapsed
+   when no session selected; auto-opens on session selection. */
+.mirror-panel{
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  margin-bottom:14px;
+  font-family:var(--ff-mono);
+}
+.mirror-head{
+  display:flex; align-items:center; gap:10px;
+  padding:8px 14px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg);
+}
+.mirror-head .mirror-title{
+  font-family:var(--ff-system);
+  font-size:13px; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase;
+  color:var(--text-bright);
+  flex:1;
+}
+.mirror-head .mirror-sess{
+  font-family:var(--ff-mono); font-size:12px;
+  color:var(--text-dim);
+  max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.mirror-head button{
+  background:transparent; border:1px solid var(--border);
+  color:var(--text-bright);
+  font-family:var(--ff-system); font-size:11px; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase;
+  padding:3px 9px; cursor:pointer;
+}
+.mirror-head button:hover{ background:var(--border); }
+.mirror-head button[aria-pressed="true"]{ background:var(--text-bright); color:var(--bg); }
+.mirror-body{
+  display:none; max-height:280px; overflow-y:auto;
+  padding:6px 14px;
+  font-family:var(--ff-mono); font-size:12px;
+  color:var(--text);
+  background:var(--bg);
+}
+.mirror-panel.open .mirror-body{ display:block; }
+.mirror-body::-webkit-scrollbar{ width:6px; }
+.mirror-body::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+.mirror-row{
+  white-space:pre-wrap; word-break:break-all;
+  padding:1px 0;
+}
+.mirror-row .mirror-ts{ color:var(--text-dim); }
+.mirror-row .mirror-kind{ color:var(--text-bright); font-weight:600; }
+.mirror-row[data-kind="tool_result"] .mirror-kind{ color:var(--c-allow); }
+.mirror-empty{
+  color:var(--text-dim); font-style:italic;
+  padding:10px 0; text-align:center;
+}
+/* OBSIDIAN baseline already covered by tokens above. PHOSPHOR / PAPER
+   inherit via theme-scoped --text*/--bg*/--border vars; no extra rules. */
+.mirror-paused-tag{
+  display:none;
+  font-family:var(--ff-system); font-size:11px; font-weight:700;
+  letter-spacing:0.08em; text-transform:uppercase;
+  color:#92400e; background:#fef3c7; border:1px solid #d97706;
+  padding:2px 7px;
+}
+.mirror-panel.paused .mirror-paused-tag{ display:inline-block; }
+
 .reconnect-banner{
   display:none;
   background:#fef3c7; color:#92400e;
@@ -1844,6 +1913,23 @@ input:focus-visible, textarea:focus-visible{
     </section>
 
   </main>
+
+  <!-- ── Task C: Session Mirror — terminal-style tool stream ─── -->
+  <section class="mirror-panel" id="mirrorPanel" aria-label="Session Mirror">
+    <header class="mirror-head">
+      <div class="mirror-title">Session Mirror</div>
+      <span class="mirror-sess" id="mirrorSess">—</span>
+      <span class="mirror-paused-tag">PAUSED</span>
+      <button type="button" id="mirrorPause" aria-pressed="false"
+              title="Pause incoming stream (events still queue)">PAUSE</button>
+      <button type="button" id="mirrorClear" title="Clear all entries">CLEAR</button>
+      <button type="button" id="mirrorToggle" aria-expanded="false"
+              title="Show / hide mirror">SHOW</button>
+    </header>
+    <div class="mirror-body" id="mirrorBody" tabindex="0">
+      <div class="mirror-empty" id="mirrorEmpty">No tool activity yet.</div>
+    </div>
+  </section>
 
   <!-- ── STATS BAR ──────────────────────────────────────── -->
   <div class="stats-bar">
@@ -3737,6 +3823,135 @@ loadLocalSettings();
 // Server-side blob wins. Wait briefly for HITL.sessionId to populate
 // from the SSE seed, then merge any persisted settings on top.
 setTimeout(loadServerSettings, 500);
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Task C — Session Mirror frame
+   Subscribes to /events?session_id=<id>&types=tool_call,tool_result
+   when a session is selected. Renders terminal-style with 200-entry
+   cap, pause/clear, SM_OWN_SESSION_ID hard filter (defence-in-depth).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+(function initMirror(){
+  const META = document.querySelector('meta[name="sm-own-session-id"]');
+  window.SM_OWN_SESSION_ID = META ? META.getAttribute('content') : '';
+
+  const MIRROR_MAX = 200;
+  const TYPES = 'tool_call,tool_result';
+  const panel  = document.getElementById('mirrorPanel');
+  const body   = document.getElementById('mirrorBody');
+  const empty  = document.getElementById('mirrorEmpty');
+  const sess   = document.getElementById('mirrorSess');
+  const pause  = document.getElementById('mirrorPause');
+  const clear  = document.getElementById('mirrorClear');
+  const toggle = document.getElementById('mirrorToggle');
+  if(!panel || !body || !sess || !pause || !clear || !toggle) return;
+
+  let mirrorEs = null;
+  let mirrorPaused = false;
+  let mirrorCount = 0;
+
+  function fmtTs(ts){
+    const d = (typeof ts === 'number') ? new Date(ts*1000) : new Date(ts);
+    if(isNaN(d.getTime())) return '--:--:--.---';
+    const p = (n,w=2)=>String(n).padStart(w,'0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(),3)}`;
+  }
+  function deriveKind(ev){
+    const t = ev.event_type || ev.type;
+    if(t === 'tool_result' || t === 'tool_use_result') return 'tool_result';
+    try{
+      const meta = (typeof ev.metadata === 'string') ? JSON.parse(ev.metadata) : (ev.metadata || {});
+      const tn = String(meta.tool_name || meta.role || '').toLowerCase();
+      if(tn) return tn;
+    }catch(_){}
+    return 'tool_call';
+  }
+  function escapeHtml(s){
+    return String(s == null ? '' : s).replace(/[<>&"]/g, c =>
+      ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])
+    );
+  }
+  function appendRow(ev){
+    if(mirrorPaused) return;
+    if(window.SM_OWN_SESSION_ID && ev.session_id === window.SM_OWN_SESSION_ID) return;
+    if(empty && empty.parentNode === body) empty.remove();
+    const row = document.createElement('div');
+    row.className = 'mirror-row';
+    const kind = deriveKind(ev);
+    row.dataset.kind = kind;
+    const args = (ev.content || '').slice(0, 80);
+    row.innerHTML = (
+      `<span class="mirror-ts">[${escapeHtml(fmtTs(ev.timestamp))}]</span> `
+      + `$ <span class="mirror-kind">${escapeHtml(kind)}</span>: `
+      + escapeHtml(args)
+    );
+    body.appendChild(row);
+    mirrorCount++;
+    while(mirrorCount > MIRROR_MAX){
+      const first = body.querySelector('.mirror-row');
+      if(!first) break;
+      first.remove();
+      mirrorCount--;
+    }
+    body.scrollTop = body.scrollHeight;
+  }
+  function resetMirror(){
+    body.innerHTML = '';
+    body.appendChild(empty);
+    mirrorCount = 0;
+  }
+  function disconnect(){
+    if(mirrorEs){ try{ mirrorEs.close(); }catch(_){} mirrorEs = null; }
+  }
+  function connect(sessionId){
+    disconnect();
+    if(!sessionId) return;
+    if(window.SM_OWN_SESSION_ID && sessionId === window.SM_OWN_SESSION_ID) return;
+    const url = `/events?session_id=${encodeURIComponent(sessionId)}&types=${TYPES}`;
+    mirrorEs = new EventSource(url);
+    mirrorEs.onmessage = e => {
+      try{
+        const d = JSON.parse(e.data);
+        if(d.error) return;
+        appendRow(d);
+      }catch(_){}
+    };
+    mirrorEs.onerror = ()=>{ disconnect(); setTimeout(()=>connect(sessionId), 3000); };
+  }
+  function setSession(sessionId){
+    sess.textContent = sessionId || '—';
+    if(sessionId){
+      panel.classList.add('open');
+      toggle.setAttribute('aria-expanded','true');
+      toggle.textContent = 'HIDE';
+    }
+    resetMirror();
+    connect(sessionId);
+  }
+
+  pause.addEventListener('click', ()=>{
+    mirrorPaused = !mirrorPaused;
+    pause.setAttribute('aria-pressed', mirrorPaused ? 'true' : 'false');
+    pause.textContent = mirrorPaused ? 'RESUME' : 'PAUSE';
+    panel.classList.toggle('paused', mirrorPaused);
+  });
+  clear.addEventListener('click', resetMirror);
+  toggle.addEventListener('click', ()=>{
+    const open = panel.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    toggle.textContent = open ? 'HIDE' : 'SHOW';
+  });
+
+  // Wire to existing session selector. PHASE6.selectedSessionId is the
+  // canonical store; subscribe via the change event.
+  const ss = document.getElementById('sessSelect');
+  if(ss){
+    ss.addEventListener('change', ()=>{
+      setSession(ss.value || null);
+    });
+  }
+  // Expose for tests / external triggers.
+  window.SessionMirror = { setSession, appendRow, disconnect, resetMirror };
+})();
 </script>
 </body>
 </html>
