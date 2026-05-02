@@ -53,6 +53,40 @@ class TriggerReason(StrEnum):
     NEW_PATTERN = "new_pattern"
     LOW_CONFIDENCE = "low_confidence"
     DESKTOP_PAUSE = "desktop_pause"
+    CROSS_SESSION_FLAG = "cross_session_flag"
+
+
+def dispatch_resolution(
+    bus: MessageBus, pending_id: int, resolution: str
+) -> None:
+    """Apply side-effects for a resolved hitl_pending row.
+
+    Today only `trigger_reason == "cross_session_flag"` carries side-effects:
+    on `approved` the underlying pattern hash (encoded in proposed_action as
+    `flag_cross_session:<hash>`) is flagged for cross-session hydration.
+    Rejection or override leaves the flag at 0.
+    """
+    try:
+        row = bus.get_hitl_pending_row(pending_id)
+    except Exception:
+        log.exception("dispatch_resolution: get_hitl_pending_row failed")
+        return
+    if row is None:
+        return
+    if row.get("trigger_reason") != TriggerReason.CROSS_SESSION_FLAG.value:
+        return
+    if resolution != "approved":
+        return
+    proposed = str(row.get("proposed_action") or "")
+    if not proposed.startswith("flag_cross_session:"):
+        return
+    hash_ = proposed.split(":", 1)[1]
+    if not hash_:
+        return
+    try:
+        bus.flag_pattern_cross_session(hash_)
+    except Exception:
+        log.exception("dispatch_resolution: flag_pattern_cross_session failed")
 
 
 def _truncate_to_tokens(text: str, max_tokens: int = _NOTE_TOKEN_CAP) -> str:

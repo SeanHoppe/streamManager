@@ -208,6 +208,14 @@ class MessageBus:
                         f"ALTER TABLE decisions ADD COLUMN {col} {definition}"
                     )
 
+            # Task F — additive migration for patterns table: cross_session
+            # flag (HITL-gated). Operator-approved cross-session patterns are
+            # hydrated into other engines at L1 advisory. See OQ5/OQ6/OQ8.
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(
+                    "ALTER TABLE patterns ADD COLUMN cross_session INTEGER NOT NULL DEFAULT 0"
+                )
+
     def open_session(
         self,
         session_id: str,
@@ -373,7 +381,7 @@ class MessageBus:
         return pending_id
 
     def resolve_hitl(self, pending_id: int, resolution: str) -> None:
-        """Mark a pending HITL row as resolved."""
+        """Mark a pending HITL row as resolved + dispatch any side effects."""
         resolved_at = _dt.datetime.now(_dt.UTC).isoformat()
         with self._lock:
             self._conn.execute(
@@ -381,6 +389,15 @@ class MessageBus:
                 "WHERE id=? AND resolved_at IS NULL",
                 (resolved_at, resolution, pending_id),
             )
+        # Side-effect dispatcher (Task F): cross_session_flag rows that the
+        # operator approves promote the underlying pattern to a hydrated
+        # cross-session advisory in other engines. Lazy import avoids a
+        # cycle with stream_manager.hitl.
+        try:
+            from stream_manager.hitl import dispatch_resolution
+            dispatch_resolution(self, pending_id, resolution)
+        except Exception:
+            log.exception("resolve_hitl: dispatch_resolution failed")
 
     def get_pending_hitl(self, session_id: str) -> list[dict[str, object]]:
         """Return unresolved hitl_pending rows for a session, oldest first."""
@@ -586,6 +603,132 @@ class MessageBus:
             "matched_hash": row[5],
             "timestamp": float(row[6]),
         }
+
+    # ── Task F: cross-session patterns (HITL-gated) ───────────────────
+
+    def upsert_pattern(
+        self,
+        hash: str,
+        level: int,
+        occurrences: int,
+        success_rate: float,
+        last_seen: float,
+        payload: str = "",
+    ) -> None:
+        """Insert or update a row in patterns. Preserves cross_session flag."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO patterns (hash, level, occurrences, success_rate, "
+                "last_seen, payload) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(hash) DO UPDATE SET level=excluded.level, "
+                "occurrences=excluded.occurrences, "
+                "success_rate=excluded.success_rate, "
+                "last_seen=excluded.last_seen, "
+                "payload=excluded.payload",
+                (
+                    hash,
+                    int(level),
+                    int(occurrences),
+                    float(success_rate),
+                    float(last_seen),
+                    payload,
+                ),
+            )
+
+    def flag_pattern_cross_session(self, hash: str) -> bool:
+        """Set patterns.cross_session=1 for the given hash. Returns True if a
+        row was updated. Caller is responsible for ensuring the hash exists
+        (via upsert_pattern) before flagging.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE patterns SET cross_session=1 WHERE hash=?",
+                (hash,),
+            )
+            return (cur.rowcount or 0) > 0
+
+    def unflag_pattern_cross_session(self, hash: str) -> bool:
+        """Set patterns.cross_session=0 for the given hash. Returns True if a
+        row was updated.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE patterns SET cross_session=0 WHERE hash=?",
+                (hash,),
+            )
+            return (cur.rowcount or 0) > 0
+
+    def get_cross_session_patterns(self) -> list[dict[str, object]]:
+        """Return all patterns with cross_session=1, newest first by last_seen."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT hash, level, occurrences, success_rate, last_seen, "
+                "payload FROM patterns WHERE cross_session=1 "
+                "ORDER BY last_seen DESC"
+            ).fetchall()
+        return [
+            {
+                "hash": str(r[0]),
+                "level": int(r[1]),
+                "occurrences": int(r[2]),
+                "success_rate": float(r[3]),
+                "last_seen": float(r[4]),
+                "payload": str(r[5]) if r[5] is not None else "",
+            }
+            for r in rows
+        ]
+
+    def get_pattern(self, hash: str) -> dict[str, object] | None:
+        """Return a single patterns row by hash, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT hash, level, occurrences, success_rate, last_seen, "
+                "payload, cross_session FROM patterns WHERE hash=?",
+                (hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "hash": str(row[0]),
+            "level": int(row[1]),
+            "occurrences": int(row[2]),
+            "success_rate": float(row[3]),
+            "last_seen": float(row[4]),
+            "payload": str(row[5]) if row[5] is not None else "",
+            "cross_session": int(row[6]),
+        }
+
+    def get_hitl_pending_for_hash(self, matched_hash: str) -> list[dict[str, object]]:
+        """Return unresolved hitl_pending rows whose metadata.matched_hash equals hash.
+
+        Used by the HITL resolution dispatcher to look up the pattern hash a
+        cross_session_flag entry refers to. The matched_hash is stored in the
+        proposed_action column suffix `flag_cross_session:<hash>` so it
+        survives the existing schema unchanged.
+        """
+        # Implemented via proposed_action prefix scan to avoid a new column.
+        prefix = f"flag_cross_session:{matched_hash}"
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, message_id, proposed_action, proposed_confidence, "
+                "trigger_reason, queued_at, resolved_at, resolution "
+                "FROM hitl_pending WHERE proposed_action=? "
+                "ORDER BY id ASC",
+                (prefix,),
+            ).fetchall()
+        return [
+            {
+                "id": int(r[0]),
+                "message_id": r[1],
+                "proposed_action": r[2],
+                "proposed_confidence": float(r[3]),
+                "trigger_reason": r[4],
+                "queued_at": r[5],
+                "resolved_at": r[6],
+                "resolution": r[7],
+            }
+            for r in rows
+        ]
 
     def stats(self) -> dict[str, int]:
         with self._lock:

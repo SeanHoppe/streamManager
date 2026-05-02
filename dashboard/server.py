@@ -546,6 +546,14 @@ async def api_hitl_resolve(request: Request):
         conn.close()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    # Task F: dispatch resolution side-effects (cross_session flag).
+    try:
+        bus = _get_bus()
+        if bus is not None:
+            from stream_manager.hitl import dispatch_resolution
+            dispatch_resolution(bus, pending_id, resolution)
+    except Exception:
+        log.exception("api_hitl_resolve: dispatch failed")
     return {"ok": True, "pending_id": pending_id, "resolution": resolution}
 
 
@@ -596,6 +604,50 @@ async def api_hitl_annotate(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"ok": True, "decision_id": decision_id, "override_action": override_action}
+
+
+# ── Task F: cross-session pattern endpoints ──────────────────────────
+
+
+@app.get("/api/patterns/cross_session")
+async def api_patterns_cross_session():
+    """Return all patterns currently flagged cross_session=1."""
+    try:
+        conn = _open()
+        if not _has_table(conn, "patterns"):
+            conn.close()
+            return []
+        cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(patterns)").fetchall()
+        }
+        if "cross_session" not in cols:
+            conn.close()
+            return []
+        rows = conn.execute(
+            "SELECT hash, level, occurrences, success_rate, last_seen, payload "
+            "FROM patterns WHERE cross_session=1 ORDER BY last_seen DESC"
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/patterns/{hash}/demote")
+async def api_patterns_demote(hash: str):
+    """Set patterns.cross_session=0 for the given hash. 404 if not found."""
+    try:
+        bus = _get_bus()
+        if bus is None:
+            raise HTTPException(status_code=503, detail="bus unavailable")
+        existed = bus.unflag_pattern_cross_session(hash)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not existed:
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return {"hash": hash, "cross_session": 0}
 
 
 _DEFAULT_TIMEOUT_S = 60.0

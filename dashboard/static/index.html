@@ -1941,6 +1941,19 @@ input:focus-visible, textarea:focus-visible{
     <div class="hitl-list" id="hitlList"></div>
   </section>
 
+  <!-- ── TASK F: CROSS-SESSION PATTERNS PANEL ──────────── -->
+  <section class="hitl-panel" id="xsessPanel" style="display:block">
+    <div class="hitl-header">
+      <div class="hitl-title">Cross-session Patterns</div>
+      <div class="hitl-count" id="xsessCount">0</div>
+    </div>
+    <div class="hitl-list" id="xsessList">
+      <div style="padding:10px 14px;color:var(--text-dim);font-size:11px">
+        No cross-session patterns flagged.
+      </div>
+    </div>
+  </section>
+
   <!-- ── FR-OG-7 MATURITY RING PANEL (Phase 5) ──────────── -->
   <section class="ring-panel" id="ringPanel" aria-hidden="true">
     <div class="ring-head">
@@ -2822,6 +2835,61 @@ pauseToggle.addEventListener('change', ()=>{
 // Initial settings + queue load
 loadSettings();
 fetchHitlPending();
+
+/* ── Task F: cross-session patterns panel ─────────────── */
+const xsessList  = document.getElementById('xsessList');
+const xsessCount = document.getElementById('xsessCount');
+
+function renderXsess(rows){
+  if(!Array.isArray(rows) || rows.length === 0){
+    xsessCount.textContent = '0';
+    xsessList.innerHTML = '<div style="padding:10px 14px;color:var(--text-dim);font-size:11px">No cross-session patterns flagged.</div>';
+    return;
+  }
+  xsessCount.textContent = String(rows.length);
+  const html = rows.map(p=>{
+    const h = String(p.hash || '');
+    const lvl = Number(p.level || 0);
+    const occ = Number(p.occurrences || 0);
+    const sr  = Number(p.success_rate || 0);
+    const txt = String(p.payload || '').slice(0, 80);
+    return (
+      '<div class="hitl-item" data-hash="'+h+'">'
+      + '<div style="font-family:var(--font-d);font-size:11px;color:var(--text-bright)">L'+lvl+'</div>'
+      + '<div style="font-family:var(--font-d);font-size:11px">'+occ+'×</div>'
+      + '<div style="font-family:var(--font-d);font-size:11px">'+sr.toFixed(2)+'</div>'
+      + '<div style="font-family:var(--font-d);font-size:10px;color:var(--text-dim)">'+h.slice(0,12)+'</div>'
+      + '<div style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+txt+'</div>'
+      + '<div class="hitl-item-row2"><button class="hitl-btn xsess-demote" data-hash="'+h+'">Demote</button></div>'
+      + '</div>'
+    );
+  }).join('');
+  xsessList.innerHTML = html;
+}
+
+async function fetchXsess(){
+  try{
+    const r = await fetch('/api/patterns/cross_session');
+    if(!r.ok) return;
+    const rows = await r.json();
+    renderXsess(rows);
+  }catch(_){}
+}
+
+xsessList.addEventListener('click', async (e)=>{
+  const btn = e.target.closest('.xsess-demote');
+  if(!btn) return;
+  const h = btn.dataset.hash;
+  if(!h) return;
+  btn.disabled = true;
+  try{
+    await fetch('/api/patterns/' + encodeURIComponent(h) + '/demote', {method:'POST'});
+  }catch(_){}
+  fetchXsess();
+});
+
+fetchXsess();
+setInterval(fetchXsess, 15000);
 
 /* ── theme switcher ──────────────────────────────────── */
 document.querySelectorAll('.theme-btn').forEach(btn=>{
