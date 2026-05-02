@@ -1751,7 +1751,7 @@ input:focus-visible, textarea:focus-visible{
                 aria-label="Open action items in this frame">0</span>
         </div>
       </header>
-      <div class="frame-body">
+      <div class="frame-body" tabindex="0">
         <div class="repl-stream" id="replStream" aria-live="polite"></div>
       </div>
     </section>
@@ -1769,7 +1769,7 @@ input:focus-visible, textarea:focus-visible{
         <button class="tab" id="tabFiltered" role="tab" aria-selected="false"
                 aria-controls="paneFiltered">Filtered Feed</button>
       </nav>
-      <div class="frame-body">
+      <div class="frame-body" tabindex="0">
         <div id="paneSwimlane" role="tabpanel" aria-labelledby="tabSwimlane">
           <div class="swimlane" id="swimlane"></div>
           <details class="swimlane-overflow" id="swimlaneOverflow" hidden>
@@ -1790,7 +1790,7 @@ input:focus-visible, textarea:focus-visible{
           <span class="frame-action-count" id="frameCCount" data-count="0">0</span>
         </div>
       </header>
-      <div class="frame-body">
+      <div class="frame-body" tabindex="0">
         <div class="jobs-list" id="jobsList">
           <div class="panel-msg" id="jobsEmpty">No background jobs running.</div>
         </div>
@@ -1921,7 +1921,7 @@ input:focus-visible, textarea:focus-visible{
 
   <!-- ── SETTINGS PANEL ─────────────────────────────────── -->
   <div class="settings-overlay" id="settingsOverlay"></div>
-  <aside class="settings-panel" id="settingsPanel" aria-hidden="true">
+  <aside class="settings-panel" id="settingsPanel" aria-hidden="true" inert>
     <div class="settings-head">
       <div class="settings-title">Settings</div>
       <button class="settings-close" id="settingsClose" aria-label="close settings">×</button>
@@ -2611,6 +2611,9 @@ function openSettings(){
   settingsPanel.classList.add('show');
   gearBtn.classList.add('on');
   settingsPanel.setAttribute('aria-hidden','false');
+  // NFR-UI-1 (axe aria-hidden-focus): inert mirrors aria-hidden so the
+  // panel's focusable controls leave the tab order while it's offscreen.
+  settingsPanel.removeAttribute('inert');
   loadSettings();
 }
 function closeSettings(){
@@ -2618,6 +2621,7 @@ function closeSettings(){
   settingsPanel.classList.remove('show');
   gearBtn.classList.remove('on');
   settingsPanel.setAttribute('aria-hidden','true');
+  settingsPanel.setAttribute('inert','');
 }
 gearBtn.addEventListener('click', ()=>{
   if(settingsPanel.classList.contains('show')) closeSettings(); else openSettings();
@@ -3355,7 +3359,7 @@ function renderSwimlane(){
         <div class="lane-name">${escFn(slug)}</div>
         <div class="lane-role">${escFn(a.role)}</div>
       </div>
-      <div class="lane-events">${chips}</div>
+      <div class="lane-events" tabindex="0">${chips}</div>
     `;
     lane.appendChild(row);
   }
@@ -3367,7 +3371,7 @@ function renderSwimlane(){
       `<div class="lane-row" style="opacity:.65"><div class="lane-leader">
          <div class="lane-name">${escFn(s)}</div>
          <div class="lane-role">${escFn(a.role)}</div>
-       </div><div class="lane-events"></div></div>`).join('');
+       </div><div class="lane-events" tabindex="0"></div></div>`).join('');
   } else if(ovWrap){
     ovWrap.hidden = true;
   }
