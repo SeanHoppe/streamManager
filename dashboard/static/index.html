@@ -819,6 +819,21 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
 }
 .tray textarea:focus{border-color:var(--accent)}
 .tray-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* FR-UI-5: ranked decision suggestions inside the override tray */
+.tray-suggestions{
+  display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;
+  font-size:10px;color:var(--text);
+}
+.tray-suggestions[data-loading]{opacity:.6;font-style:italic}
+.tray-suggestions .sug-item{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:3px 8px;border:1px solid var(--border);background:var(--bg);
+  color:var(--text);cursor:pointer;font-size:10px;border-radius:2px;
+}
+.tray-suggestions .sug-item:hover{border-color:var(--accent)}
+.tray-suggestions .sug-action{font-weight:700;font-family:var(--font-d)}
+.tray-suggestions .sug-conf{opacity:.85;font-variant-numeric:tabular-nums}
+.tray-suggestions .sug-sub{opacity:.6}
 .tray select{
   font-family:var(--font-d);
   font-size:10px;
@@ -2350,12 +2365,14 @@ function openTray(rowEl){
   const tray = document.createElement('div');
   tray.className = 'tray';
   tray.innerHTML = `
+    <div class="tray-suggestions" data-loading="1">Loading suggestions…</div>
     <textarea placeholder="Add note (≤50 tokens stored)…"></textarea>
     <div class="tray-controls">
       <select class="tray-override">
         <option value="">Keep original ▾</option>
         <option value="ALLOW">ALLOW</option>
         <option value="GUIDE">GUIDE</option>
+        <option value="SUGGEST">SUGGEST</option>
         <option value="INTERVENE">INTERVENE</option>
         <option value="BLOCK">BLOCK</option>
       </select>
@@ -2363,6 +2380,42 @@ function openTray(rowEl){
     </div>
   `;
   rowEl.parentNode.insertBefore(tray, rowEl.nextSibling);
+
+  // FR-UI-5: fetch ranked candidates for this decision; render top 5.
+  const sugBox = tray.querySelector('.tray-suggestions');
+  fetch(`/api/decisions/${encodeURIComponent(did)}/suggestions`)
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(arr => {
+      sugBox.removeAttribute('data-loading');
+      if(!Array.isArray(arr) || arr.length === 0){
+        sugBox.textContent = 'No suggestions available.';
+        return;
+      }
+      sugBox.innerHTML = '';
+      arr.slice(0, 5).forEach(c => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'sug-item';
+        item.title = c.rationale || '';
+        const conf = (typeof c.confidence === 'number')
+          ? Math.round(c.confidence * 100) + '%' : '—';
+        const n = c.historical_precedent_count || 0;
+        item.innerHTML = `
+          <span class="sug-action sug-${c.action}">${c.action}</span>
+          <span class="sug-conf">${conf}</span>
+          <span class="sug-sub">${n} prior override${n===1?'':'s'}</span>
+        `;
+        item.addEventListener('click', () => {
+          const sel = tray.querySelector('.tray-override');
+          if(sel) sel.value = c.action;
+        });
+        sugBox.appendChild(item);
+      });
+    })
+    .catch(err => {
+      sugBox.removeAttribute('data-loading');
+      sugBox.textContent = 'Suggestions unavailable (' + err + ').';
+    });
 
   tray.querySelector('.tray-btn').addEventListener('click', async ()=>{
     const note = tray.querySelector('textarea').value.trim();
@@ -2475,11 +2528,44 @@ async function postSettings(payload){
   }catch(_){}
 }
 
-modeSync.addEventListener('change', ()=>{
-  if(modeSync.checked){ HITL.mode='sync'; updateModeBadge(); postSettings({hitl_mode:'sync', hitl_floor: HITL.floor}); }
+async function postHitlMode(mode, reason){
+  // FR-HITL-7: persist the mode flip + emit the hitl_mode_promoted bus
+  // event before flipping the local UI. If the server rejects we revert
+  // the radio so user state matches the truth on disk.
+  try{
+    const payload = {mode, reason};
+    if(HITL.sessionId) payload.session_id = HITL.sessionId;
+    const r = await fetch('/api/hitl/mode', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    return r.ok;
+  }catch(_){ return false; }
+}
+
+modeSync.addEventListener('change', async ()=>{
+  if(!modeSync.checked) return;
+  // Treat the user-driven sync flip as a "take_action" promotion so audit
+  // replay can distinguish it from a programmatic toggle.
+  const ok = await postHitlMode('sync', 'take_action');
+  if(ok){
+    HITL.mode='sync'; updateModeBadge();
+    postSettings({hitl_mode:'sync', hitl_floor: HITL.floor});
+  }else{
+    // Revert the radio if persistence failed.
+    modeAsync.checked = true;
+  }
 });
-modeAsync.addEventListener('change', ()=>{
-  if(modeAsync.checked){ HITL.mode='async'; updateModeBadge(); postSettings({hitl_mode:'async', hitl_floor: HITL.floor}); }
+modeAsync.addEventListener('change', async ()=>{
+  if(!modeAsync.checked) return;
+  const ok = await postHitlMode('async', 'user_toggle');
+  if(ok){
+    HITL.mode='async'; updateModeBadge();
+    postSettings({hitl_mode:'async', hitl_floor: HITL.floor});
+  }else{
+    modeSync.checked = true;
+  }
 });
 
 let floorDebounce = null;

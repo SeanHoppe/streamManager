@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -27,6 +28,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("GOV_DB", str(ROOT / ".claude" / "gov.db")))
@@ -887,6 +890,208 @@ async def api_agent_override_mode(agent_id: str, request: Request):
         "session_id": session_id,
         "agent_id": agent_id,
         "mode": mode,
+    }
+
+
+# ── FR-UI-5: ranked decision-suggestion candidates ────────────────────
+
+
+def _resolve_sm_context_path() -> Path | None:
+    """Resolve the .sm-context.yaml (or .toml) path for weights loading.
+
+    Resolution order:
+      1. SM_CONTEXT_PATH env var (explicit override)
+      2. SM_PROJECT_ROOT/.sm-context.yaml
+      3. SM_PROJECT_ROOT/.sm-context.toml
+      4. None (load_weights returns defaults)
+    """
+    explicit = os.environ.get("SM_CONTEXT_PATH")
+    if explicit:
+        p = Path(explicit)
+        return p if p.exists() else None
+    project_root_env = os.environ.get("SM_PROJECT_ROOT")
+    project_root = Path(project_root_env) if project_root_env else ROOT
+    yaml_p = project_root / ".sm-context.yaml"
+    if yaml_p.exists():
+        return yaml_p
+    toml_p = project_root / ".sm-context.toml"
+    if toml_p.exists():
+        return toml_p
+    return None
+
+
+@app.get("/api/decisions/{decision_id}/suggestions")
+async def api_decision_suggestions(decision_id: str):
+    """FR-UI-5: ranked candidate actions for a single decision.
+
+    Returns a JSON array sorted by descending blended score. At least one
+    candidate is always present (engine-proposal fallback). Hard-fails to
+    HTTP 500 with the validation message when `.sm-context.yaml` weights
+    are malformed (per FR-UI-5 contract — no silent default).
+    """
+    try:
+        from stream_manager.decision_suggestions import (
+            load_weights,
+            rank_candidates,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"import failed: {exc}")
+
+    # Hard-fail validation surfaces here.
+    try:
+        weights = load_weights(_resolve_sm_context_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"weights load failed: {exc}")
+
+    try:
+        conn = _open()
+        row = conn.execute(
+            "SELECT d.id, d.action, d.confidence, d.matched_hash, "
+            "m.content FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id WHERE d.id=?",
+            (decision_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="decision not found")
+        decision = dict(row)
+        project_root_env = os.environ.get("SM_PROJECT_ROOT")
+        project_root = Path(project_root_env) if project_root_env else None
+        candidates = rank_candidates(
+            decision, conn, weights, project_root=project_root
+        )
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return [c.to_json() for c in candidates]
+
+
+# ── FR-HITL: persist hitl_mode promotion + emit bus event ─────────────
+
+
+@app.post("/api/hitl/mode")
+async def api_hitl_mode(request: Request):
+    """Persist a HITL mode flip and emit a `hitl_mode_promoted` bus event.
+
+    Body: ``{"session_id": "...", "mode": "off|sync|async",
+              "reason": "take_action|user_toggle"}``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    session_id = body.get("session_id")
+    mode = body.get("mode")
+    reason = body.get("reason") or "user_toggle"
+    if not isinstance(mode, str) or mode not in ("off", "sync", "async"):
+        raise HTTPException(
+            status_code=400, detail="mode must be 'off', 'sync', or 'async'"
+        )
+    if not isinstance(reason, str) or reason not in (
+        "take_action", "user_toggle",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="reason must be 'take_action' or 'user_toggle'",
+        )
+    if not isinstance(session_id, str) or not session_id:
+        try:
+            conn = _open()
+            session_id = _latest_active_session_id(conn)
+            conn.close()
+        except Exception:
+            session_id = None
+    if not session_id:
+        raise HTTPException(
+            status_code=422, detail="no active session to promote"
+        )
+
+    # Read current mode + floor so we can preserve the floor and report the
+    # transition in the bus event.
+    old_mode: str = "async"
+    floor: float = 0.60
+    try:
+        conn = _open()
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "hitl_mode" in cols and "hitl_floor" in cols:
+            row = conn.execute(
+                "SELECT hitl_mode, hitl_floor FROM sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if row is not None:
+                old_mode = (
+                    str(row["hitl_mode"]) if row["hitl_mode"] else "async"
+                )
+                floor = (
+                    float(row["hitl_floor"])
+                    if row["hitl_floor"] is not None
+                    else 0.60
+                )
+        conn.close()
+    except Exception:
+        pass
+
+    # Persist via the bus when available; fall back to direct UPDATE.
+    bus = _get_bus()
+    persisted = False
+    if bus is not None:
+        try:
+            # The bus layer only models sync/async at the schema level;
+            # 'off' is allowed via fall-through update so older callers
+            # don't break.
+            if mode in ("sync", "async"):
+                bus.set_hitl_mode(session_id, mode, floor)
+                persisted = True
+        except Exception:
+            log.exception("set_hitl_mode failed; falling back to UPDATE")
+    if not persisted:
+        try:
+            conn = _open_rw()
+            conn.execute(
+                "UPDATE sessions SET hitl_mode=? WHERE id=?",
+                (mode, session_id),
+            )
+            conn.close()
+            persisted = True
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    # Emit bus event so audit replay surfaces the transition.
+    if bus is not None:
+        try:
+            from stream_manager.message_bus import Message
+            bus.publish(
+                Message.new(
+                    session_id=session_id,
+                    type="hitl_mode_promoted",
+                    direction="internal",
+                    content=(
+                        f"HITL mode {old_mode} -> {mode} ({reason})"
+                    ),
+                    metadata={
+                        "old_mode": old_mode,
+                        "new_mode": mode,
+                        "reason": reason,
+                    },
+                )
+            )
+        except Exception:
+            log.exception("hitl_mode_promoted publish failed")
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "old_mode": old_mode,
+        "new_mode": mode,
+        "reason": reason,
     }
 
 
