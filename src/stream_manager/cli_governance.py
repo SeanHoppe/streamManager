@@ -200,10 +200,19 @@ class CliGovernor:
         # JSON envelope shape that ``claude -p --output-format json`` emits,
         # so downstream parsing (_parse_envelope, _extract_usage) is shared
         # between the spawn-per-call and pool paths.
+        #
+        # The pool's worker processes do NOT carry a per-CliGovernor
+        # ``--system-prompt`` (the pool is shared across governors), so we
+        # inline the governance instructions into the user turn here. The
+        # cost is minor (~1.5 KB of constant text) and keeps the wire
+        # protocol stateless.
         if self._pool is not None:
             try:
+                pool_prompt = (
+                    f"{self._system_prompt()}\n\n---\n\n{user_prompt}"
+                )
                 with self._pool.acquire() as worker:
-                    stdout = worker.send(user_prompt, timeout=TIMEOUT_SECONDS)
+                    stdout = worker.send(pool_prompt, timeout=TIMEOUT_SECONDS)
                 latency_ms = int((time.monotonic() - start) * 1000)
                 in_tok, out_tok, cost = _extract_usage(stdout)
                 self._publish_event(

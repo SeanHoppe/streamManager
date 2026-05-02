@@ -91,6 +91,9 @@ def _build_cmd(model: str, system_prompt: str | None) -> list[str]:
         CLI_BIN, "-p",
         "--input-format", "stream-json",
         "--output-format", "stream-json",
+        # claude requires --verbose alongside --output-format=stream-json;
+        # without it the process exits immediately with an error.
+        "--verbose",
         "--model", model,
         "--no-session-persistence",
         "--tools", "",
