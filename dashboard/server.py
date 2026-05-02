@@ -58,6 +58,13 @@ _registry = None  # type: ignore[var-annotated]
 # is exposed via /api/registry/active so operators (and future SM
 # components) can see which session_ids have hot engines in this process.
 _engine_registry = None  # type: ignore[var-annotated]
+# Task J / v1.1: warm-pool of long-lived `claude` workers, shared across
+# every CliGovernor / engine constructed in this dashboard process. Built
+# lazily by `_get_cli_pool()`; size controlled by SM_CLI_POOL_SIZE (default
+# 2). Disabled entirely when SM_CLI_POOL_SIZE=0 or when the `claude` CLI is
+# not on PATH (the spawn-per-call legacy path remains the fallback).
+_cli_pool = None  # type: ignore[var-annotated]
+_cli_pool_init_lock: object = None  # populated lazily inside _get_cli_pool
 
 
 def _get_bus():
@@ -111,10 +118,68 @@ def _get_engine_registry():
                 bus=_get_bus(),
                 project_context=load_project(ROOT),
                 agent_registry=_get_registry(),
+                cli_pool=_get_cli_pool(),
             )
         except Exception:
             _engine_registry = None
     return _engine_registry
+
+
+def _get_cli_pool():
+    """Return a lazily-initialized warm-pool of `claude` CLI workers.
+
+    Task J / v1.1. Returns None when:
+      * SM_CLI_POOL_SIZE=0 (operator opt-out)
+      * `claude` CLI is not on PATH (legacy spawn-per-call path still works
+        when BRIDGE_API_GOV is set; the pool would just fail at spawn)
+      * cli_pool import / spawn fails (degrade silently — governance still
+        runs via the per-call path)
+    """
+    global _cli_pool
+    if _cli_pool is not None:
+        return _cli_pool
+    try:
+        size_raw = os.environ.get("SM_CLI_POOL_SIZE", "2")
+        size = int(size_raw)
+    except ValueError:
+        size = 2
+    if size <= 0:
+        return None
+    try:
+        from stream_manager.cli_pool import CliPool, cli_on_path, reap_stale_workers
+    except Exception:
+        log.exception("cli_pool: import failed; pool disabled")
+        return None
+    if not cli_on_path():
+        log.info("cli_pool: `claude` CLI not on PATH; pool disabled")
+        return None
+    try:
+        # Reap any stale workers from a prior crashed run before opening
+        # a fresh pool. Idempotent and safe on a clean boot.
+        reaped = reap_stale_workers(root=ROOT)
+        if reaped:
+            log.warning("cli_pool: reaped %d stale worker(s) at startup", reaped)
+        _cli_pool = CliPool(size=size, pid_root=ROOT)
+        # warmup() spawns up front; if the model rejects the args we want
+        # to know now rather than on first governance call.
+        _cli_pool.warmup()
+        log.info("cli_pool: warmup complete (size=%d)", size)
+    except Exception:
+        log.exception("cli_pool: warmup failed; pool disabled")
+        _cli_pool = None
+    return _cli_pool
+
+
+def _shutdown_cli_pool() -> None:
+    """Kill every worker. Idempotent; safe to call from atexit + signal."""
+    global _cli_pool
+    if _cli_pool is None:
+        return
+    try:
+        _cli_pool.shutdown()
+    except Exception:
+        log.exception("cli_pool: shutdown raised; ignoring")
+    _cli_pool = None
 
 
 def _get_hitl_queue():
@@ -142,6 +207,61 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+# ── Task J / v1.1: CLI warm-pool lifecycle ──────────────────────────────
+# Pool is built at FastAPI startup (so the cold-start cost is paid before
+# the first governance call hits) and torn down on shutdown + atexit +
+# SIGTERM/SIGINT. Multi-layered shutdown protects against operator-issued
+# Ctrl-C, parent-process kill, and clean uvicorn stop.
+
+@app.on_event("startup")
+async def _startup_cli_pool() -> None:
+    # Best-effort. Failure to warm the pool must never prevent the
+    # dashboard from starting; the per-call CLI path remains as fallback.
+    try:
+        _get_cli_pool()
+    except Exception:
+        log.exception("cli_pool: startup warmup raised; continuing")
+
+
+@app.on_event("shutdown")
+async def _shutdown_cli_pool_event() -> None:
+    _shutdown_cli_pool()
+
+
+def _install_pool_signal_handlers() -> None:
+    import atexit
+    import signal
+
+    atexit.register(_shutdown_cli_pool)
+
+    def _handler(signum, frame):  # pragma: no cover - signal path
+        _shutdown_cli_pool()
+        # Re-raise default behaviour: exit non-zero on terminal signals.
+        # We avoid sys.exit so uvicorn's own signal handling can finish
+        # tearing down the loop.
+
+    for sig_name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            existing = signal.getsignal(sig)
+            def _chained(signum, frame, _existing=existing):  # pragma: no cover
+                try:
+                    _shutdown_cli_pool()
+                finally:
+                    if callable(_existing) and _existing not in (signal.SIG_DFL, signal.SIG_IGN):
+                        _existing(signum, frame)
+            signal.signal(sig, _chained)
+        except (ValueError, OSError):
+            # ValueError: signal only works in main thread (uvicorn worker).
+            # OSError: signal not supported on this platform.
+            pass
+
+
+_install_pool_signal_handlers()
 
 _SEED_SQL = """
     SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
