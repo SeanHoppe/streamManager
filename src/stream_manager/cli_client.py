@@ -240,3 +240,45 @@ def wrap_claude(
     """
     cmd = ["claude", "--no-browser", *extra_args]
     return track_subprocess(cmd, bus, session_id)
+
+
+def _main(argv: list[str] | None = None) -> int:
+    import argparse
+    import os
+    import sys
+
+    from stream_manager.message_bus import MessageBus
+
+    parser = argparse.ArgumentParser(
+        prog="python -m stream_manager.cli_client",
+        description="Track a subprocess and emit background_job events to gov.db.",
+    )
+    parser.add_argument("--session", default="dev", help="session id (default: dev)")
+    parser.add_argument(
+        "--db",
+        default=os.environ.get("GOV_DB", ".claude/gov.db"),
+        help="path to gov.db (default: $GOV_DB or .claude/gov.db)",
+    )
+    parser.add_argument(
+        "cmd",
+        nargs=argparse.REMAINDER,
+        help="command to run, prefix with -- (e.g. -- pytest tests/)",
+    )
+    args = parser.parse_args(argv)
+
+    cmd = list(args.cmd or [])
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        parser.error("specify a command after --, e.g. -- pytest tests/")
+
+    bus = MessageBus(args.db)
+    log.info("cli_client: tracking %r session=%s db=%s", cmd, args.session, args.db)
+    handle = track_subprocess(cmd, bus, args.session)
+    return handle.wait()
+
+
+if __name__ == "__main__":
+    import sys as _sys
+
+    _sys.exit(_main())

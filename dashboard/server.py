@@ -969,9 +969,35 @@ async def api_decisions_export(session_id: str | None = None):
 _HITL_EVENT_TYPES = ("hitl_sync_queued", "hitl_async_flagged", "hitl_timeout")
 
 
+def _parse_last_event_id(raw: str | None) -> tuple[int | None, int | None]:
+    """Parse compound SSE Last-Event-ID of form ``d{drid}:m{mrid}``.
+
+    Returns (decisions_rid, messages_rid) or (None, None) if absent/malformed.
+    On fresh connect (no header) the caller seeds 25 recent decisions; on
+    resume both cursors are honoured and the seed is skipped (FR-UI-8).
+    """
+    if not raw:
+        return None, None
+    try:
+        d_part, m_part = raw.split(":", 1)
+        if not (d_part.startswith("d") and m_part.startswith("m")):
+            return None, None
+        return int(d_part[1:]), int(m_part[1:])
+    except Exception:
+        return None, None
+
+
 @app.get("/events")
 async def sse_events(request: Request):
-    """SSE stream: one JSON event per new decision row, 500ms poll."""
+    """SSE stream: one JSON event per new decision row, 500ms poll.
+
+    FR-UI-8: emits ``id: d{drid}:m{mrid}`` on every event so the browser
+    resumes from the last seen cursor via ``Last-Event-ID`` after reconnect.
+    """
+
+    resume_drid, resume_mrid = _parse_last_event_id(
+        request.headers.get("last-event-id")
+    )
 
     async def generate():
         try:
@@ -982,22 +1008,31 @@ async def sse_events(request: Request):
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        # Seed with last 25 decisions (oldest→newest so client prepends correctly)
-        try:
-            seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
-            last_rid = seed[0]["rid"] if seed else 0
-            for row in reversed(seed):
-                yield f"data: {json.dumps(dict(row))}\n\n"
-        except Exception:
-            last_rid = 0
-
-        # Track last messages.rowid we've seen for HITL bus events.
-        try:
-            last_msg_rid = conn.execute(
-                "SELECT COALESCE(MAX(rowid), 0) FROM messages"
-            ).fetchone()[0]
-        except Exception:
-            last_msg_rid = 0
+        if resume_drid is not None and resume_mrid is not None:
+            # Resume path: skip seed, replay strictly newer rows from cursor.
+            last_rid = resume_drid
+            last_msg_rid = resume_mrid
+        else:
+            # Fresh connect: seed last 25 decisions (oldest→newest) and snap
+            # the messages cursor to current max so we don't ship history.
+            try:
+                seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
+                last_rid = seed[0]["rid"] if seed else 0
+                for row in reversed(seed):
+                    payload = dict(row)
+                    last_rid_seed = payload["rid"]
+                    yield (
+                        f"id: d{last_rid_seed}:m0\n"
+                        f"data: {json.dumps(payload)}\n\n"
+                    )
+            except Exception:
+                last_rid = 0
+            try:
+                last_msg_rid = conn.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM messages"
+                ).fetchone()[0]
+            except Exception:
+                last_msg_rid = 0
 
         while True:
             if await request.is_disconnected():
@@ -1006,7 +1041,10 @@ async def sse_events(request: Request):
                 rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
                 for row in rows:
                     last_rid = row["rid"]
-                    yield f"data: {json.dumps(dict(row))}\n\n"
+                    yield (
+                        f"id: d{last_rid}:m{last_msg_rid}\n"
+                        f"data: {json.dumps(dict(row))}\n\n"
+                    )
             except Exception:
                 pass
             # Phase 6 §3/§7: forward ALL bus event types (not just HITL)
@@ -1026,7 +1064,10 @@ async def sse_events(request: Request):
                     last_msg_rid = hr["rid"]
                     payload = dict(hr)
                     payload["event_type"] = payload.pop("type")
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    yield (
+                        f"id: d{last_rid}:m{last_msg_rid}\n"
+                        f"data: {json.dumps(payload)}\n\n"
+                    )
             except Exception:
                 pass
             await asyncio.sleep(0.5)
