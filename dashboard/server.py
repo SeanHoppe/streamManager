@@ -53,6 +53,11 @@ _hitl_runtime_settings: dict[str, object] = {
 # (safety floor preserved — blocked_ops still fire).
 _VALID_OVERRIDE_MODES = {"OBSERVE", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"}
 _registry = None  # type: ignore[var-annotated]
+# Task B: per-session governance engine registry. Lazily constructed; the
+# dashboard process itself does not run engines today, but the registry
+# is exposed via /api/registry/active so operators (and future SM
+# components) can see which session_ids have hot engines in this process.
+_engine_registry = None  # type: ignore[var-annotated]
 
 
 def _get_bus():
@@ -87,6 +92,29 @@ def _get_registry():
         except Exception:
             _registry = None
     return _registry
+
+
+def _get_engine_registry():
+    """Return a lazily-initialized per-session GovernanceEngine registry.
+
+    The dashboard process does not run engines itself, but the registry
+    is the canonical place for any future in-process consumer to obtain
+    per-session engines, and `/api/registry/active` exposes it for
+    operator visibility. Returns None on import/load failure.
+    """
+    global _engine_registry
+    if _engine_registry is None:
+        try:
+            from stream_manager.governance import EngineRegistry
+            from stream_manager.project_context import load as load_project
+            _engine_registry = EngineRegistry(
+                bus=_get_bus(),
+                project_context=load_project(ROOT),
+                agent_registry=_get_registry(),
+            )
+        except Exception:
+            _engine_registry = None
+    return _engine_registry
 
 
 def _get_hitl_queue():
@@ -352,6 +380,22 @@ async def api_agents(session_id: str | None = None, limit: int = 50):
         return out
     except Exception:
         return []
+
+
+@app.get("/api/registry/active")
+async def api_registry_active():
+    """Return the list of session_ids with a hot in-process engine.
+
+    Task B: surfaces the per-session engine registry for operator
+    visibility. The dashboard process today does not host engines, so
+    on a fresh boot this list is empty; future in-process engine hosts
+    (soak driver, SM daemon) will populate it.
+    """
+    reg = _get_engine_registry()
+    if reg is None:
+        return {"active_session_ids": [], "count": 0}
+    ids = reg.active_session_ids()
+    return {"active_session_ids": ids, "count": len(ids)}
 
 
 @app.get("/api/sessions")
