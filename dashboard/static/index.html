@@ -3092,6 +3092,16 @@ const _KNOWN_EVT_CLASSES = new Set([
   'agent_identified','desktop_pause','governance_call',
 ]);
 
+// FR-UI-3: bus event types that trigger autoForeground() of frame A
+// (Interactive Sessions). The bus event type must MATCH what the
+// governance engine emits — currently `governance_negative_regression`
+// (see src/stream_manager/governance.py). Adding new severity-graded
+// triggers? Append the type here AND add a CSS class above.
+const EVENT_FOREGROUND_TYPES = new Set([
+  'governance_negative_regression',
+  'desktop_pause',
+]);
+
 /* ── Phase 7 / governance_call: L4 cost telemetry strip ──────────
    Default-hidden until the first event arrives so the layout does not
    shift for sessions that never escalate. Cumulative cost is computed
@@ -3207,6 +3217,16 @@ function appendEvlogRow(ev, forceFlush=false){
           // becomes visible on the first such event.
           if(d.event_type === 'governance_call'){
             try{ handleGovernanceCallEvent(d); }catch(_){}
+          }
+          // FR-UI-3: severity-graded auto-foreground. governance_negative_regression
+          // and desktop_pause raise the ACTION REQUIRED count and
+          // foreground frame A. Lower-severity signals (new_pattern,
+          // low_confidence, variance_alert) flag in place via badges.
+          if(EVENT_FOREGROUND_TYPES.has(d.event_type)){
+            try{
+              setFrameActionCount('A', FrameState.openActions.A + 1);
+              autoForeground('A');
+            }catch(_){}
           }
           handleHitlEvent(d);
           return;
