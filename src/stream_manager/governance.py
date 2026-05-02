@@ -679,7 +679,16 @@ class GovernanceEngine:
         if not _cli_enabled():
             return None
         if self._cli_governor is None:
-            self._cli_governor = CliGovernor(self.project_context)
+            # Phase 7: thread bus + session_id through so CliGovernor can
+            # emit governance_call lifecycle events. Both are optional —
+            # CliGovernor silently skips publish when either is unset
+            # (preserves back-compat for callers that build CliGovernor
+            # directly without a bus).
+            self._cli_governor = CliGovernor(
+                self.project_context,
+                bus=self.bus,
+                session_id=self.session_id or None,
+            )
         # Phase 4 / NFR-M2: caller selects the model tier via the
         # pre-routing pass in _evaluate_inner_core. When omitted, fall back
         # to the L2/L3 Haiku default for backward compatibility with

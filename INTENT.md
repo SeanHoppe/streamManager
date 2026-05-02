@@ -72,6 +72,19 @@ Desktop orchestration. SM governs messages, not transitions.
 - File edits under `spikes/**` are throwaway and lower-stakes.
 - Commits to feature branches are routine; force-push to `main` is not.
 
+## UI / HITL principles
+
+- Default dashboard is **monitor-first**: three frames (Interactive REPL, Sub-Agents,
+  Background Jobs) so the human sees activity without being interrupted.
+- Only true escalations (`desktop_pause`, negative regression, static-rule fire)
+  may auto-foreground a frame. Lower-severity signals flag in place via badges.
+- When HITL is ON, SM proposes a ranked option list from its memory; the human
+  picks; SM persists the pick for next time.
+- When HITL is OFF, SM posts its proposed answer to the UI as read-only;
+  monitor-only by default, with a per-card opt-in to take action.
+- Actionable vs informational state must be visible at a glance via paired
+  label + color badges. Color alone is not a signal.
+
 ## Intentional non-goals (v1)
 
 - Multi-tenant cloud deployment.

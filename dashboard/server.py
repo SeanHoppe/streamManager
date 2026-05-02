@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -27,6 +28,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("GOV_DB", str(ROOT / ".claude" / "gov.db")))
@@ -890,6 +893,373 @@ async def api_agent_override_mode(agent_id: str, request: Request):
     }
 
 
+# ── FR-UI-5: ranked decision-suggestion candidates ────────────────────
+
+
+def _resolve_sm_context_path() -> Path | None:
+    """Resolve the .sm-context.yaml (or .toml) path for weights loading.
+
+    Resolution order:
+      1. SM_CONTEXT_PATH env var (explicit override)
+      2. SM_PROJECT_ROOT/.sm-context.yaml
+      3. SM_PROJECT_ROOT/.sm-context.toml
+      4. None (load_weights returns defaults)
+    """
+    explicit = os.environ.get("SM_CONTEXT_PATH")
+    if explicit:
+        p = Path(explicit)
+        return p if p.exists() else None
+    project_root_env = os.environ.get("SM_PROJECT_ROOT")
+    project_root = Path(project_root_env) if project_root_env else ROOT
+    yaml_p = project_root / ".sm-context.yaml"
+    if yaml_p.exists():
+        return yaml_p
+    toml_p = project_root / ".sm-context.toml"
+    if toml_p.exists():
+        return toml_p
+    return None
+
+
+@app.get("/api/decisions/{decision_id}/suggestions")
+async def api_decision_suggestions(decision_id: str):
+    """FR-UI-5: ranked candidate actions for a single decision.
+
+    Returns a JSON array sorted by descending blended score. At least one
+    candidate is always present (engine-proposal fallback). Hard-fails to
+    HTTP 500 with the validation message when `.sm-context.yaml` weights
+    are malformed (per FR-UI-5 contract — no silent default).
+    """
+    try:
+        from stream_manager.decision_suggestions import (
+            load_weights,
+            rank_candidates,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"import failed: {exc}")
+
+    # Hard-fail validation surfaces here.
+    try:
+        weights = load_weights(_resolve_sm_context_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"weights load failed: {exc}")
+
+    try:
+        conn = _open()
+        row = conn.execute(
+            "SELECT d.id, d.action, d.confidence, d.matched_hash, "
+            "m.content FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id WHERE d.id=?",
+            (decision_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="decision not found")
+        decision = dict(row)
+        project_root_env = os.environ.get("SM_PROJECT_ROOT")
+        project_root = Path(project_root_env) if project_root_env else None
+        candidates = rank_candidates(
+            decision, conn, weights, project_root=project_root
+        )
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return [c.to_json() for c in candidates]
+
+
+# ── FR-HITL: persist hitl_mode promotion + emit bus event ─────────────
+
+
+@app.post("/api/hitl/mode")
+async def api_hitl_mode(request: Request):
+    """Persist a HITL mode flip and emit a `hitl_mode_promoted` bus event.
+
+    Body: ``{"session_id": "...", "mode": "off|sync|async",
+              "reason": "take_action|user_toggle"}``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    session_id = body.get("session_id")
+    mode = body.get("mode")
+    reason = body.get("reason") or "user_toggle"
+    if not isinstance(mode, str) or mode not in ("off", "sync", "async"):
+        raise HTTPException(
+            status_code=400, detail="mode must be 'off', 'sync', or 'async'"
+        )
+    if not isinstance(reason, str) or reason not in (
+        "take_action", "user_toggle",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="reason must be 'take_action' or 'user_toggle'",
+        )
+    if not isinstance(session_id, str) or not session_id:
+        try:
+            conn = _open()
+            session_id = _latest_active_session_id(conn)
+            conn.close()
+        except Exception:
+            session_id = None
+    if not session_id:
+        raise HTTPException(
+            status_code=422, detail="no active session to promote"
+        )
+
+    # Read current mode + floor so we can preserve the floor and report the
+    # transition in the bus event.
+    old_mode: str = "async"
+    floor: float = 0.60
+    try:
+        conn = _open()
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "hitl_mode" in cols and "hitl_floor" in cols:
+            row = conn.execute(
+                "SELECT hitl_mode, hitl_floor FROM sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if row is not None:
+                old_mode = (
+                    str(row["hitl_mode"]) if row["hitl_mode"] else "async"
+                )
+                floor = (
+                    float(row["hitl_floor"])
+                    if row["hitl_floor"] is not None
+                    else 0.60
+                )
+        conn.close()
+    except Exception:
+        pass
+
+    # Persist via the bus when available; fall back to direct UPDATE.
+    bus = _get_bus()
+    persisted = False
+    if bus is not None:
+        try:
+            # The bus layer only models sync/async at the schema level;
+            # 'off' is allowed via fall-through update so older callers
+            # don't break.
+            if mode in ("sync", "async"):
+                bus.set_hitl_mode(session_id, mode, floor)
+                persisted = True
+        except Exception:
+            log.exception("set_hitl_mode failed; falling back to UPDATE")
+    if not persisted:
+        try:
+            conn = _open_rw()
+            conn.execute(
+                "UPDATE sessions SET hitl_mode=? WHERE id=?",
+                (mode, session_id),
+            )
+            conn.close()
+            persisted = True
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    # Emit bus event so audit replay surfaces the transition.
+    if bus is not None:
+        try:
+            from stream_manager.message_bus import Message
+            bus.publish(
+                Message.new(
+                    session_id=session_id,
+                    type="hitl_mode_promoted",
+                    direction="internal",
+                    content=(
+                        f"HITL mode {old_mode} -> {mode} ({reason})"
+                    ),
+                    metadata={
+                        "old_mode": old_mode,
+                        "new_mode": mode,
+                        "reason": reason,
+                    },
+                )
+            )
+        except Exception:
+            log.exception("hitl_mode_promoted publish failed")
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "old_mode": old_mode,
+        "new_mode": mode,
+        "reason": reason,
+    }
+
+
+# ── FR-UI-9: per-session settings persistence ─────────────────────────
+#
+# Settings are stored as a single JSON blob in `sessions.settings`. The
+# blob avoids per-column migration churn as new FR-UI-9 controls land.
+# The endpoint validates each known field's value range, merges into
+# the persisted blob, and emits `session_settings_updated` so the
+# event-log can render the change and other tabs/clients can sync.
+
+_SETTINGS_FIELD_VALIDATORS: dict[str, object] = {}
+
+
+def _validate_session_settings_payload(
+    payload: dict[str, object]
+) -> dict[str, object]:
+    """Return the cleaned subset of `payload` that may be persisted.
+
+    Raises HTTPException(400) on any invalid value. Unknown keys are
+    silently dropped so the server stays the source of truth on schema.
+    """
+    out: dict[str, object] = {}
+
+    if "sync_timeout_sec" in payload:
+        try:
+            v = float(payload["sync_timeout_sec"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="sync_timeout_sec must be a number")
+        if v < 10.0 or v > 600.0:
+            raise HTTPException(
+                status_code=400,
+                detail="sync_timeout_sec out of range (10-600)",
+            )
+        out["sync_timeout_sec"] = v
+
+    if "activity_window_sec" in payload:
+        try:
+            v = float(payload["activity_window_sec"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="activity_window_sec must be a number")
+        if v < 1.0 or v > 600.0:
+            raise HTTPException(
+                status_code=400,
+                detail="activity_window_sec out of range (1-600)",
+            )
+        out["activity_window_sec"] = v
+
+    if "confidence_floor" in payload:
+        try:
+            v = float(payload["confidence_floor"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="confidence_floor must be a number")
+        if v < 0.0 or v > 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="confidence_floor out of range (0.0-1.0)",
+            )
+        out["confidence_floor"] = v
+
+    if "audible_cue" in payload:
+        if not isinstance(payload["audible_cue"], bool):
+            raise HTTPException(status_code=400, detail="audible_cue must be bool")
+        out["audible_cue"] = payload["audible_cue"]
+
+    if "motion" in payload:
+        m = payload["motion"]
+        if m not in ("system", "reduce", "allow"):
+            raise HTTPException(
+                status_code=400,
+                detail="motion must be one of: system, reduce, allow",
+            )
+        out["motion"] = m
+
+    if "hitl_mode" in payload:
+        if payload["hitl_mode"] not in ("sync", "async"):
+            raise HTTPException(
+                status_code=400,
+                detail="hitl_mode must be one of: sync, async",
+            )
+        out["hitl_mode"] = payload["hitl_mode"]
+
+    if "pause_detection_enabled" in payload:
+        if not isinstance(payload["pause_detection_enabled"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="pause_detection_enabled must be bool",
+            )
+        out["pause_detection_enabled"] = payload["pause_detection_enabled"]
+
+    return out
+
+
+@app.get("/api/sessions/{session_id}/settings")
+async def api_session_settings_get(session_id: str):
+    """Return the persisted FR-UI-9 settings blob for a session."""
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+    try:
+        settings = bus.get_session_settings(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "session_id": session_id,
+        "settings": settings,
+    }
+
+
+@app.post("/api/sessions/{session_id}/settings")
+async def api_session_settings_post(session_id: str, request: Request):
+    """Persist a partial FR-UI-9 settings update for a session.
+
+    Validates each known field, merges into the existing JSON blob, and
+    emits a `session_settings_updated` bus event carrying the FULL merged
+    settings (not just the patch) so other connected clients can sync.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    cleaned = _validate_session_settings_payload(body)
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="no recognised settings keys in body")
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+
+    # Ensure the session row exists so the UPDATE finds something to write.
+    try:
+        bus.open_session(session_id)
+    except Exception:
+        # If open_session fails the session may already exist; the
+        # subsequent set_session_settings will surface the real error.
+        pass
+
+    try:
+        bus.set_session_settings(session_id, cleaned)
+        merged = bus.get_session_settings(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Emit bus event so audit replay and other clients see the update.
+    try:
+        from stream_manager.message_bus import Message
+        bus.publish(
+            Message.new(
+                session_id=session_id,
+                type="session_settings_updated",
+                direction="internal",
+                content=f"settings updated: {','.join(sorted(cleaned.keys()))}",
+                metadata={"settings": merged, "patch": cleaned},
+            )
+        )
+    except Exception:
+        log.exception("session_settings_updated publish failed")
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "settings": merged,
+    }
+
+
 # ── Phase 6 §2: NDJSON decisions export ────────────────────────────────
 
 
@@ -969,9 +1339,35 @@ async def api_decisions_export(session_id: str | None = None):
 _HITL_EVENT_TYPES = ("hitl_sync_queued", "hitl_async_flagged", "hitl_timeout")
 
 
+def _parse_last_event_id(raw: str | None) -> tuple[int | None, int | None]:
+    """Parse compound SSE Last-Event-ID of form ``d{drid}:m{mrid}``.
+
+    Returns (decisions_rid, messages_rid) or (None, None) if absent/malformed.
+    On fresh connect (no header) the caller seeds 25 recent decisions; on
+    resume both cursors are honoured and the seed is skipped (FR-UI-8).
+    """
+    if not raw:
+        return None, None
+    try:
+        d_part, m_part = raw.split(":", 1)
+        if not (d_part.startswith("d") and m_part.startswith("m")):
+            return None, None
+        return int(d_part[1:]), int(m_part[1:])
+    except Exception:
+        return None, None
+
+
 @app.get("/events")
 async def sse_events(request: Request):
-    """SSE stream: one JSON event per new decision row, 500ms poll."""
+    """SSE stream: one JSON event per new decision row, 500ms poll.
+
+    FR-UI-8: emits ``id: d{drid}:m{mrid}`` on every event so the browser
+    resumes from the last seen cursor via ``Last-Event-ID`` after reconnect.
+    """
+
+    resume_drid, resume_mrid = _parse_last_event_id(
+        request.headers.get("last-event-id")
+    )
 
     async def generate():
         try:
@@ -982,22 +1378,31 @@ async def sse_events(request: Request):
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        # Seed with last 25 decisions (oldest→newest so client prepends correctly)
-        try:
-            seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
-            last_rid = seed[0]["rid"] if seed else 0
-            for row in reversed(seed):
-                yield f"data: {json.dumps(dict(row))}\n\n"
-        except Exception:
-            last_rid = 0
-
-        # Track last messages.rowid we've seen for HITL bus events.
-        try:
-            last_msg_rid = conn.execute(
-                "SELECT COALESCE(MAX(rowid), 0) FROM messages"
-            ).fetchone()[0]
-        except Exception:
-            last_msg_rid = 0
+        if resume_drid is not None and resume_mrid is not None:
+            # Resume path: skip seed, replay strictly newer rows from cursor.
+            last_rid = resume_drid
+            last_msg_rid = resume_mrid
+        else:
+            # Fresh connect: seed last 25 decisions (oldest→newest) and snap
+            # the messages cursor to current max so we don't ship history.
+            try:
+                seed = conn.execute(_seed_sql(conn), (25,)).fetchall()
+                last_rid = seed[0]["rid"] if seed else 0
+                for row in reversed(seed):
+                    payload = dict(row)
+                    last_rid_seed = payload["rid"]
+                    yield (
+                        f"id: d{last_rid_seed}:m0\n"
+                        f"data: {json.dumps(payload)}\n\n"
+                    )
+            except Exception:
+                last_rid = 0
+            try:
+                last_msg_rid = conn.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM messages"
+                ).fetchone()[0]
+            except Exception:
+                last_msg_rid = 0
 
         while True:
             if await request.is_disconnected():
@@ -1006,7 +1411,10 @@ async def sse_events(request: Request):
                 rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
                 for row in rows:
                     last_rid = row["rid"]
-                    yield f"data: {json.dumps(dict(row))}\n\n"
+                    yield (
+                        f"id: d{last_rid}:m{last_msg_rid}\n"
+                        f"data: {json.dumps(dict(row))}\n\n"
+                    )
             except Exception:
                 pass
             # Phase 6 §3/§7: forward ALL bus event types (not just HITL)
@@ -1026,7 +1434,10 @@ async def sse_events(request: Request):
                     last_msg_rid = hr["rid"]
                     payload = dict(hr)
                     payload["event_type"] = payload.pop("type")
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    yield (
+                        f"id: d{last_rid}:m{last_msg_rid}\n"
+                        f"data: {json.dumps(payload)}\n\n"
+                    )
             except Exception:
                 pass
             await asyncio.sleep(0.5)

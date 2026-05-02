@@ -169,6 +169,16 @@ class MessageBus:
                     "ALTER TABLE sessions ADD COLUMN hitl_floor REAL NOT NULL DEFAULT 0.60"
                 )
 
+            # FR-UI-9 — additive migration for sessions.settings: a JSON
+            # blob holding the FR-UI-9 user-preference snapshot for this
+            # session (sync timeout, audible cue, activity window, motion
+            # override, etc). JSON blob avoids a column per setting.
+            if "settings" not in cols:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._conn.execute(
+                        "ALTER TABLE sessions ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'"
+                    )
+
             # Phase 4 / NFR-M3 — additive migration for decisions table:
             # add model_used + layer if absent. Older DBs created before
             # Phase 4 will not have these columns. SQLite's ALTER TABLE
@@ -480,6 +490,68 @@ class MessageBus:
             self._conn.execute(
                 "UPDATE sessions SET hitl_mode=?, hitl_floor=? WHERE id=?",
                 (mode, float(floor), session_id),
+            )
+
+    def get_session_settings(self, session_id: str) -> dict[str, object]:
+        """Return the FR-UI-9 settings blob for a session.
+
+        Returns an empty dict when the row is missing or the blob is
+        unparsable. Callers MUST be tolerant of missing keys — the schema
+        evolves additively.
+        """
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    "SELECT settings FROM sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return {}
+        if row is None or row[0] is None:
+            return {}
+        raw = str(row[0])
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (TypeError, ValueError):
+            pass
+        return {}
+
+    def set_session_settings(
+        self, session_id: str, settings: dict[str, object]
+    ) -> None:
+        """Persist the FR-UI-9 settings blob for a session.
+
+        Merges into any existing blob so callers may patch a subset of
+        keys. Unknown keys are stored verbatim — server-side validation
+        is done by the dashboard endpoint.
+        """
+        if not isinstance(settings, dict):
+            raise TypeError("settings must be a dict")
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    "SELECT settings FROM sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                row = None
+            current: dict[str, object] = {}
+            if row is not None and row[0]:
+                try:
+                    parsed = json.loads(str(row[0]))
+                    if isinstance(parsed, dict):
+                        current = parsed
+                except (TypeError, ValueError):
+                    current = {}
+            merged = {**current, **settings}
+            blob = json.dumps(merged, separators=(",", ":"))
+            self._conn.execute(
+                "UPDATE sessions SET settings=? WHERE id=?",
+                (blob, session_id),
             )
 
     def get_decision_by_id(self, decision_id: str) -> dict[str, object] | None:

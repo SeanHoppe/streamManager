@@ -26,6 +26,10 @@ dist/
 .idea/
 *.swp
 
+# Node (dev-only tooling, e.g. axe audit)
+node_modules/
+package-lock.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -35,5 +39,9 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Replay reports (may contain transcript-derived path/file names)
-reports/
+# Replay reports (may contain transcript-derived path/file names).
+# The directory itself is tracked so `reports/axe-*` audit artifacts
+# (NFR-UI-1) commit. Specific noisy outputs are excluded by glob.
+reports/cli_failures.jsonl
+reports/dashboard*.log
+reports/soak_*

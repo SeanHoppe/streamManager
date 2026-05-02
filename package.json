@@ -1,0 +1,14 @@
+{
+  "name": "stream-manager-dev-tools",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Dev-only tooling (axe-core a11y audit). Not published.",
+  "type": "module",
+  "scripts": {
+    "axe": "node tools/axe_audit.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/puppeteer": "4.10.2",
+    "puppeteer": "24.10.1"
+  }
+}

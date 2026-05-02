@@ -282,6 +282,8 @@ FR-OG-7 activates only when `.sm-context.yaml` includes a maturity score artifac
 - **Override** — select a different action (ALLOW / GUIDE / SUGGEST / INTERVENE / BLOCK) and optionally enter a free-text note explaining the decision.
 - **Dismiss** — mark as not requiring action (equivalent to ALLOW with no note).
 
+Each entry MUST render with the actionability cues defined in FR-UI-6 (solid amber `ACTION REQUIRED` badge + pulsing border when HITL ON; muted `OBSERVING` badge when HITL OFF). The Override action MUST present the ranked suggestion list returned by the decision-suggestion API (FR-UI-5) so the human picks from SM's memory-backed candidates rather than a blank dropdown.
+
 **FR-HITL-5** — Sync mode MUST have a configurable timeout (default `60 s`). On timeout, SM falls back to its proposed decision, records `resolution=timeout` in `hitl_pending`, and emits a `hitl_timeout` bus event. A timed-out decision MUST NOT be silently dropped.
 
 **FR-HITL-6** — In **async mode**, every decision row in the dashboard feed MUST expose an **Annotate** affordance. The human can set an override action and add a note at any time after the decision was made. Async annotations MUST be stored as a `hitl_override` record linked to the original `decisions` row.
@@ -323,6 +325,94 @@ CREATE TABLE IF NOT EXISTS hitl_overrides (
 - Desktop pause detection on/off toggle.
 
 **FR-HITL-10** — All HITL interactions (approvals, overrides, timeouts, annotations) MUST be recorded with timestamp and source `"hitl"` in the bus for full audit replay.
+
+### 4.10 Dashboard UI (FR-UI)
+
+**FR-UI-1** — The dashboard MUST default to a **three-frame split-pane layout**, each frame independently scrollable and resizable:
+
+| Frame | Content | Default position |
+|-------|---------|------------------|
+| **A — Interactive Sessions** | REPL-style live view of the active Desktop ↔ CLI message stream, newest at bottom, auto-scroll until user scrolls up | Left (or top on narrow viewports) |
+| **B — Sub-Agents** | Per-agent activity, switchable via tabs: (i) **Swim-lane** view — most recent 10 agents, **active agents pinned to top** (an agent is "active" when it has emitted any event within the configurable activity window — default `10 s`, settable via FR-UI-9), older inactive scrollable below; each row's **leading cell** is the agent name + role badge (`prompt_constructor`, `developer`, `code_reviewer`, `tester`, `frontend_architect`, `researcher`, `strategic_advisor`, `health_monitor`, `sub_agent`, `unknown`), followed by chronological event chips; (ii) **Filtered feed** view — flat decision feed filtered by `agent_id` | Center |
+| **C — Background Jobs** | Generic CLI subprocesses spawned by or observed for the governed session (test runs, builds, lints, ad-hoc shell commands, anything tracked via the existing `cli_client.py` subprocess wrapper). Each job renders as a card with the **leading cell** = job name / command + PID, followed by status, elapsed time, exit code (when finished), and last log line. The async-mode HITL annotation queue is shown as a sub-section within this frame | Right (or bottom on narrow viewports) |
+
+The layout MUST persist per-session in browser local storage. A `Reset layout` control MUST restore defaults.
+
+**FR-UI-2** — Each frame MUST render the actionability cues defined in FR-UI-6 at frame-header level so the user can see at a glance which frame holds an open action.
+
+**FR-UI-3** — **Foreground escalation policy** (which trigger brings a frame forward vs. flags in place):
+
+| Trigger | UI behaviour |
+|---------|-------------|
+| `desktop_pause` (FR-HITL-2 primary, JSONL `stopReason=end_turn`) | **Auto-foreground** the relevant frame; raise `ACTION REQUIRED` badge if HITL ON. Audible cue is **OFF by default**, user-toggleable via the UI settings panel (FR-UI-9), persisted per-session |
+| `new_pattern` (no decision-graph precedent) | Flag in place: amber dot on frame tab + entry highlight; do NOT auto-foreground |
+| `low_confidence` (< confidence floor) | Flag in place: amber dot + entry highlight; do NOT auto-foreground |
+| FR-OG-7 `governance_variance_alert` (ring delta > 5% / ≥3 cells flipped) | Flag in place: orange severity badge on frame tab |
+| FR-OG-7 `governance_negative_regression` (negative cell movement) | **Auto-foreground**; red `BLOCKED` badge; HITL ack required regardless of mode |
+| Static rule fire (NFR-S3) | **Auto-foreground**; red `BLOCKED` badge |
+
+**FR-UI-4** — When an issue surfaces, the UI MUST behave per HITL mode:
+
+- **HITL ON (sync or async-with-action):** SM MUST present a ranked option list via the decision-suggestion API (FR-UI-5). The human selects an option (or overrides with free text). SM MUST persist the chosen option as a `hitl_overrides` row keyed to the message hash so future similar decisions reuse it via FR-HITL-7.
+- **HITL OFF (monitor-only):** SM MUST post its proposed answer plus reasoning to the UI as a read-only card. No human input is required and no `ACTION REQUIRED` badge is rendered. The user retains an explicit `Take action` affordance on any card. Activating it MUST **promote the session to HITL ON in SYNC mode** (the safer default; the user may then switch to ASYNC via FR-UI-9 settings), surfacing the FR-UI-5 ranked-suggestion list for that card and all subsequent triggers until the user toggles HITL OFF again. The mode flip MUST persist to the session record per FR-HITL-1 and emit a `hitl_mode_promoted` bus event so audit replay reflects the transition.
+
+**FR-UI-5** — **Decision-suggestion API.** SM MUST expose `GET /api/decisions/{decision_id}/suggestions` returning a JSON array of ranked candidate actions. Each entry MUST contain:
+
+```json
+{
+  "action": "ALLOW | GUIDE | SUGGEST | INTERVENE | BLOCK",
+  "confidence": 0.0-1.0,
+  "historical_precedent_count": <int>,
+  "sourced_from": ["graph_pattern" | "hitl_override" | "static_rule" | "project_context"],
+  "rationale": "<≤140 char human-readable reason>",
+  "matched_hash": "<hex>"
+}
+```
+
+Ranking MUST blend: (a) decision-graph match confidence (FR-DG-4), (b) prior `hitl_overrides` for the same hash (FR-HITL-7) weighted by recency, (c) static-rule applicability, (d) project-context precheck (FR-PC-5). Blend weights MUST be **tunable via `.sm-context.yaml`** under a `decision_suggestion_weights` key:
+
+```yaml
+decision_suggestion_weights:
+  graph_match:     0.40
+  hitl_override:   0.35   # recency-decayed
+  static_rule:     0.15
+  project_context: 0.10
+  recency_half_life_days: 14
+```
+
+Defaults shown above. Weights MUST sum to 1.0 (tolerance ±0.001) and each MUST be in [0.0, 1.0]; `recency_half_life_days` MUST be > 0. SM MUST validate at load and **hard-fail startup** on invalid configuration, logging the offending key(s) and exiting non-zero. Hard-fail is preferred over silent fallback because suggestion ranking directly drives HITL choices and project-context governance — incorrect weights silently bias every decision. The API MUST return at least one candidate even when no precedent exists (fall back to current engine proposal with `sourced_from=["graph_pattern"]` and `historical_precedent_count=0`).
+
+**FR-UI-6** — **Visual actionability cues.** Every surface that may demand human attention MUST render one of the following badge states. Badge color and label MUST be paired (no color-only signalling, for accessibility):
+
+| State | Badge label | Color (hex) | Border |
+|-------|-------------|-------------|--------|
+| Awaiting human input (HITL ON) | `ACTION REQUIRED` | `#d97706` (amber-600) on `#fef3c7` | 2px solid amber, pulse animation |
+| Monitor-only (HITL OFF) | `OBSERVING` | `#475569` (slate-600) on `#f1f5f9` | none |
+| Auto-decided / resolved | `DECIDED` | `#16a34a` (green-600) on `#dcfce7` | none |
+| Blocked / regression / static-rule fire | `BLOCKED` | `#dc2626` (red-600) on `#fee2e2` | 2px solid red |
+| Variance / drift warning | `WARN` | `#ea580c` (orange-600) on `#ffedd5` | 1px dashed orange |
+| Timed-out HITL pending | `TIMEOUT` | `#7c3aed` (violet-600) on `#ede9fe` | none |
+
+Non-actionable cards MUST NOT render the pulsing border or the `ACTION REQUIRED` label. Hovering any badge MUST surface a tooltip naming the trigger (e.g. `desktop_pause`, `new_pattern`, `negative_regression`).
+
+**FR-UI-7** — Frame headers MUST display a live count of open `ACTION REQUIRED` items per frame. Total open-actions count MUST appear in the dashboard tab title (e.g. `(2) AdaptiveBridge`) so the user sees pending work even when the dashboard tab is backgrounded.
+
+**FR-UI-8** — All UI state changes driven by SM bus events MUST arrive over the existing SSE channel. No polling. Disconnects MUST surface a `RECONNECTING` banner and resume from the last received event ID.
+
+**FR-UI-9** — Dashboard MUST expose a **Settings panel** (gear icon in the dashboard header) with the following per-session controls, persisted to the session record on the WAL bus:
+
+| Setting | Default | Range / values |
+|---------|---------|----------------|
+| HITL mode | OFF | OFF / SYNC / ASYNC |
+| Confidence floor (FR-HITL-2 trigger #2) | 0.60 | 0.0–1.0 |
+| Sync timeout (FR-HITL-5) | 60 s | 10–600 s |
+| Desktop pause detection (FR-HITL-2 #3) | ON | ON / OFF |
+| Audible cue on auto-foreground (FR-UI-3) | OFF | ON / OFF |
+| Sub-Agents activity window (FR-UI-1 frame B "active" pinning threshold) | 10 s | 1–600 s |
+| Reduced motion override (NFR-UI-7) | system | system / force-reduce / force-allow |
+| Frame layout reset | — | button: restore default split-pane geometry |
+
+Settings changes MUST take effect without a page reload and emit a `dashboard_settings_changed` bus event for audit.
 
 ---
 
@@ -373,6 +463,16 @@ CREATE TABLE IF NOT EXISTS hitl_overrides (
 - **NFR-M4** — At steady state (post-pattern-convergence), ≥ 80% of decisions MUST resolve at L0–L1 (no LLM). L4 call rate > 20% of decisions is a signal that pattern learning is not converging and MUST trigger an `nfr_model_routing_alert` bus event.
 
 - **NFR-M5** — Model routing decisions MUST be logged per-decision (`model_used`, `layer`) in the `decisions` table for cost and convergence analysis.
+
+### 5.7 UI legibility & accessibility
+
+- **NFR-UI-1** — Body text MUST meet WCAG 2.1 AA contrast: ≥ 4.5:1 against frame background for body, ≥ 3:1 for text ≥ 18px or bold ≥ 14px. Audited per release with an automated checker (e.g. `axe-core`).
+- **NFR-UI-2** — Minimum rendered font sizes: 14px body, 13px metadata / timestamps, 12px badge labels. No live UI surface MUST render prose below 12px.
+- **NFR-UI-3** — Font stack MUST use a system stack (`-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`) to avoid web-font rasterisation blur at small sizes. Monospaced surfaces (REPL, JSON dumps) use `ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace`.
+- **NFR-UI-4** — Color tokens for prose MUST be solid (no semi-transparent overlays on text). Backgrounds MAY use translucency only where text sits in an opaque inner container.
+- **NFR-UI-5** — All actionable controls (buttons, links, override dropdowns, `Take action` affordances) MUST be keyboard-focusable with a visible focus ring (≥ 2px, ≥ 3:1 contrast against adjacent surfaces).
+- **NFR-UI-6** — Badge states (FR-UI-6) MUST NOT rely on color alone; the text label is the primary signal, color reinforces.
+- **NFR-UI-7** — A `prefers-reduced-motion` media query MUST disable the pulse animation on `ACTION REQUIRED` badges; the solid border + label remain.
 
 ---
 
@@ -437,6 +537,12 @@ CREATE TABLE IF NOT EXISTS hitl_overrides (
 **Decision:** Route by decision layer (NFR-M1). L0–L1 require no LLM. L2–L3 use Haiku — these are confirmation or soft-inference calls on low-confidence graph matches where the cost of a Haiku error is a recoverable GUIDE, not a missed destructive action. L4 uses Sonnet minimum — alignment checks, novel INTERVENE/BLOCK, and HITL note synthesis require multi-document reasoning that Haiku degrades on at the 400-token project context budget.
 **Alternatives considered:** Haiku for all LLM calls (rejected — demonstrated reasoning degradation on multi-doc alignment tasks at short token budgets); Sonnet for all LLM calls (correct but ~12× cost of L2–L3 Haiku calls for lower-stakes decisions; unsustainable at high message volume); dynamic model selection per message complexity (rejected — complexity estimation itself requires a model call, defeating the purpose).
 **Consequences:** ~80% of decisions at L0–L1 (no cost); L2–L3 Haiku calls ~12× cheaper than Sonnet; L4 Sonnet reserved for decisions where correctness matters most. Model choice exposed via env vars so it can be updated as better/cheaper models ship. NFR-M4 convergence alert prevents silent model-routing budget drift.
+
+### ADR-11 — Three-frame split-pane UI with severity-graded foreground escalation
+**Context:** The dashboard previously surfaced all activity in a single decision feed. With Desktop sub-agent orchestration, parallel background jobs, and HITL queueing, that single feed buries signal under noise. Every event also competed for the same attention slot — a low-confidence flag interrupted the user as much as a destructive-rule block.
+**Decision:** Default UI is three independent frames (Interactive Sessions REPL, Sub-Agents, Background Jobs). Foreground escalation is severity-graded: only `desktop_pause`, `negative_regression`, and static-rule fires auto-foreground; `new_pattern`, `low_confidence`, and variance alerts flag in place via badges. HITL ON drives an `ACTION REQUIRED` ranked-suggestion flow (FR-UI-5); HITL OFF is monitor-only with per-card `Take action` opt-in.
+**Alternatives considered:** Single unified feed (rejected — mixes interactive vs. async vs. background concerns; user can't filter attention); modal popup on every flag (rejected — interrupts work, trains the user to dismiss reflexively); per-frame separate browser windows (rejected — loses the at-a-glance overview that catches cross-frame correlations).
+**Consequences:** User controls attention; badges enable async monitoring without losing critical events. Layout persistence per-session preserves user preference. Decision-suggestion API (FR-UI-5) creates a single contract that both the HITL Override panel and the HITL-OFF read-only card consume, so SM's memory is exposed identically in both modes. Adds one new API endpoint and one new local-storage key; no schema change required (suggestions derive from existing `patterns`, `decisions`, `hitl_overrides` tables).
 
 ---
 
@@ -611,3 +717,6 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | 1.4 | 2026-05-01 | SeanHoppe | FR-AR-7: JSONL log tail as second signal path; attributionPlugin/attributionSkill eliminate pattern inference; isSidechain→sub_agent; stopReason→primary desktop_pause signal; FR-HITL-2 amended with JSONL-primary/heuristic-fallback detection hierarchy |
 | 1.5 | 2026-05-01 | SeanHoppe | §5.6 NFR-M1–M5: tiered model routing (no-LLM L0–L1, Haiku L2–L3, Sonnet-floor L4); ADR-10; model logged per-decision; convergence alert NFR-M4 |
 | 1.6 | 2026-05-01 | SeanHoppe | FR-OG-7: maturity-ring alignment signals (sweep-JOB pattern=ALLOW, deviation=GUIDE, missing AAR Deviations=GUIDE, ring delta>5%=variance alert+HITL, negative cell=BLOCK+ack); agent_profiles.yaml spotlight updated with MVP-100-PLAN + maturity-dashboard.html |
+| 1.7 | 2026-05-02 | SeanHoppe | §4.10 FR-UI: three-frame split-pane (Interactive REPL / Sub-Agents tabs / Background Jobs); FR-UI-3 severity-graded foreground (desktop_pause auto-foreground, new_pattern/low_conf/variance flag-in-place); FR-UI-4 HITL-on ranked suggestions vs HITL-off monitor-only with per-card Take action; FR-UI-5 decision-suggestion API; FR-UI-6 badge spec (ACTION REQUIRED / OBSERVING / DECIDED / BLOCKED / WARN / TIMEOUT); FR-HITL-4 extended with FR-UI-6 cues + suggestion list; §5.7 NFR-UI-1–7 legibility (WCAG AA, system fonts, solid color tokens, focus rings, reduced-motion); ADR-11 |
+| 1.8 | 2026-05-02 | SeanHoppe | FR-UI refinements: Bg Jobs frame = generic CLI subprocesses (job name + PID leading cell); Sub-Agents swim-lane = last 10 agents, active pinned top, agent name leading cell; FR-UI-4 `Take action` promotes session to HITL ON (not one-off); FR-UI-3 audible cue default OFF, UI-toggleable; FR-UI-5 ranking weights tunable via `.sm-context.yaml` `decision_suggestion_weights`; FR-UI-9 Settings panel spec |
+| 1.9 | 2026-05-02 | SeanHoppe | FR-UI follow-ups: FR-UI-1 frame B "active" = configurable activity window (default 10 s, set via FR-UI-9); FR-UI-4 `Take action` promotion explicit SYNC default + emits `hitl_mode_promoted` bus event; FR-UI-5 weights validation = **hard-fail startup** on bad config (not fallback); FR-UI-9 adds Sub-Agents activity window setting (1–600 s) |
