@@ -3312,7 +3312,10 @@ function renderSwimlane(){
   const visible = sorted.slice(0, 10);
   const overflow = sorted.slice(10);
   const now = Date.now();
-  const win = FrameState.activityWindowSec * 1000;
+  // FR-UI-1 + FR-UI-9: read activity window from settings, clamp to
+  // FR-UI-9 range so a malformed setting cannot break the lane-row state.
+  const winSec = Math.max(1, Math.min(600, Number(FrameState.activityWindowSec) || 10));
+  const win = winSec * 1000;
   lane.innerHTML = '';
   for(const [slug, a] of visible){
     const isActive = (now - a.lastSeen) < win;
@@ -3350,9 +3353,14 @@ function renderSwimlane(){
   }
 }
 
+// FR-UI-1 + FR-UI-9: swim-lane re-pin tick consults the user-configured
+// activity window from FrameState (sourced from /api/sessions/{id}/settings
+// or localStorage). Clamp to the FR-UI-9 range [1, 600] seconds defensively
+// so a stale or malformed setting can't disable the active-class refresh.
 setInterval(()=>{
   const now = Date.now();
-  const win = FrameState.activityWindowSec * 1000;
+  const winSec = Math.max(1, Math.min(600, Number(FrameState.activityWindowSec) || 10));
+  const win = winSec * 1000;
   document.querySelectorAll('.lane-row').forEach(el=>{
     const slug = el.dataset.slug; if(!slug) return;
     const a = FrameState.agents.get(slug); if(!a) return;
