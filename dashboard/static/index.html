@@ -4,9 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GOVERNANCE MONITOR — STREAM MANAGER</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Teko:wght@300;400;500;600&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Share+Tech+Mono&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -15,6 +12,21 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{height:100%;-webkit-font-smoothing:antialiased}
 button{border:none;cursor:pointer;background:none}
+
+/* NFR-UI-3: system font stacks override theme web-fonts */
+:root{
+  --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+               "Liberation Mono", Menlo, monospace;
+}
+[data-theme="obsidian"], [data-theme="phosphor"], [data-theme="paper"]{
+  --font-h: var(--ff-system);
+  --font-d: var(--ff-system);
+}
+.mono, code, .repl-line, .json-dump, .hash, .c-conf .pips{
+  font-family: var(--ff-mono);
+}
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    THEME: OBSIDIAN — dark industrial telemetry, amber glow
@@ -29,8 +41,8 @@ button{border:none;cursor:pointer;background:none}
   --border:       #192030;
   --border-hi:    rgba(245,158,11,0.25);
   --text:         #b8b098;
-  --text-dim:     #3a3828;
-  --text-ui:      #5a5848;
+  --text-dim:     #7a7058;
+  --text-ui:      #8a8068;
   --text-bright:  #e8e0cc;
   --accent:       #f59e0b;
   --accent-dim:   rgba(245,158,11,0.09);
@@ -55,8 +67,8 @@ button{border:none;cursor:pointer;background:none}
   --border:       #082510;
   --border-hi:    rgba(57,255,20,0.3);
   --text:         #5aaa60;
-  --text-dim:     #163820;
-  --text-ui:      #246630;
+  --text-dim:     #3a8050;
+  --text-ui:      #4ea060;
   --text-bright:  #9de89e;
   --accent:       #39ff14;
   --accent-dim:   rgba(57,255,20,0.07);
@@ -81,8 +93,8 @@ button{border:none;cursor:pointer;background:none}
   --border:       #ccc4b4;
   --border-hi:    rgba(192,57,43,0.35);
   --text:         #2a2018;
-  --text-dim:     #a09080;
-  --text-ui:      #887060;
+  --text-dim:     #6a5040;
+  --text-ui:      #5a4030;
   --text-bright:  #140c04;
   --accent:       #c0392b;
   --accent-dim:   rgba(192,57,43,0.07);
@@ -136,17 +148,18 @@ body{
 /* scanline overlay */
 body::after{
   content:'';
-  position:fixed;
-  inset:0;
+  position:fixed; inset:0;
   background:repeating-linear-gradient(
-    0deg,
-    transparent 0px,transparent 3px,
-    rgba(0,0,0,.08) 3px,rgba(0,0,0,.08) 4px
-  );
+    0deg, transparent 0 3px, rgba(0,0,0,.06) 3px 4px);
   pointer-events:none;
-  z-index:9999;
-  opacity:var(--scan-op,0);
+  z-index:1;
+  opacity:0;
   transition:opacity .4s;
+  mix-blend-mode:multiply;
+}
+html[data-scanlines="on"] body::after{ opacity:.06; }
+@media (prefers-reduced-motion: reduce){
+  html[data-scanlines="on"] body::after{ opacity:0; }
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -405,7 +418,7 @@ body::after{
   color:var(--text);
   gap:12px;
 }
-.sess-id{color:var(--accent);opacity:.7}
+.sess-id{color:var(--accent)}
 .sess-active{color:var(--c-allow)}
 .sess-ended{color:var(--text-dim)}
 .sess-empty{font-size:10px;color:var(--text-dim);font-style:italic}
@@ -598,11 +611,11 @@ body::after{
   padding-top:3px;
   text-transform:uppercase;
 }
-.src-precheck  {color:var(--accent);opacity:.65}
+.src-precheck  {color:var(--accent)}
 .src-graph     {color:#60a5fa}
 .src-cli       {color:#c084fc}
 .src-default   {color:var(--text-dim)}
-.src-rate-limit{color:var(--c-intervene);opacity:.7}
+.src-rate-limit{color:var(--c-intervene)}
 
 .c-conf{
   font-family:var(--font-d);
@@ -1328,6 +1341,256 @@ body::after{
   color:var(--text-dim);
   letter-spacing:0.07em;
 }
+
+/* NFR-UI-2: minimum font sizes (12px badges, 13px metadata, 14px body) */
+body{ font-size:14px; }
+.logo-sub, .live-dot, .stat-label,
+.dist-title, .sess-title, .ring-title{ font-size:11px; }
+.dist-name, .dist-pct, .sess-row, .sess-empty{ font-size:13px; }
+.fh-col{ font-size:12px; }
+.c-ts, .c-conf, .c-sess, .cr, .c-src, .c-agent{ font-size:13px; }
+.evlog-row, .evlog-content, .evlog-ts{ font-size:13px; }
+.ct, .hitl-prev, .tray textarea{ font-size:14px; }
+.badge, .layer-badge, .hitl-trig, .hitl-mode-badge{ font-size:12px; }
+.fbtn, .hitl-btn, .tray-btn, .export-btn,
+.evlog-toggle, .evlog-ctrl-btn,
+.override-popover button{ font-size:12px; }
+.sess-select, .settings-input, .tray select{ font-size:13px; }
+.feed-cols{
+  grid-template-columns:96px 92px 76px 44px 110px 110px 1fr 88px;
+  gap:12px;
+}
+
+/* FR-UI-1: three-frame split pane */
+.shell{ max-width:1680px; padding:0 16px 24px; }
+.frames{
+  display:grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.2fr) minmax(320px, 1fr);
+  gap:1px;
+  background:var(--border);
+  border:1px solid var(--border);
+  height: calc(100vh - 220px);
+  min-height: 520px;
+  margin-bottom:14px;
+}
+.frame{
+  background:var(--bg-card);
+  display:flex; flex-direction:column;
+  min-width:0; overflow:hidden; position:relative;
+}
+.frame-head{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg);
+  flex-shrink:0;
+}
+.frame-title{
+  font-family:var(--ff-system);
+  font-size:13px; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase;
+  color:var(--text-bright);
+}
+.frame-actions{ display:flex; gap:6px; align-items:center; }
+.frame-action-count{
+  font-family:var(--ff-system); font-size:12px; font-weight:600;
+  padding:2px 8px; border-radius:2px;
+}
+.frame-action-count[data-count="0"]{
+  background:transparent; color:var(--text-dim); border:1px solid var(--border);
+}
+.frame-action-count:not([data-count="0"]){
+  background:#fef3c7; color:#92400e; border:1px solid #d97706;
+}
+.frame-body{ flex:1; overflow-y:auto; min-height:0; }
+.frame-body::-webkit-scrollbar{ width:6px; }
+.frame-body::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+
+/* Frame A — REPL */
+.repl-stream{ display:flex; flex-direction:column; padding:8px 0; }
+.repl-line{
+  display:grid;
+  grid-template-columns: 70px 60px 1fr;
+  gap:10px; padding:6px 14px;
+  font-family:var(--ff-mono); font-size:13px;
+  border-bottom:1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.repl-line[data-dir="outbound"]{ background:color-mix(in srgb, var(--accent) 4%, transparent); }
+.repl-ts{ color:var(--text-dim); }
+.repl-dir{ font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; }
+.repl-dir[data-dir="inbound"]{ color:#60a5fa; }
+.repl-dir[data-dir="outbound"]{ color:var(--accent); }
+.repl-content{ color:var(--text); white-space:pre-wrap; word-break:break-word; }
+
+/* Frame B — Sub-Agents tabs */
+.tabs{ display:flex; border-bottom:1px solid var(--border); background:var(--bg); }
+.tab{
+  font-family:var(--ff-system); font-size:12px; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase;
+  padding:8px 14px;
+  background:transparent; border:none; color:var(--text-dim);
+  cursor:pointer; border-bottom:2px solid transparent;
+}
+.tab:hover{ color:var(--text); }
+.tab[aria-selected="true"]{ color:var(--accent); border-bottom-color:var(--accent); }
+.swimlane{ display:flex; flex-direction:column; }
+.lane-row{
+  display:grid; grid-template-columns: 180px 1fr; gap:10px;
+  padding:8px 14px;
+  border-bottom:1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  align-items:center; order:2;
+}
+.lane-row.active{ order:1; background:color-mix(in srgb, var(--accent) 5%, transparent); }
+.lane-leader{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+.lane-name{
+  font-family:var(--ff-system); font-size:13px; font-weight:600;
+  color:var(--text-bright);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.lane-role{
+  font-family:var(--ff-mono); font-size:11px;
+  color:var(--text-dim); letter-spacing:0.04em;
+  display:inline-block; padding:1px 6px;
+  border:1px solid var(--border); align-self:flex-start;
+}
+.lane-events{
+  display:flex; gap:4px; flex-wrap:nowrap; overflow-x:auto;
+  scrollbar-width:none;
+}
+.lane-events::-webkit-scrollbar{ display:none; }
+.event-chip{
+  font-family:var(--ff-mono); font-size:12px; padding:2px 6px;
+  border:1px solid currentColor; white-space:nowrap; flex-shrink:0;
+}
+.event-chip[data-action="ALLOW"]{ color:var(--c-allow); }
+.event-chip[data-action="GUIDE"]{ color:var(--c-guide); }
+.event-chip[data-action="BLOCK"]{ color:var(--c-block); }
+.event-chip[data-action="INTERVENE"]{ color:var(--c-intervene); }
+.event-chip[data-action="SUGGEST"]{ color:var(--c-suggest); }
+.event-chip-counter{ color:var(--text-dim); }
+.swimlane-overflow > summary{
+  cursor:pointer; padding:8px 14px;
+  font-family:var(--ff-system); font-size:12px;
+  color:var(--text-dim); border-top:1px dashed var(--border);
+}
+
+/* Frame C — Background Jobs */
+.jobs-list{ display:flex; flex-direction:column; gap:1px; background:var(--border); }
+.job-card{
+  background:var(--bg-card); padding:10px 14px;
+  display:grid; grid-template-columns: 1fr auto; gap:8px;
+  border-left:3px solid var(--text-dim);
+}
+.job-card[data-status="running"]{ border-left-color:var(--c-allow); }
+.job-card[data-status="failed"]{  border-left-color:var(--c-block); }
+.job-card[data-status="exited"]{  border-left-color:var(--text-ui); }
+.job-leader{ min-width:0; }
+.job-name{
+  font-family:var(--ff-mono); font-size:13px; font-weight:600;
+  color:var(--text-bright);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.job-pid{ font-family:var(--ff-mono); font-size:12px; color:var(--text-dim); margin-left:8px; }
+.job-meta{
+  display:flex; gap:10px;
+  font-family:var(--ff-mono); font-size:12px;
+  color:var(--text-dim); margin-top:3px;
+}
+.job-tail{
+  font-family:var(--ff-mono); font-size:12px;
+  color:var(--text); margin-top:4px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.job-status-pill{
+  font-family:var(--ff-system); font-size:11px; font-weight:700;
+  letter-spacing:0.08em; text-transform:uppercase;
+  padding:3px 8px; align-self:start;
+}
+.job-status-pill[data-status="running"]{ color:var(--c-allow); border:1px solid var(--c-allow); }
+.job-status-pill[data-status="failed"]{ color:var(--c-block); border:1px solid var(--c-block); }
+.job-status-pill[data-status="exited"]{ color:var(--text-ui); border:1px solid var(--border); }
+
+@media (max-width: 900px){
+  .frames{
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    height:auto;
+  }
+  .frame{ max-height:60vh; }
+}
+
+.reconnect-banner{
+  display:none;
+  background:#fef3c7; color:#92400e;
+  padding:6px 14px;
+  font-family:var(--ff-system); font-size:13px; font-weight:600;
+  letter-spacing:0.05em;
+  border-bottom:1px solid #d97706;
+  text-align:center;
+}
+.reconnect-banner.show{ display:block; }
+
+/* FR-UI-6: actionability badges */
+.ar-badge{
+  display:inline-flex; align-items:center; gap:5px;
+  font-family:var(--ff-system);
+  font-size:12px; font-weight:700;
+  letter-spacing:0.08em; text-transform:uppercase;
+  padding:3px 8px; white-space:nowrap; border-radius:2px;
+}
+.ar-badge::before{
+  content:''; display:inline-block; width:6px; height:6px;
+  border-radius:50%; background:currentColor;
+}
+.ar-action-required{
+  color:#d97706; background:#fef3c7;
+  border:2px solid #d97706;
+  animation: pulseAR 1.6s ease-in-out infinite;
+}
+.ar-observing{
+  color:#475569; background:#f1f5f9;
+  border:1px solid #cbd5e1;
+}
+.ar-decided{
+  color:#16a34a; background:#dcfce7;
+  border:1px solid #86efac;
+}
+.ar-blocked{
+  color:#dc2626; background:#fee2e2;
+  border:2px solid #dc2626;
+}
+.ar-warn{
+  color:#ea580c; background:#ffedd5;
+  border:1px dashed #ea580c;
+}
+.ar-timeout{
+  color:#7c3aed; background:#ede9fe;
+  border:1px solid #c4b5fd;
+}
+.card.action-required{
+  border:2px solid #d97706;
+  animation: pulseAR 1.6s ease-in-out infinite;
+}
+@keyframes pulseAR{
+  0%, 100%{ box-shadow: 0 0 0 0 rgba(217,119,6,0.55); }
+  50%     { box-shadow: 0 0 0 5px rgba(217,119,6,0);   }
+}
+@media (prefers-reduced-motion: reduce){
+  .ar-action-required, .card.action-required{ animation:none; }
+  .ar-action-required{ box-shadow: 0 0 0 1px #d97706 inset; }
+}
+html[data-motion="reduce"] .ar-action-required,
+html[data-motion="reduce"] .card.action-required{ animation:none; }
+html[data-motion="allow"]  .ar-action-required{
+  animation: pulseAR 1.6s ease-in-out infinite;
+}
+
+/* NFR-UI-5: focus rings */
+:focus-visible{ outline: 2px solid #d97706; outline-offset: 2px; }
+button:focus-visible, select:focus-visible,
+input:focus-visible, textarea:focus-visible{
+  outline: 2px solid #d97706; outline-offset: 2px;
+}
 </style>
 </head>
 <body>
@@ -1354,6 +1617,77 @@ body::after{
   <!-- ── PHASE 6: GLOBAL GOVERNANCE MODE BAR ────────────── -->
   <div class="gmode-bar" id="gmodeBar" data-mode="OBSERVE"
        title="Worst active governance mode across all agents in session"></div>
+
+  <!-- Reconnecting banner (FR-UI-8) -->
+  <div class="reconnect-banner" id="reconnectBanner" role="status" aria-live="polite">
+    RECONNECTING — restoring stream from last event
+  </div>
+
+  <!-- FR-UI-1: three-frame split pane -->
+  <main class="frames" id="frames" role="main">
+
+    <section class="frame" id="frameA" aria-label="Interactive sessions">
+      <header class="frame-head">
+        <div class="frame-title">Interactive Sessions</div>
+        <div class="frame-actions">
+          <span class="frame-action-count" id="frameACount" data-count="0"
+                aria-label="Open action items in this frame">0</span>
+        </div>
+      </header>
+      <div class="frame-body">
+        <div class="repl-stream" id="replStream" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="frame" id="frameB" aria-label="Sub-agents">
+      <header class="frame-head">
+        <div class="frame-title">Sub-Agents</div>
+        <div class="frame-actions">
+          <span class="frame-action-count" id="frameBCount" data-count="0">0</span>
+        </div>
+      </header>
+      <nav class="tabs" role="tablist">
+        <button class="tab" id="tabSwimlane" role="tab" aria-selected="true"
+                aria-controls="paneSwimlane">Swim-Lane</button>
+        <button class="tab" id="tabFiltered" role="tab" aria-selected="false"
+                aria-controls="paneFiltered">Filtered Feed</button>
+      </nav>
+      <div class="frame-body">
+        <div id="paneSwimlane" role="tabpanel" aria-labelledby="tabSwimlane">
+          <div class="swimlane" id="swimlane"></div>
+          <details class="swimlane-overflow" id="swimlaneOverflow" hidden>
+            <summary>Show older agents</summary>
+            <div id="swimlaneOverflowList"></div>
+          </details>
+        </div>
+        <div id="paneFiltered" role="tabpanel" aria-labelledby="tabFiltered" hidden>
+          <div class="filtered-feed" id="filteredFeed"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="frame" id="frameC" aria-label="Background jobs">
+      <header class="frame-head">
+        <div class="frame-title">Background Jobs</div>
+        <div class="frame-actions">
+          <span class="frame-action-count" id="frameCCount" data-count="0">0</span>
+        </div>
+      </header>
+      <div class="frame-body">
+        <div class="jobs-list" id="jobsList">
+          <div class="panel-msg" id="jobsEmpty">No background jobs running.</div>
+        </div>
+        <div class="async-hitl-section" id="asyncHitlSection" hidden>
+          <div class="frame-head" style="border-top:1px solid var(--border)">
+            <div class="frame-title">Async HITL Queue</div>
+            <span class="frame-action-count" id="asyncHitlCount" data-count="0">0</span>
+          </div>
+          <div id="asyncHitlList"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
 
   <!-- ── STATS BAR ──────────────────────────────────────── -->
   <div class="stats-bar">
@@ -1500,6 +1834,40 @@ body::after{
           <input type="checkbox" id="pauseToggle" checked>
           <span id="pauseToggleLabel">Enabled</span>
         </label>
+      </div>
+
+      <!-- FR-UI-9 row 5: audible cue, default OFF -->
+      <div class="settings-section">
+        <div class="settings-label">Audible Cue on Auto-Foreground</div>
+        <label class="settings-toggle">
+          <input type="checkbox" id="audibleToggle">
+          <span id="audibleToggleLabel">Off</span>
+        </label>
+      </div>
+
+      <!-- FR-UI-9 row 6: sub-agents activity window -->
+      <div class="settings-section">
+        <div class="settings-label">Sub-Agents Activity Window</div>
+        <div class="settings-slider-row">
+          <input type="range" id="activityWindow" min="1" max="600" step="1" value="10">
+          <span class="settings-val" id="activityWindowVal">10s</span>
+        </div>
+        <div class="settings-hint">Agents emitting within this window are pinned to top of swim-lane.</div>
+      </div>
+
+      <!-- FR-UI-9 row 7: reduced motion override -->
+      <div class="settings-section">
+        <div class="settings-label">Reduced Motion</div>
+        <div class="settings-radios">
+          <label><input type="radio" name="motion" value="system" id="motionSystem" checked> System</label>
+          <label><input type="radio" name="motion" value="reduce" id="motionReduce"> Force reduce</label>
+          <label><input type="radio" name="motion" value="allow" id="motionAllow"> Force allow</label>
+        </div>
+      </div>
+
+      <!-- FR-UI-9 row 8: frame layout reset -->
+      <div class="settings-section">
+        <button class="tray-btn" id="resetLayoutBtn" type="button">Reset Frame Layout</button>
       </div>
     </div>
   </aside>
@@ -2582,6 +2950,339 @@ function appendEvlogRow(ev, forceFlush=false){
   // Restart with the wrapped version.
   window.connect();
 })();
+
+/* ── FR-UI: three-frame router + state ───────────────────────── */
+const FrameState = {
+  agents: new Map(),
+  jobs:   new Map(),
+  activityWindowSec: 10,
+  audible: false,
+  motion: 'system',
+  pendingDOMOps: [],
+  rafScheduled: false,
+  openActions: { A:0, B:0, C:0 },
+  layoutKey: () => `sm.layout.${(window.HITL && HITL.sessionId) || 'default'}`,
+};
+
+function batchDOM(op){
+  FrameState.pendingDOMOps.push(op);
+  if(FrameState.rafScheduled) return;
+  FrameState.rafScheduled = true;
+  requestAnimationFrame(()=>{
+    FrameState.rafScheduled = false;
+    const ops = FrameState.pendingDOMOps; FrameState.pendingDOMOps = [];
+    for(const o of ops){ try{ o(); }catch(_){} }
+  });
+}
+
+const REPL_MAX = 200;
+function appendReplLine(row){
+  batchDOM(()=>{
+    const stream = document.getElementById('replStream'); if(!stream) return;
+    const dir = (row.direction === 'outbound') ? 'outbound' : 'inbound';
+    const el = document.createElement('div');
+    el.className = 'repl-line';
+    el.dataset.dir = dir;
+    const ts = (typeof fmtTs === 'function') ? fmtTs(row.timestamp) : (row.timestamp||'');
+    const content = (typeof clip === 'function') ? clip(row.content||'', 240) : (row.content||'').slice(0,240);
+    const escFn = (typeof esc === 'function') ? esc : (s)=>String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    el.innerHTML = `
+      <span class="repl-ts">${escFn(ts)}</span>
+      <span class="repl-dir" data-dir="${dir}">${dir==='inbound'?'DESK→':'CLI→'}</span>
+      <span class="repl-content">${escFn(content)}</span>
+    `;
+    stream.appendChild(el);
+    while(stream.children.length > REPL_MAX) stream.removeChild(stream.firstChild);
+    const body = stream.parentElement;
+    if(body && body.scrollHeight - body.scrollTop - body.clientHeight < 80){
+      body.scrollTop = body.scrollHeight;
+    }
+  });
+}
+
+function ingestAgentEvent(row){
+  const slug = row.profile_slug || row.attribution_plugin || row.agent_id || 'unknown';
+  const now = Date.now();
+  let a = FrameState.agents.get(slug);
+  if(!a){
+    a = { role: row.profile_slug || 'unknown', lastSeen: now, events: [], collapsedCount: 0 };
+    FrameState.agents.set(slug, a);
+  }
+  a.lastSeen = now;
+  a.events.push({ action: row.action, ts: row.timestamp, decisionId: row.id });
+  if(a.events.length > 20){
+    a.events.splice(0, a.events.length - 20);
+    a.collapsedCount = (a.collapsedCount||0) + 1;
+  }
+  scheduleSwimlaneRender();
+}
+
+let swimlaneRenderScheduled = false;
+function scheduleSwimlaneRender(){
+  if(swimlaneRenderScheduled) return;
+  swimlaneRenderScheduled = true;
+  requestAnimationFrame(()=>{ swimlaneRenderScheduled = false; renderSwimlane(); });
+}
+
+function renderSwimlane(){
+  const lane = document.getElementById('swimlane'); if(!lane) return;
+  const escFn = (typeof esc === 'function') ? esc : (s)=>String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmtFn = (typeof fmtTs === 'function') ? fmtTs : (s)=>String(s||'');
+  const sorted = [...FrameState.agents.entries()]
+    .sort((a,b)=> b[1].lastSeen - a[1].lastSeen).slice(0, 30);
+  const visible = sorted.slice(0, 10);
+  const overflow = sorted.slice(10);
+  const now = Date.now();
+  const win = FrameState.activityWindowSec * 1000;
+  lane.innerHTML = '';
+  for(const [slug, a] of visible){
+    const isActive = (now - a.lastSeen) < win;
+    const row = document.createElement('div');
+    row.className = 'lane-row' + (isActive ? ' active' : '');
+    row.dataset.slug = slug;
+    let chips = '';
+    if(a.collapsedCount){
+      chips += `<span class="event-chip event-chip-counter">×${a.collapsedCount}</span>`;
+    }
+    for(const ev of a.events.slice(-12)){
+      chips += `<span class="event-chip" data-action="${escFn(ev.action||'')}"
+                      title="${escFn(fmtFn(ev.ts))}">${escFn(ev.action||'?')}</span>`;
+    }
+    row.innerHTML = `
+      <div class="lane-leader">
+        <div class="lane-name">${escFn(slug)}</div>
+        <div class="lane-role">${escFn(a.role)}</div>
+      </div>
+      <div class="lane-events">${chips}</div>
+    `;
+    lane.appendChild(row);
+  }
+  const ovWrap = document.getElementById('swimlaneOverflow');
+  const ov = document.getElementById('swimlaneOverflowList');
+  if(overflow.length){
+    if(ovWrap) ovWrap.hidden = false;
+    if(ov) ov.innerHTML = overflow.map(([s,a])=>
+      `<div class="lane-row" style="opacity:.65"><div class="lane-leader">
+         <div class="lane-name">${escFn(s)}</div>
+         <div class="lane-role">${escFn(a.role)}</div>
+       </div><div class="lane-events"></div></div>`).join('');
+  } else if(ovWrap){
+    ovWrap.hidden = true;
+  }
+}
+
+setInterval(()=>{
+  const now = Date.now();
+  const win = FrameState.activityWindowSec * 1000;
+  document.querySelectorAll('.lane-row').forEach(el=>{
+    const slug = el.dataset.slug; if(!slug) return;
+    const a = FrameState.agents.get(slug); if(!a) return;
+    el.classList.toggle('active', (now - a.lastSeen) < win);
+  });
+}, 1000);
+
+function ingestJobEvent(ev){
+  let meta = {};
+  try{ meta = ev.metadata ? (typeof ev.metadata === 'string' ? JSON.parse(ev.metadata) : ev.metadata) : {}; }catch(_){}
+  const pid = String(meta.pid || ev.pid || '?');
+  let j = FrameState.jobs.get(pid);
+  if(!j){
+    j = { name: meta.name || ev.content || 'job',
+          status: meta.status || 'running',
+          startedAt: ev.timestamp || (Date.now()/1000),
+          lastLine: '', exitCode: null };
+    FrameState.jobs.set(pid, j);
+  }
+  if(meta.status) j.status = meta.status;
+  if(meta.lastLine) j.lastLine = meta.lastLine;
+  if(meta.exitCode !== undefined) j.exitCode = meta.exitCode;
+  scheduleJobsRender();
+}
+
+let jobsRenderScheduled = false;
+function scheduleJobsRender(){
+  if(jobsRenderScheduled) return;
+  jobsRenderScheduled = true;
+  requestAnimationFrame(()=>{ jobsRenderScheduled = false; renderJobs(); });
+}
+
+function renderJobs(){
+  const list = document.getElementById('jobsList'); if(!list) return;
+  const escFn = (typeof esc === 'function') ? esc : (s)=>String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  if(FrameState.jobs.size === 0){
+    list.innerHTML = '<div class="panel-msg">No background jobs running.</div>';
+    return;
+  }
+  const sorted = [...FrameState.jobs.entries()]
+    .sort((a,b)=> b[1].startedAt - a[1].startedAt).slice(0, 25);
+  list.innerHTML = '';
+  for(const [pid, j] of sorted){
+    const elapsed = Math.max(0, Math.round(Date.now()/1000 - j.startedAt));
+    const card = document.createElement('div');
+    card.className = 'job-card';
+    card.dataset.status = j.status;
+    card.innerHTML = `
+      <div class="job-leader">
+        <div>
+          <span class="job-name" title="${escFn(j.name)}">${escFn(j.name)}</span>
+          <span class="job-pid">pid ${escFn(pid)}</span>
+        </div>
+        <div class="job-meta">
+          <span>elapsed ${elapsed}s</span>
+          ${j.exitCode!=null ? `<span>exit ${escFn(j.exitCode)}</span>` : ''}
+        </div>
+        <div class="job-tail" title="${escFn(j.lastLine)}">${escFn(j.lastLine||'—')}</div>
+      </div>
+      <div class="job-status-pill" data-status="${escFn(j.status)}">${escFn(j.status)}</div>
+    `;
+    list.appendChild(card);
+  }
+}
+
+function setFrameActionCount(frameKey, n){
+  FrameState.openActions[frameKey] = Math.max(0, n);
+  const el = document.getElementById('frame'+frameKey+'Count');
+  if(el){ el.textContent = String(FrameState.openActions[frameKey]); el.dataset.count = String(FrameState.openActions[frameKey]); }
+  const total = FrameState.openActions.A + FrameState.openActions.B + FrameState.openActions.C;
+  document.title = total > 0 ? `(${total}) AdaptiveBridge` : 'AdaptiveBridge';
+}
+
+function autoForeground(frameKey){
+  const f = document.getElementById('frame'+frameKey);
+  if(!f) return;
+  f.scrollIntoView({behavior:'smooth', block:'nearest'});
+  f.classList.add('action-required');
+  setTimeout(()=> f.classList.remove('action-required'), 4000);
+  if(FrameState.audible) playCue();
+}
+
+let _audioCtx = null;
+function playCue(){
+  if(!FrameState.audible) return;
+  try{
+    _audioCtx = _audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = _audioCtx.createOscillator();
+    const g = _audioCtx.createGain();
+    o.frequency.value = 880; g.gain.value = 0.06;
+    o.connect(g).connect(_audioCtx.destination);
+    o.start(); o.stop(_audioCtx.currentTime + 0.18);
+  }catch(_){}
+}
+
+function showReconnect(on){
+  const b = document.getElementById('reconnectBanner');
+  if(b) b.classList.toggle('show', !!on);
+}
+
+/* Wrap existing prependRow + connect to route into frames without breaking existing feed. */
+if(typeof prependRow === 'function'){
+  const _origPrependRow = prependRow;
+  prependRow = function(row){
+    _origPrependRow(row);
+    appendReplLine(row);
+    ingestAgentEvent(row);
+    if(row && row.action === 'BLOCK'){
+      setFrameActionCount('A', FrameState.openActions.A + 1);
+      autoForeground('A');
+    }
+  };
+}
+
+if(typeof connect === 'function'){
+  const _origConnect = connect;
+  connect = function(){
+    _origConnect();
+    if(typeof es !== 'undefined' && es){
+      const _origOnerror = es.onerror;
+      es.onerror = (e)=>{ showReconnect(true); _origOnerror && _origOnerror(e); };
+      es.addEventListener('open', ()=> showReconnect(false));
+    }
+  };
+}
+
+/* tab switching for Sub-Agents frame */
+document.addEventListener('click', (e)=>{
+  const t = e.target;
+  if(t && t.classList && t.classList.contains('tab')){
+    const tablist = t.parentElement;
+    if(!tablist) return;
+    [...tablist.querySelectorAll('.tab')].forEach(b=> b.setAttribute('aria-selected','false'));
+    t.setAttribute('aria-selected','true');
+    const controls = t.getAttribute('aria-controls');
+    if(controls){
+      const parent = t.closest('.frame');
+      if(parent){
+        parent.querySelectorAll('[role="tabpanel"]').forEach(p=> p.hidden = (p.id !== controls));
+      }
+    }
+  }
+});
+
+/* settings persistence */
+function loadLocalSettings(){
+  try{
+    const raw = localStorage.getItem('sm.settings');
+    if(!raw) return;
+    const s = JSON.parse(raw);
+    if(typeof s.audible === 'boolean'){
+      FrameState.audible = s.audible;
+      const t = document.getElementById('audibleToggle');
+      if(t){ t.checked = s.audible;
+        const lbl = document.getElementById('audibleToggleLabel');
+        if(lbl) lbl.textContent = s.audible ? 'On' : 'Off'; }
+    }
+    if(typeof s.activityWindow === 'number'){
+      FrameState.activityWindowSec = s.activityWindow;
+      const r = document.getElementById('activityWindow');
+      if(r){ r.value = s.activityWindow;
+        const v = document.getElementById('activityWindowVal');
+        if(v) v.textContent = s.activityWindow + 's'; }
+    }
+    if(s.motion){
+      FrameState.motion = s.motion;
+      document.documentElement.dataset.motion = s.motion === 'system' ? '' : s.motion;
+      const id = s.motion === 'reduce' ? 'motionReduce'
+               : s.motion === 'allow'  ? 'motionAllow' : 'motionSystem';
+      const r = document.getElementById(id); if(r) r.checked = true;
+    }
+  }catch(_){}
+}
+function saveLocalSettings(){
+  try{
+    localStorage.setItem('sm.settings', JSON.stringify({
+      audible: FrameState.audible,
+      activityWindow: FrameState.activityWindowSec,
+      motion: FrameState.motion,
+    }));
+  }catch(_){}
+}
+document.addEventListener('change', (e)=>{
+  const t = e.target;
+  if(!t) return;
+  if(t.id === 'audibleToggle'){
+    FrameState.audible = t.checked;
+    const lbl = document.getElementById('audibleToggleLabel');
+    if(lbl) lbl.textContent = t.checked ? 'On' : 'Off';
+    saveLocalSettings();
+  }
+  if(t.id === 'activityWindow'){
+    FrameState.activityWindowSec = Math.max(1, Math.min(600, Number(t.value)||10));
+    const v = document.getElementById('activityWindowVal');
+    if(v) v.textContent = FrameState.activityWindowSec + 's';
+    saveLocalSettings();
+  }
+  if(t.name === 'motion'){
+    FrameState.motion = t.value;
+    document.documentElement.dataset.motion = t.value === 'system' ? '' : t.value;
+    saveLocalSettings();
+  }
+});
+const resetBtn = document.getElementById('resetLayoutBtn');
+if(resetBtn){ resetBtn.addEventListener('click', ()=>{
+  try{ localStorage.removeItem(FrameState.layoutKey()); }catch(_){}
+  location.reload();
+}); }
+loadLocalSettings();
 </script>
 </body>
 </html>
