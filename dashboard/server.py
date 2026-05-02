@@ -1095,6 +1095,171 @@ async def api_hitl_mode(request: Request):
     }
 
 
+# ── FR-UI-9: per-session settings persistence ─────────────────────────
+#
+# Settings are stored as a single JSON blob in `sessions.settings`. The
+# blob avoids per-column migration churn as new FR-UI-9 controls land.
+# The endpoint validates each known field's value range, merges into
+# the persisted blob, and emits `session_settings_updated` so the
+# event-log can render the change and other tabs/clients can sync.
+
+_SETTINGS_FIELD_VALIDATORS: dict[str, object] = {}
+
+
+def _validate_session_settings_payload(
+    payload: dict[str, object]
+) -> dict[str, object]:
+    """Return the cleaned subset of `payload` that may be persisted.
+
+    Raises HTTPException(400) on any invalid value. Unknown keys are
+    silently dropped so the server stays the source of truth on schema.
+    """
+    out: dict[str, object] = {}
+
+    if "sync_timeout_sec" in payload:
+        try:
+            v = float(payload["sync_timeout_sec"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="sync_timeout_sec must be a number")
+        if v < 10.0 or v > 600.0:
+            raise HTTPException(
+                status_code=400,
+                detail="sync_timeout_sec out of range (10-600)",
+            )
+        out["sync_timeout_sec"] = v
+
+    if "activity_window_sec" in payload:
+        try:
+            v = float(payload["activity_window_sec"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="activity_window_sec must be a number")
+        if v < 1.0 or v > 600.0:
+            raise HTTPException(
+                status_code=400,
+                detail="activity_window_sec out of range (1-600)",
+            )
+        out["activity_window_sec"] = v
+
+    if "confidence_floor" in payload:
+        try:
+            v = float(payload["confidence_floor"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="confidence_floor must be a number")
+        if v < 0.0 or v > 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="confidence_floor out of range (0.0-1.0)",
+            )
+        out["confidence_floor"] = v
+
+    if "audible_cue" in payload:
+        if not isinstance(payload["audible_cue"], bool):
+            raise HTTPException(status_code=400, detail="audible_cue must be bool")
+        out["audible_cue"] = payload["audible_cue"]
+
+    if "motion" in payload:
+        m = payload["motion"]
+        if m not in ("system", "reduce", "allow"):
+            raise HTTPException(
+                status_code=400,
+                detail="motion must be one of: system, reduce, allow",
+            )
+        out["motion"] = m
+
+    if "hitl_mode" in payload:
+        if payload["hitl_mode"] not in ("sync", "async"):
+            raise HTTPException(
+                status_code=400,
+                detail="hitl_mode must be one of: sync, async",
+            )
+        out["hitl_mode"] = payload["hitl_mode"]
+
+    if "pause_detection_enabled" in payload:
+        if not isinstance(payload["pause_detection_enabled"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="pause_detection_enabled must be bool",
+            )
+        out["pause_detection_enabled"] = payload["pause_detection_enabled"]
+
+    return out
+
+
+@app.get("/api/sessions/{session_id}/settings")
+async def api_session_settings_get(session_id: str):
+    """Return the persisted FR-UI-9 settings blob for a session."""
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+    try:
+        settings = bus.get_session_settings(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "session_id": session_id,
+        "settings": settings,
+    }
+
+
+@app.post("/api/sessions/{session_id}/settings")
+async def api_session_settings_post(session_id: str, request: Request):
+    """Persist a partial FR-UI-9 settings update for a session.
+
+    Validates each known field, merges into the existing JSON blob, and
+    emits a `session_settings_updated` bus event carrying the FULL merged
+    settings (not just the patch) so other connected clients can sync.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    cleaned = _validate_session_settings_payload(body)
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="no recognised settings keys in body")
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+
+    # Ensure the session row exists so the UPDATE finds something to write.
+    try:
+        bus.open_session(session_id)
+    except Exception:
+        # If open_session fails the session may already exist; the
+        # subsequent set_session_settings will surface the real error.
+        pass
+
+    try:
+        bus.set_session_settings(session_id, cleaned)
+        merged = bus.get_session_settings(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Emit bus event so audit replay and other clients see the update.
+    try:
+        from stream_manager.message_bus import Message
+        bus.publish(
+            Message.new(
+                session_id=session_id,
+                type="session_settings_updated",
+                direction="internal",
+                content=f"settings updated: {','.join(sorted(cleaned.keys()))}",
+                metadata={"settings": merged, "patch": cleaned},
+            )
+        )
+    except Exception:
+        log.exception("session_settings_updated publish failed")
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "settings": merged,
+    }
+
+
 # ── Phase 6 §2: NDJSON decisions export ────────────────────────────────
 
 

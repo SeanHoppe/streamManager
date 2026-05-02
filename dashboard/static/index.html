@@ -3509,33 +3509,58 @@ document.addEventListener('click', (e)=>{
   }
 });
 
-/* settings persistence */
+/* FR-UI-9 settings persistence — localStorage AND WAL session record.
+   Server-side blob wins on connect for cross-device parity, then merges
+   over localStorage. */
+function _applySettingsObj(s){
+  if(!s || typeof s !== 'object') return;
+  // Accept both legacy (camelCase localStorage) and server (snake_case) keys.
+  const audible = (typeof s.audible === 'boolean') ? s.audible
+                : (typeof s.audible_cue === 'boolean') ? s.audible_cue
+                : undefined;
+  const aWin = (typeof s.activityWindow === 'number') ? s.activityWindow
+             : (typeof s.activity_window_sec === 'number') ? s.activity_window_sec
+             : undefined;
+  const motion = s.motion;
+  if(audible !== undefined){
+    FrameState.audible = audible;
+    const t = document.getElementById('audibleToggle');
+    if(t){ t.checked = audible;
+      const lbl = document.getElementById('audibleToggleLabel');
+      if(lbl) lbl.textContent = audible ? 'On' : 'Off'; }
+  }
+  if(typeof aWin === 'number'){
+    FrameState.activityWindowSec = Math.max(1, Math.min(600, aWin));
+    const r = document.getElementById('activityWindow');
+    if(r){ r.value = FrameState.activityWindowSec;
+      const v = document.getElementById('activityWindowVal');
+      if(v) v.textContent = FrameState.activityWindowSec + 's'; }
+  }
+  if(motion === 'system' || motion === 'reduce' || motion === 'allow'){
+    FrameState.motion = motion;
+    document.documentElement.dataset.motion = motion === 'system' ? '' : motion;
+    const id = motion === 'reduce' ? 'motionReduce'
+             : motion === 'allow'  ? 'motionAllow' : 'motionSystem';
+    const r = document.getElementById(id); if(r) r.checked = true;
+  }
+}
 function loadLocalSettings(){
   try{
     const raw = localStorage.getItem('sm.settings');
     if(!raw) return;
-    const s = JSON.parse(raw);
-    if(typeof s.audible === 'boolean'){
-      FrameState.audible = s.audible;
-      const t = document.getElementById('audibleToggle');
-      if(t){ t.checked = s.audible;
-        const lbl = document.getElementById('audibleToggleLabel');
-        if(lbl) lbl.textContent = s.audible ? 'On' : 'Off'; }
-    }
-    if(typeof s.activityWindow === 'number'){
-      FrameState.activityWindowSec = s.activityWindow;
-      const r = document.getElementById('activityWindow');
-      if(r){ r.value = s.activityWindow;
-        const v = document.getElementById('activityWindowVal');
-        if(v) v.textContent = s.activityWindow + 's'; }
-    }
-    if(s.motion){
-      FrameState.motion = s.motion;
-      document.documentElement.dataset.motion = s.motion === 'system' ? '' : s.motion;
-      const id = s.motion === 'reduce' ? 'motionReduce'
-               : s.motion === 'allow'  ? 'motionAllow' : 'motionSystem';
-      const r = document.getElementById(id); if(r) r.checked = true;
-    }
+    _applySettingsObj(JSON.parse(raw));
+  }catch(_){}
+}
+function loadServerSettings(){
+  // Server wins for cross-device parity. Merge over localStorage by
+  // applying after localStorage in DOMContentLoaded sequence.
+  const sid = (window.HITL && HITL.sessionId) || null;
+  if(!sid) return;
+  try{
+    fetch(`/api/sessions/${encodeURIComponent(sid)}/settings`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if(d && d.settings) _applySettingsObj(d.settings); })
+      .catch(()=>{});
   }catch(_){}
 }
 function saveLocalSettings(){
@@ -3547,6 +3572,24 @@ function saveLocalSettings(){
     }));
   }catch(_){}
 }
+let _settingsPostTimer = null;
+function _postSettingsToServer(patch){
+  // Debounce to one POST per 250ms while the user drags a slider, etc.
+  if(!patch || Object.keys(patch).length === 0) return;
+  const sid = (window.HITL && HITL.sessionId) || null;
+  if(!sid) return;
+  if(_settingsPostTimer){ clearTimeout(_settingsPostTimer); }
+  _settingsPostTimer = setTimeout(()=>{
+    _settingsPostTimer = null;
+    try{
+      fetch(`/api/sessions/${encodeURIComponent(sid)}/settings`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(patch),
+      }).catch(()=>{});
+    }catch(_){}
+  }, 250);
+}
 document.addEventListener('change', (e)=>{
   const t = e.target;
   if(!t) return;
@@ -3555,17 +3598,20 @@ document.addEventListener('change', (e)=>{
     const lbl = document.getElementById('audibleToggleLabel');
     if(lbl) lbl.textContent = t.checked ? 'On' : 'Off';
     saveLocalSettings();
+    _postSettingsToServer({audible_cue: FrameState.audible});
   }
   if(t.id === 'activityWindow'){
     FrameState.activityWindowSec = Math.max(1, Math.min(600, Number(t.value)||10));
     const v = document.getElementById('activityWindowVal');
     if(v) v.textContent = FrameState.activityWindowSec + 's';
     saveLocalSettings();
+    _postSettingsToServer({activity_window_sec: FrameState.activityWindowSec});
   }
   if(t.name === 'motion'){
     FrameState.motion = t.value;
     document.documentElement.dataset.motion = t.value === 'system' ? '' : t.value;
     saveLocalSettings();
+    _postSettingsToServer({motion: FrameState.motion});
   }
 });
 const resetBtn = document.getElementById('resetLayoutBtn');
@@ -3574,6 +3620,9 @@ if(resetBtn){ resetBtn.addEventListener('click', ()=>{
   location.reload();
 }); }
 loadLocalSettings();
+// Server-side blob wins. Wait briefly for HITL.sessionId to populate
+// from the SSE seed, then merge any persisted settings on top.
+setTimeout(loadServerSettings, 500);
 </script>
 </body>
 </html>
