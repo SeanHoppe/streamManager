@@ -1594,6 +1594,38 @@ body{ font-size:14px; }
 }
 .reconnect-banner.show{ display:block; }
 
+/* FR-OG-7 loud-degrade: dismissable banner shown when `.sm-context.yaml`
+   is absent in the governed project root. Re-shows next session once
+   dismissed (localStorage flag is session-scoped, set on close click). */
+.og7-banner{
+  display:none;
+  background:#fef3c7; color:#92400e;
+  padding:6px 14px;
+  font-family:var(--ff-system); font-size:13px; font-weight:600;
+  letter-spacing:0.05em;
+  border-bottom:1px solid #d97706;
+  text-align:center;
+  position:relative;
+}
+.og7-banner.show{ display:block; }
+.og7-banner code{
+  font-family:var(--ff-mono, monospace);
+  font-size:12px;
+  background:rgba(0,0,0,0.06);
+  padding:1px 5px;
+  border-radius:2px;
+}
+.og7-banner .og7-close{
+  position:absolute;
+  right:8px; top:50%;
+  transform:translateY(-50%);
+  background:transparent; border:0;
+  font-size:18px; line-height:1;
+  cursor:pointer; color:inherit;
+  padding:0 6px;
+}
+.og7-banner .og7-close:hover{ opacity:0.7; }
+
 /* FR-UI-6: actionability badges */
 .ar-badge{
   display:inline-flex; align-items:center; gap:5px;
@@ -1717,6 +1749,13 @@ input:focus-visible, textarea:focus-visible{
   <!-- Reconnecting banner (FR-UI-8) -->
   <div class="reconnect-banner" id="reconnectBanner" role="status" aria-live="polite">
     RECONNECTING — restoring stream from last event
+  </div>
+
+  <!-- FR-OG-7 loud-degrade banner: appears on `og7_unconfigured` event -->
+  <div class="og7-banner" id="og7Banner" role="status" aria-live="polite">
+    <span id="og7BannerText">FR-OG-7 inactive: no <code>.sm-context.yaml</code></span>
+    <button type="button" class="og7-close" id="og7BannerClose"
+            aria-label="dismiss FR-OG-7 banner">×</button>
   </div>
 
   <!-- Phase 7 / governance_call: L4 cost telemetry strip. Default-hidden
@@ -2261,6 +2300,10 @@ function connect(){
       if(d.error) return;
       // HITL bus events (forwarded by server with event_type field)
       if(d.event_type){
+        if(d.event_type === 'og7_unconfigured'){
+          showOg7Banner(d);
+          return;
+        }
         handleHitlEvent(d);
         return;
       }
@@ -3214,6 +3257,11 @@ function appendEvlogRow(ev, forceFlush=false){
         if(d.error) return;
         // event_type set => non-decision bus event
         if(d.event_type){
+          if(d.event_type === 'og7_unconfigured'){
+            try{ showOg7Banner(d); }catch(_){}
+            appendEvlogRow(d);
+            return;
+          }
           appendEvlogRow(d);
           // Phase 7 / governance_call: route to dedicated strip so L4
           // cost telemetry stays out of frame C (FR-UI-1 reserves frame
@@ -3495,6 +3543,40 @@ function playCue(){
 function showReconnect(on){
   const b = document.getElementById('reconnectBanner');
   if(b) b.classList.toggle('show', !!on);
+}
+
+/* FR-OG-7 loud-degrade: render banner when bus emits `og7_unconfigured`.
+   Dismissal persists for the active SM session id (from server-injected
+   meta tag, fallback to the event's session_id) so a fresh session
+   re-shows the banner. */
+function _og7DismissKey(d){
+  const meta = document.querySelector('meta[name="sm-own-session-id"]');
+  const own  = meta ? meta.getAttribute('content') : '';
+  const sid  = (d && d.session_id) || own || 'sm-system';
+  return `og7_dismissed:${sid}`;
+}
+function showOg7Banner(d){
+  const banner = document.getElementById('og7Banner');
+  const text   = document.getElementById('og7BannerText');
+  const close  = document.getElementById('og7BannerClose');
+  if(!banner || !text || !close) return;
+  let expected = '';
+  try{
+    const meta = (typeof d.metadata === 'string') ? JSON.parse(d.metadata) : (d.metadata || {});
+    expected = meta.expected_path || '';
+  }catch(_){}
+  text.innerHTML = expected
+    ? `FR-OG-7 inactive: no <code>${expected.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</code>`
+    : `FR-OG-7 inactive: no <code>.sm-context.yaml</code>`;
+  const key = _og7DismissKey(d);
+  try{
+    if(sessionStorage.getItem(key) === '1') return;
+  }catch(_){}
+  banner.classList.add('show');
+  close.onclick = ()=>{
+    banner.classList.remove('show');
+    try{ sessionStorage.setItem(key, '1'); }catch(_){}
+  };
 }
 
 /* Wrap existing prependRow + connect to route into frames without breaking existing feed. */

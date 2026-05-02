@@ -3,7 +3,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from stream_manager.project_context import fast_precheck, load
+from stream_manager import project_context as _pc
+from stream_manager.project_context import fast_precheck, load, load_sm_context
 
 
 def test_load_picks_up_intent_when_present(tmp_path: Path) -> None:
@@ -47,6 +48,61 @@ def test_fast_precheck_intent_rule_only_fires_with_intent(tmp_path: Path) -> Non
     d_without = fast_precheck(msg, snap_without)
     assert d_with is not None and d_with.action == "INTERVENE"
     assert d_without is None
+
+
+# ── FR-OG-7 loud-degrade ──────────────────────────────────────────────
+
+
+class _RecordingBus:
+    def __init__(self) -> None:
+        self.published: list = []
+
+    def publish(self, msg) -> int:
+        self.published.append(msg)
+        return len(self.published)
+
+
+def _reset_og7_guard() -> None:
+    _pc._OG7_UNCONFIGURED_EMITTED.clear()
+
+
+def test_load_sm_context_emits_og7_unconfigured_when_file_absent(tmp_path: Path) -> None:
+    _reset_og7_guard()
+    bus = _RecordingBus()
+    result = load_sm_context(tmp_path, bus=bus, session_id="test-sid")
+    assert result is None
+    assert len(bus.published) == 1
+    msg = bus.published[0]
+    assert msg.type == "og7_unconfigured"
+    assert msg.direction == "internal"
+    assert msg.session_id == "test-sid"
+    assert msg.metadata.get("project_root") == str(tmp_path)
+    assert msg.metadata.get("expected_path", "").endswith(".sm-context.yaml")
+
+
+def test_load_sm_context_emits_only_once_per_project_root(tmp_path: Path) -> None:
+    _reset_og7_guard()
+    bus = _RecordingBus()
+    load_sm_context(tmp_path, bus=bus)
+    load_sm_context(tmp_path, bus=bus)
+    load_sm_context(tmp_path, bus=bus)
+    assert len(bus.published) == 1
+
+
+def test_load_sm_context_no_emit_when_file_present(tmp_path: Path) -> None:
+    _reset_og7_guard()
+    (tmp_path / ".sm-context.yaml").write_text("maturity:\n  artifact_path: maturity.yaml\n", encoding="utf-8")
+    bus = _RecordingBus()
+    result = load_sm_context(tmp_path, bus=bus)
+    assert isinstance(result, dict)
+    assert bus.published == []
+
+
+def test_load_sm_context_no_bus_returns_none_silently(tmp_path: Path) -> None:
+    _reset_og7_guard()
+    # Backwards-compat: callers without bus get the original silent behavior.
+    assert load_sm_context(tmp_path) is None
+    assert load_sm_context(tmp_path, bus=None) is None
 
 
 # ---------------------------------------------------------------------------
