@@ -3418,12 +3418,24 @@ function renderJobs(){
   }
 }
 
+// FR-UI-7: tab-title open-action count, debounced.
+// Only flush document.title when the total ACTION REQUIRED count across
+// frames A/B/C actually changes — and never more often than every 100ms.
+let _titleLastTotal = -1;
+let _titlePending = null;
+function _flushTitle(){
+  _titlePending = null;
+  const total = FrameState.openActions.A + FrameState.openActions.B + FrameState.openActions.C;
+  if(total === _titleLastTotal) return;
+  _titleLastTotal = total;
+  document.title = total > 0 ? `(${total}) StreamManager` : 'StreamManager';
+}
 function setFrameActionCount(frameKey, n){
   FrameState.openActions[frameKey] = Math.max(0, n);
   const el = document.getElementById('frame'+frameKey+'Count');
   if(el){ el.textContent = String(FrameState.openActions[frameKey]); el.dataset.count = String(FrameState.openActions[frameKey]); }
-  const total = FrameState.openActions.A + FrameState.openActions.B + FrameState.openActions.C;
-  document.title = total > 0 ? `(${total}) AdaptiveBridge` : 'AdaptiveBridge';
+  if(_titlePending !== null) return;
+  _titlePending = setTimeout(_flushTitle, 100);
 }
 
 function autoForeground(frameKey){
