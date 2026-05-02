@@ -149,9 +149,10 @@ async function main() {
     console.log(`[axe] wrote ${jsonPath}`);
     console.log(`[axe] wrote ${mdPath}`);
 
-    // task-5 out-of-scope: color-only violations (NFR-UI-6 already pairs
-    // labels with non-color affordances) and AAA-level rules.
-    const OUT_OF_SCOPE_RULES = new Set(["color-contrast", "color-contrast-enhanced"]);
+    // task-5 out-of-scope: AAA-level rules only. NFR-UI-1 mandates AA
+    // color-contrast, so `color-contrast` (AA, 4.5:1) IS blocking.
+    // `color-contrast-enhanced` is AAA (7:1) — informational only.
+    const OUT_OF_SCOPE_RULES = new Set(["color-contrast-enhanced"]);
     const blocking = result.violations.filter(
       (v) =>
         (v.impact === "serious" || v.impact === "critical") &&
