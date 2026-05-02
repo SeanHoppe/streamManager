@@ -1107,6 +1107,53 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
   50%   {opacity:.55;box-shadow:0 0 14px var(--c-block)}
 }
 
+/* Phase 7 / governance_call: small fourth strip ABOVE the three frames.
+   Default-hidden until the first governance_call event arrives so layout
+   does not jump for sessions where L4 escalation never fires. Uses the
+   existing OBSERVING-style slate palette (text-dim/text-ui) — no new
+   color tokens introduced. */
+.gov-call-strip{
+  display:none;
+  align-items:center;
+  gap:14px;
+  padding:6px 14px;
+  margin:0 0 10px;
+  border:1px solid var(--border);
+  background:var(--bg-card);
+  font-family:var(--font-d);
+  font-size:11px;
+  color:var(--text-dim);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.gov-call-strip.show{ display:flex; }
+.gov-call-strip .gc-label{
+  color:var(--text-ui);
+  font-weight:600;
+  letter-spacing:0.12em;
+}
+.gov-call-strip .gc-cell{
+  display:inline-flex;
+  align-items:baseline;
+  gap:6px;
+}
+.gov-call-strip .gc-key{
+  color:var(--text-dim);
+}
+.gov-call-strip .gc-val{
+  color:var(--text-bright);
+  font-variant-numeric:tabular-nums;
+}
+.gov-call-strip .gc-tier{
+  padding:1px 6px;
+  border:1px solid var(--border);
+  border-radius:2px;
+  color:var(--text-bright);
+}
+.gov-call-strip[data-status="running"] .gc-status{ color:var(--accent); }
+.gov-call-strip[data-status="failed"]  .gc-status{ color:var(--c-block, #c0392b); }
+.gov-call-strip[data-status="exited"]  .gc-status{ color:var(--text-ui); }
+
 /* session selector */
 .sess-select{
   font-family:var(--font-d);
@@ -1655,6 +1702,27 @@ input:focus-visible, textarea:focus-visible{
   <!-- Reconnecting banner (FR-UI-8) -->
   <div class="reconnect-banner" id="reconnectBanner" role="status" aria-live="polite">
     RECONNECTING — restoring stream from last event
+  </div>
+
+  <!-- Phase 7 / governance_call: L4 cost telemetry strip. Default-hidden
+       (no `show` class) until the first governance_call event arrives.
+       Renders ABOVE the three frames; never routes into frame C. -->
+  <div class="gov-call-strip" id="govCallStrip" role="status"
+       aria-live="polite" aria-label="Governance LLM call telemetry"
+       data-status="idle">
+    <span class="gc-label">GOV CALL</span>
+    <span class="gc-cell"><span class="gc-key">status</span>
+      <span class="gc-val gc-status" id="gcStatus">—</span></span>
+    <span class="gc-cell"><span class="gc-key">tier</span>
+      <span class="gc-tier" id="gcTier">—</span></span>
+    <span class="gc-cell"><span class="gc-key">model</span>
+      <span class="gc-val" id="gcModel">—</span></span>
+    <span class="gc-cell"><span class="gc-key">latency</span>
+      <span class="gc-val" id="gcLatency">—</span></span>
+    <span class="gc-cell"><span class="gc-key">tok in/out</span>
+      <span class="gc-val" id="gcTokens">—</span></span>
+    <span class="gc-cell"><span class="gc-key">session $</span>
+      <span class="gc-val" id="gcCost">$0.0000</span></span>
   </div>
 
   <!-- FR-UI-1: three-frame split pane -->
@@ -3006,8 +3074,60 @@ function fmtEvTs(ts){
 const _KNOWN_EVT_CLASSES = new Set([
   'governance_negative_regression','governance_variance_alert',
   'nfr_model_routing_alert','hitl_sync_queued','hitl_async_flagged',
-  'agent_identified','desktop_pause',
+  'agent_identified','desktop_pause','governance_call',
 ]);
+
+/* ── Phase 7 / governance_call: L4 cost telemetry strip ──────────
+   Default-hidden until the first event arrives so the layout does not
+   shift for sessions that never escalate. Cumulative cost is computed
+   client-side from the event stream (per spec: no persistent ledger). */
+const GovCall = {
+  cumulativeCostUsd: 0.0,
+  shown: false,
+};
+
+function _trimModelId(m){
+  // Drop date-version suffix for tighter display: "claude-haiku-4-5-20251001"
+  // -> "claude-haiku-4-5". If the trailing segment isn't a date, leave it.
+  if(!m) return '—';
+  const s = String(m);
+  return s.replace(/-\d{8}$/, '');
+}
+
+function handleGovernanceCallEvent(ev){
+  // SSE forwards `metadata` as a JSON string straight from the SQLite row.
+  // Tolerate either a pre-parsed object or a string payload.
+  let m = ev.metadata || {};
+  if(typeof m === 'string'){
+    try{ m = JSON.parse(m); }catch(_){ m = {}; }
+  }
+  const strip = document.getElementById('govCallStrip');
+  if(!strip) return;
+  if(!GovCall.shown){
+    strip.classList.add('show');
+    GovCall.shown = true;
+  }
+  const status = String(m.status || 'unknown');
+  strip.dataset.status = status;
+  const $ = id => document.getElementById(id);
+  const set = (id, v) => { const el = $(id); if(el) el.textContent = v; };
+
+  set('gcStatus', status.toUpperCase());
+  set('gcTier',   String(m.tier || '—'));
+  set('gcModel',  _trimModelId(m.model));
+  set('gcLatency', (typeof m.latency_ms === 'number')
+    ? `${m.latency_ms}ms` : '—');
+  const ti = (typeof m.input_tokens === 'number') ? m.input_tokens : '—';
+  const to = (typeof m.output_tokens === 'number') ? m.output_tokens : '—';
+  set('gcTokens', `${ti}/${to}`);
+
+  // Cumulative cost only accrues on `exited` events (avoid double-count
+  // from the running event which carries no cost field anyway).
+  if(status === 'exited' && typeof m.cost_usd === 'number'){
+    GovCall.cumulativeCostUsd += m.cost_usd;
+  }
+  set('gcCost', `$${GovCall.cumulativeCostUsd.toFixed(4)}`);
+}
 
 function drainPaused(){
   if(!EVLOG.pendingQueue.length) return;
@@ -3066,6 +3186,13 @@ function appendEvlogRow(ev, forceFlush=false){
         // event_type set => non-decision bus event
         if(d.event_type){
           appendEvlogRow(d);
+          // Phase 7 / governance_call: route to dedicated strip so L4
+          // cost telemetry stays out of frame C (FR-UI-1 reserves frame
+          // C for user dev jobs). The strip is default-hidden and
+          // becomes visible on the first such event.
+          if(d.event_type === 'governance_call'){
+            try{ handleGovernanceCallEvent(d); }catch(_){}
+          }
           handleHitlEvent(d);
           return;
         }

@@ -31,9 +31,14 @@ import logging
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from stream_manager.project_context import ProjectContextSnapshot
+
+if TYPE_CHECKING:
+    from stream_manager.message_bus import MessageBus
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +48,32 @@ TIMEOUT_SECONDS = 25.0
 CLI_BIN = "claude"
 
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
+
+# Phase 7 / governance_call: tier inference from model id. Sonnet → L4,
+# everything else (Haiku) → L3 by default. The legacy MODEL constant
+# below is Haiku, so callers that pass no model_id get L3.
+_L4_MARKER = "sonnet"
+
+
+def _infer_tier(model_id: str | None) -> str:
+    if not model_id:
+        return "L3"
+    return "L4" if _L4_MARKER in model_id.lower() else "L3"
+
+
+def _infer_trigger(content: str) -> str:
+    """Best-effort heuristic mirroring _ALIGNMENT_KEYWORDS in governance.py.
+
+    The CliGovernor itself can't see the routing decision; the caller could
+    pass it explicitly, but the alignment keywords are stable enough that
+    a local sniff suffices for telemetry (it never feeds back into routing).
+    """
+    if not content:
+        return "unknown"
+    lowered = content.lower()
+    if any(kw in lowered for kw in ("release", "merge", "deploy", "oversight/")):
+        return "alignment"
+    return "unknown"
 
 _DECISION_SCHEMA: dict = {
     "type": "object",
@@ -95,10 +126,17 @@ class CliGovernor:
         self,
         project_context: ProjectContextSnapshot,
         runner=None,
+        bus: "MessageBus | None" = None,
+        session_id: str | None = None,
     ) -> None:
         self.project_context = project_context
         self._runner = runner or subprocess.run
         self._system: str | None = None
+        # Bus injection is optional so existing unit tests can construct
+        # CliGovernor without a bus. When either bus or session_id is None,
+        # all governance_call event publishing is skipped silently.
+        self._bus = bus
+        self._session_id = session_id
 
     def _system_prompt(self) -> str:
         if self._system is not None:
@@ -130,6 +168,25 @@ class CliGovernor:
             "--tools", "",
         ]
 
+        tier = _infer_tier(chosen_model)
+        trigger = _infer_trigger(content)
+
+        # Emit one `running` event before subprocess.run.
+        self._publish_event(
+            model=chosen_model,
+            tier=tier,
+            status="running",
+            trigger=trigger,
+            latency_ms=None,
+            input_tokens=None,
+            output_tokens=None,
+            cost_usd=None,
+        )
+
+        # latency_ms is measured strictly around the subprocess.run call —
+        # JSON parsing, event publishing, and any other Python work must NOT
+        # be included so the metric reflects external CLI cost only.
+        start = time.monotonic()
         try:
             result = self._runner(
                 cmd,
@@ -139,11 +196,38 @@ class CliGovernor:
                 check=False,
             )
         except FileNotFoundError:
+            latency_ms = int((time.monotonic() - start) * 1000)
             log.warning("BRIDGE_API_GOV set but `%s` CLI not on PATH; degrading", CLI_BIN)
+            self._publish_event(
+                model=chosen_model,
+                tier=tier,
+                status="failed",
+                trigger=trigger,
+                latency_ms=latency_ms,
+                input_tokens=None,
+                output_tokens=None,
+                cost_usd=None,
+            )
             return None
         except subprocess.TimeoutExpired:
+            latency_ms = int((time.monotonic() - start) * 1000)
             log.warning("cli governance timeout (>%.1fs); degrading", TIMEOUT_SECONDS)
+            self._publish_event(
+                model=chosen_model,
+                tier=tier,
+                status="failed",
+                trigger=trigger,
+                latency_ms=latency_ms,
+                input_tokens=None,
+                output_tokens=None,
+                cost_usd=None,
+            )
             return None
+        latency_ms = int((time.monotonic() - start) * 1000)
+
+        # Pull token / cost telemetry from the CLI envelope. Defaults are
+        # None when `usage` is absent (e.g. older CLI builds).
+        in_tok, out_tok, cost = _extract_usage(result.stdout or "")
 
         if result.returncode != 0:
             log.warning(
@@ -151,9 +235,79 @@ class CliGovernor:
                 result.returncode,
                 (result.stderr or "")[:200],
             )
+            self._publish_event(
+                model=chosen_model,
+                tier=tier,
+                status="failed",
+                trigger=trigger,
+                latency_ms=latency_ms,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                cost_usd=cost,
+            )
             return None
 
+        self._publish_event(
+            model=chosen_model,
+            tier=tier,
+            status="exited",
+            trigger=trigger,
+            latency_ms=latency_ms,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_usd=cost,
+        )
+
         return _parse_envelope(result.stdout or "")
+
+    def _publish_event(
+        self,
+        *,
+        model: str,
+        tier: str,
+        status: str,
+        trigger: str,
+        latency_ms: int | None,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        cost_usd: float | None,
+    ) -> None:
+        """Publish a governance_call lifecycle event.
+
+        No-op when either bus or session_id is unset (back-compat for tests
+        that construct CliGovernor without a bus). Bus failures are caught
+        and logged; they MUST NOT crash the subprocess wrapper (mirrors
+        cli_client._emit's NFR-R6 try/except).
+        """
+        if self._bus is None or not self._session_id:
+            return
+        try:
+            from stream_manager.message_bus import Message as _BusMessage
+        except Exception:
+            log.exception("cli_governance: failed to import message_bus.Message")
+            return
+        metadata: dict[str, object] = {
+            "model": model,
+            "tier": tier,
+            "status": status,
+            "latency_ms": latency_ms,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+            "trigger": trigger,
+        }
+        try:
+            self._bus.publish(
+                _BusMessage.new(
+                    session_id=self._session_id,
+                    type="governance_call",
+                    direction="internal",
+                    content="",
+                    metadata=metadata,
+                )
+            )
+        except Exception:
+            log.exception("cli_governance: failed to publish governance_call event")
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -201,6 +355,37 @@ def _debug_dump(stage: str, payload: str) -> None:
             fh.write(json.dumps(record) + "\n")
     except OSError:
         pass
+
+
+def _extract_usage(stdout: str) -> tuple[int | None, int | None, float | None]:
+    """Pull (input_tokens, output_tokens, total_cost_usd) from a CLI envelope.
+
+    The Claude CLI emits ``{"usage": {"input_tokens": N, "output_tokens": N},
+    "total_cost_usd": F, ...}`` in the result envelope. Each field is
+    optional; missing keys yield None. Any parse failure returns (None,
+    None, None) — telemetry is best-effort and must never break the call.
+    """
+    try:
+        envelope = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return (None, None, None)
+    if not isinstance(envelope, dict):
+        return (None, None, None)
+    usage = envelope.get("usage")
+    in_tok: int | None = None
+    out_tok: int | None = None
+    if isinstance(usage, dict):
+        raw_in = usage.get("input_tokens")
+        raw_out = usage.get("output_tokens")
+        if isinstance(raw_in, int):
+            in_tok = raw_in
+        if isinstance(raw_out, int):
+            out_tok = raw_out
+    raw_cost = envelope.get("total_cost_usd")
+    cost: float | None = None
+    if isinstance(raw_cost, (int, float)):
+        cost = float(raw_cost)
+    return (in_tok, out_tok, cost)
 
 
 def _parse_envelope(stdout: str) -> CliDecision | None:
