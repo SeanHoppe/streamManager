@@ -97,6 +97,78 @@ def test_sign_validate_round_trip(tmp_path, monkeypatch):
     assert mod.validate(payload, "0" * 64) is False
 
 
+def test_sign_with_explicit_secret_kwarg_matches_manual_hmac(tmp_path, monkeypatch):
+    """``sign(payload, secret=...)`` must produce the same digest as a manual
+    ``hmac.new`` reference using the same canonical-JSON encoding."""
+    import hashlib
+    import hmac as _hmac
+
+    mod = _fresh_desktop_commands_module(tmp_path, monkeypatch)
+    # Pin a different env-resolved secret so we can prove the kwarg wins.
+    monkeypatch.setenv("SM_DESKTOP_SECRET", "env-secret-should-be-ignored")
+    explicit = b"explicit-kwarg-secret"
+    payload = {
+        "id": "abc",
+        "session_id": "s1",
+        "kind": "pause",
+        "args": {"reason": "manual"},
+        "sent_at": 1714694400.0,
+    }
+    sig = mod.sign(payload, secret=explicit)
+    expected = _hmac.new(
+        explicit, mod._canonical_json(payload), hashlib.sha256
+    ).hexdigest()
+    assert sig == expected
+    # Round-trip with the same secret validates.
+    assert mod.validate(payload, sig, secret=explicit) is True
+
+
+def test_validate_with_wrong_explicit_secret_returns_false(tmp_path, monkeypatch):
+    """When the kwarg secret is wrong, validate must reject — even if the
+    env/file-resolved secret would have matched."""
+    mod = _fresh_desktop_commands_module(tmp_path, monkeypatch)
+    monkeypatch.setenv("SM_DESKTOP_SECRET", "env-secret-matches")
+    payload = {
+        "id": "abc",
+        "session_id": "s1",
+        "kind": "pause",
+        "args": {},
+        "sent_at": 1.0,
+    }
+    # Sign with the env-resolved secret (no kwarg).
+    sig = mod.sign(payload)
+    # Sanity: validating with no kwarg uses the env secret and passes.
+    assert mod.validate(payload, sig) is True
+    # But supplying a different explicit secret must reject.
+    assert mod.validate(payload, sig, secret=b"some-other-secret") is False
+
+
+def test_default_sign_validate_still_uses_load_or_gen(tmp_path, monkeypatch):
+    """Default behavior (no ``secret`` kwarg) must still resolve the secret
+    via ``_load_or_gen_secret`` (env → file → generate)."""
+    mod = _fresh_desktop_commands_module(tmp_path, monkeypatch)
+    monkeypatch.setenv("SM_DESKTOP_SECRET", "default-path-secret")
+    calls = {"n": 0}
+    real_loader = mod._load_or_gen_secret
+
+    def counting_loader():
+        calls["n"] += 1
+        return real_loader()
+
+    monkeypatch.setattr(mod, "_load_or_gen_secret", counting_loader)
+    payload = {
+        "id": "abc",
+        "session_id": "s1",
+        "kind": "pause",
+        "args": {},
+        "sent_at": 1.0,
+    }
+    sig = mod.sign(payload)  # no kwarg
+    assert mod.validate(payload, sig) is True  # no kwarg
+    # sign + validate both went through the loader.
+    assert calls["n"] >= 2
+
+
 def test_sign_is_canonical_json(tmp_path, monkeypatch):
     """Different key ordering must produce the same signature."""
     mod = _fresh_desktop_commands_module(tmp_path, monkeypatch)

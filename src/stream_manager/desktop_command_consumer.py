@@ -27,7 +27,6 @@ Security model:
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -95,10 +94,9 @@ class CommandConsumer:
         Governed session id this consumer represents. Only commands
         addressed to this session are pulled.
     secret:
-        HMAC shared secret. Stored on the instance and exported into
-        ``SM_DESKTOP_SECRET`` for the lifetime of the process so
-        ``desktop_commands.validate`` (which loads the secret from
-        env/file) signs with the same key as the producer.
+        HMAC shared secret. Held in process memory only and passed
+        explicitly to ``desktop_commands.validate`` per call; no global
+        env mutation.
     executors:
         Mapping of kind → callable. Each callable takes the command's
         ``args`` dict and returns ``None``. It MUST raise on failure
@@ -148,11 +146,6 @@ class CommandConsumer:
         self.poll_interval = float(poll_interval)
         self._sleep = sleep_fn
         self._stop_event = stop_event if stop_event is not None else threading.Event()
-
-        # Export the secret into the env so desktop_commands.validate (which
-        # calls _load_or_gen_secret) signs with the same key. This is the
-        # daemon's process-wide secret; we never reimplement validation here.
-        os.environ["SM_DESKTOP_SECRET"] = self.secret.decode("utf-8")
 
         self._owns_client = client is None
         self._client = client if client is not None else httpx.Client(
@@ -231,7 +224,7 @@ class CommandConsumer:
 
             # Reuse the producer's validator — single source of truth for
             # canonical-JSON encoding + constant-time compare.
-            if not desktop_commands.validate(payload, signature):
+            if not desktop_commands.validate(payload, signature, secret=self.secret):
                 self._ack(cmd_id, "rejected", "bad_sig")
                 return
 
