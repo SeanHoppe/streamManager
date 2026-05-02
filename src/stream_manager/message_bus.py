@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS hitl_overrides (
     timestamp TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hitl_overrides_decision ON hitl_overrides(decision_id);
+
+CREATE TABLE IF NOT EXISTS desktop_commands (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    args_json TEXT NOT NULL DEFAULT '{}',
+    signature TEXT NOT NULL,
+    sent_at REAL NOT NULL,
+    acked_at REAL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dc_pending ON desktop_commands(session_id, status);
 """
 
 

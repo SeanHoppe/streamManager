@@ -1432,6 +1432,187 @@ def _parse_types_param(raw: str | None) -> list[str]:
     return [p for p in parts if p in _MIRROR_TYPE_ALLOWLIST]
 
 
+# ── Task D: desktop_command outbound control plane ───────────────────
+
+_DESKTOP_COMMAND_TTL_SECONDS = 30.0
+
+
+def _reject_sm_own(session_id: str) -> None:
+    """Raise HTTP 400 if session_id matches SM_OWN_SESSION_ID."""
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    if sm_own and session_id == sm_own:
+        raise HTTPException(
+            status_code=400,
+            detail="session_id matches SM_OWN_SESSION_ID",
+        )
+
+
+@app.post("/api/commands")
+async def api_commands_emit(request: Request):
+    """Emit a desktop_command targeted at a governed session.
+
+    Body: ``{session_id, kind, args}``. Inserts a signed row into the
+    ``desktop_commands`` WAL table with ``status='pending'`` and returns
+    ``{id, status: "pending"}``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    session_id = body.get("session_id")
+    kind = body.get("kind")
+    args = body.get("args", {})
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    if not isinstance(kind, str) or not kind:
+        raise HTTPException(status_code=400, detail="kind required")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise HTTPException(status_code=400, detail="args must be an object")
+    _reject_sm_own(session_id)
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+    try:
+        from stream_manager.desktop_commands import emit_command
+        cmd_id = emit_command(bus, session_id, kind, args)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"id": cmd_id, "status": "pending"}
+
+
+@app.get("/api/commands/pending")
+async def api_commands_pending(session_id: str):
+    """Return pending desktop_commands for a session.
+
+    Side effect: rows older than ``_DESKTOP_COMMAND_TTL_SECONDS`` get
+    their status flipped to ``expired`` in the same transaction and are
+    excluded from the response. Returned rows include the parsed args
+    payload and the signature so the consumer can re-validate.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    _reject_sm_own(session_id)
+
+    try:
+        conn = _open_rw()
+        if not _has_table(conn, "desktop_commands"):
+            conn.close()
+            return []
+        cutoff = time.time() - _DESKTOP_COMMAND_TTL_SECONDS
+        # Expire stale pending rows in the same call so subsequent reads
+        # don't keep returning them. session_id-scoped to avoid touching
+        # other sessions' rows.
+        conn.execute(
+            "UPDATE desktop_commands SET status='expired' "
+            "WHERE session_id=? AND status='pending' AND sent_at < ?",
+            (session_id, cutoff),
+        )
+        rows = conn.execute(
+            "SELECT id, session_id, kind, args_json, signature, sent_at, "
+            "status FROM desktop_commands "
+            "WHERE session_id=? AND status='pending' "
+            "ORDER BY sent_at ASC",
+            (session_id,),
+        ).fetchall()
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    out: list[dict[str, object]] = []
+    for r in rows:
+        try:
+            args = json.loads(r["args_json"]) if r["args_json"] else {}
+        except (TypeError, ValueError):
+            args = {}
+        payload = {
+            "id": r["id"],
+            "session_id": r["session_id"],
+            "kind": r["kind"],
+            "args": args,
+            "sent_at": float(r["sent_at"]),
+        }
+        out.append(
+            {
+                "id": r["id"],
+                "session_id": r["session_id"],
+                "kind": r["kind"],
+                "args": args,
+                "sent_at": float(r["sent_at"]),
+                "status": r["status"],
+                "signature": r["signature"],
+                "payload": payload,
+            }
+        )
+    return out
+
+
+_VALID_ACK_STATUS = {"ok", "rejected"}
+
+
+@app.post("/api/commands/{cmd_id}/ack")
+async def api_commands_ack(cmd_id: str, request: Request):
+    """ACK a pending desktop_command.
+
+    Body: ``{status: "ok"|"rejected", error?: str}``. Updates the row's
+    ``status``, ``acked_at``, and (optional) ``error``. Returns the new
+    state of the row.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    status = body.get("status")
+    error = body.get("error")
+    if not isinstance(status, str) or status not in _VALID_ACK_STATUS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of {sorted(_VALID_ACK_STATUS)}",
+        )
+    if error is not None and not isinstance(error, str):
+        raise HTTPException(status_code=400, detail="error must be string or null")
+
+    try:
+        conn = _open_rw()
+        if not _has_table(conn, "desktop_commands"):
+            conn.close()
+            raise HTTPException(status_code=404, detail="command not found")
+        row = conn.execute(
+            "SELECT session_id FROM desktop_commands WHERE id=?",
+            (cmd_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="command not found")
+        # Defence-in-depth: ensure the row's session_id is not the SM
+        # owner's. (emit_command rejects this on insert, but check on ack
+        # too in case env changed mid-flight.)
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        if sm_own and str(row["session_id"]) == sm_own:
+            conn.close()
+            raise HTTPException(
+                status_code=400,
+                detail="session_id matches SM_OWN_SESSION_ID",
+            )
+        conn.execute(
+            "UPDATE desktop_commands SET status=?, acked_at=?, error=? "
+            "WHERE id=?",
+            (status, time.time(), error, cmd_id),
+        )
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"id": cmd_id, "status": status, "error": error}
+
+
 @app.get("/events")
 async def sse_events(
     request: Request,
