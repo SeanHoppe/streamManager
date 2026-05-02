@@ -950,17 +950,48 @@ class EngineRegistry:
                 cli_pool=self._cli_pool,
             )
             self._engines[session_id] = eng
-            # Task F: spawn cross-session Hydrator (daemon) so the engine
-            # picks up operator-approved cross_session=1 patterns. evaluate()
-            # does NOT block on hydrated — pre-hydration decisions just skip
-            # the cross-session advisory.
+            # Task I (v1.1): Hydrator is now lazy — it does NOT spawn during
+            # engine construction. The first evaluate() call after creation
+            # spawns the daemon thread, so the cost of reading the patterns
+            # table is not paid on the synchronous get_or_create path. This
+            # frees the dashboard hot-path of any sync DB read.
+            #
+            # Hydrator semantics are unchanged: still daemon=True, still
+            # publishes via engine.hydrated, still idempotent on the
+            # patterns-already-present case.
             if self._bus is not None:
+                self._install_lazy_hydrator(eng)
+            return eng
+
+    @staticmethod
+    def _install_lazy_hydrator(eng: GovernanceEngine) -> None:
+        """Wrap ``eng.evaluate`` so the first call spawns the Hydrator.
+
+        Subsequent evaluate() calls cost a single attribute read + a
+        method-call hop. The Hydrator thread itself is daemon=True so
+        evaluate() never blocks on it.
+        """
+        bus = eng.bus
+        if bus is None:
+            return
+        original_evaluate = eng.evaluate
+        # Use a list as a one-shot latch — closures + bool would need
+        # ``nonlocal`` which dataclass-bound methods can't access cleanly.
+        spawned = [False]
+
+        def evaluate_with_lazy_hydrator(msg: Message) -> GovDecision:
+            if not spawned[0]:
+                spawned[0] = True
                 try:
                     from stream_manager.cross_session_hydrator import Hydrator
-                    Hydrator(eng, self._bus).start()
+                    Hydrator(eng, bus).start()
                 except Exception:
-                    log.exception("registry: hydrator spawn failed")
-            return eng
+                    log.exception("registry: lazy hydrator spawn failed")
+            return original_evaluate(msg)
+
+        # Bind on the instance — this shadows the class method only for
+        # this engine. type:ignore — dataclass field binding is fine here.
+        eng.evaluate = evaluate_with_lazy_hydrator  # type: ignore[method-assign]
 
     def close(self, session_id: str) -> None:
         """Drop the engine for a session. Idempotent."""

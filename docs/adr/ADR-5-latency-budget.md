@@ -93,9 +93,31 @@ cold-start across calls. Target outcomes:
   rather than block release (per `docs/v1.1-scope.md` §"Latency budget
   targets").
 
+### Task I (v1.1) — Hydrator profile, no budget change
+
+Task I (`docs/v1.1-task-plan.md` §I) profiled the suspected
+cross-session-Hydrator overhead on `EngineRegistry.get_or_create` and
+found it is **not** the p95 driver:
+
+- Hydrator thread runs in <1 ms on the empty/near-empty patterns table.
+- `engine_construct` (first `get_or_create`) is ~2–3 ms.
+- `cli_subprocess` p95 is 17–21 s — accounts for ~100% of per-call
+  wall time.
+
+See `reports/perf-hydrator-20260502T232639Z.md` for the full per-call
+breakdown. Task I applied the lazy-init refactor as a defensive cleanup
+(engine construction now does zero sync DB work) but the v1.0 baseline
+p95 = 19.08s persists because cold-start CLI cost is structural. The
+substantive p95 fix is **Task J — CLI subprocess warm-pool**. The v1.0
+budget table above is **not** ratcheted by Task I alone.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
+- `reports/soak-20260502T201806Z.md` — v1.0 final soak (p95 = 19.08s,
+  the regression Task I was scoped to investigate)
+- `reports/perf-hydrator-20260502T232639Z.md` — Task I per-call probe
 - `docs/v1.0-ship-plan.md` — Task G scope
+- `docs/v1.1-task-plan.md` — Task I (hydrator lazy-init), Task J (warm-pool)
 - Project memory: `project_cli_migration` (api_governance → cli_governance)
 - `REQUIREMENTS.md` §5.1 NFR-P (aligned with this ADR)
