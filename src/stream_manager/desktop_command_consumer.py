@@ -1,9 +1,9 @@
 """Governed-session consumer of SM → desktop_command control plane.
 
 Reference:
-  - docs/sync-comms-qa.md OQ4 (v1.0 long-poll transport lock).
-  - docs/adr/ADR-14-desktop-command-sse.md (v1.1 SSE transport, long-poll
-    deprecated v1.2).
+  - docs/sync-comms-qa.md OQ4 (v1.0 long-poll transport — REMOVED v1.2).
+  - docs/adr/ADR-14-desktop-command-sse.md (v1.1 SSE transport, v1.2
+    sole transport after long-poll removal).
   - memory/project_sync_comms.md is the canonical design freeze.
 
 This module is the read/ack side of the desktop_commands WAL table.
@@ -14,16 +14,17 @@ The governed Claude Code session spawns a sidecar daemon (see
 validates the HMAC-SHA256 signature against the shared secret, runs a
 locally-registered executor for the command's kind, and posts an ack.
 
-Two transports are supported:
+Transport: SSE only as of v1.2.
 
-  * ``transport='long-poll'`` (v1.0 default, **still default in v1.1** to
-    keep one-cycle compatibility window): GET /api/commands/pending on a
-    fixed interval, ack each row.
-  * ``transport='sse'`` (v1.1, opt-in; will become default in v1.2): GET
-    /api/commands/stream as a Server-Sent Events stream. Frames arrive
-    sub-second after producer insert; the SSE handler also re-emits
-    current pending rows on connect, so reconnect is loss-free as long
-    as a row is still ``pending`` (not yet expired/acked) on resume.
+  * ``transport='sse'``: GET /api/commands/stream as a Server-Sent
+    Events stream. Frames arrive sub-second after producer insert; the
+    SSE handler also re-emits current pending rows on connect, so
+    reconnect is loss-free as long as a row is still ``pending`` (not
+    yet expired/acked) on resume.
+
+The legacy ``transport='long-poll'`` value (v1.0/v1.1) was removed in
+v1.2 per ADR-14 and the CHANGELOG entry for v1.2.0. Passing it now
+raises ``ValueError`` with a migration hint.
 
 Security model:
   - The HMAC secret never leaves the consumer process; it's loaded once
@@ -53,18 +54,24 @@ from stream_manager import desktop_commands
 
 log = logging.getLogger(__name__)
 
-# Default poll cadence — OQ4 lock specifies long-poll @ 1 Hz so the
-# producer side sees ~1s of ack latency in the steady state. Used only
-# when transport='long-poll'.
-_DEFAULT_POLL_INTERVAL = 1.0
-
 # SSE reconnect backoff: start at 0.5s, double each failure, cap at 10s
 # per Task K spec. Reset to base after a successful streaming session.
 _SSE_BACKOFF_BASE = 0.5
 _SSE_BACKOFF_CAP = 10.0
 
-# Valid transport modes. Default 'long-poll' until v1.2 default flip.
-_VALID_TRANSPORTS = frozenset({"long-poll", "sse"})
+# Valid transport modes. v1.2 removed 'long-poll'; SSE is the sole
+# transport. The kwarg shape is preserved on CommandConsumer for one
+# more cycle so callers that pass ``transport="sse"`` explicitly keep
+# working without code change.
+_VALID_TRANSPORTS = frozenset({"sse"})
+
+# Migration hint surfaced when callers still pass the removed value.
+# Kept as a module-level constant so tests can match against it without
+# duplicating the wording.
+_LONGPOLL_REMOVED_MSG = (
+    "transport='long-poll' was removed in v1.2 (see CHANGELOG.md and "
+    "ADR-14). Use transport='sse' (the new and only default)."
+)
 
 
 def _default_executors() -> dict[str, Callable[[dict], None]]:
@@ -107,7 +114,7 @@ def _default_executors() -> dict[str, Callable[[dict], None]]:
 
 
 class CommandConsumer:
-    """Long-polling consumer that drains a session's desktop_commands.
+    """SSE-streaming consumer that drains a session's desktop_commands.
 
     Parameters
     ----------
@@ -128,26 +135,26 @@ class CommandConsumer:
         A kind absent from this dict is rejected with
         ``error='unknown_kind'`` — the consumer trusts only its own
         registered executors, never the producer's allowlist.
-    poll_interval:
-        Seconds to wait between polls (default ``1.0`` per OQ4 lock).
-        Only consulted when ``transport='long-poll'``.
     sleep_fn:
         Injected sleep — defaults to ``time.sleep``. Tests pass a
-        recorder so they can assert cadence without a real wait.
+        recorder so they can assert reconnect backoff cadence without a
+        real wait.
     client:
         Optional preconstructed ``httpx.Client``. Tests pass one wired
         to ``httpx.MockTransport(handler)``. When ``None`` the consumer
-        builds its own client against ``sm_url``. The same client is
-        used for both transports — for SSE we set timeout=None on the
-        per-request stream to override the default read timeout.
+        builds its own client against ``sm_url``. For SSE we set
+        timeout=None on the per-request stream to override the default
+        read timeout.
     stop_event:
         Optional ``threading.Event``. The run loop checks
         ``stop_event.is_set()`` after each iteration and returns when
         set, which is how tests terminate ``run_forever``.
     transport:
-        ``'long-poll'`` (default, v1.0 + v1.1 compatibility) or
-        ``'sse'`` (v1.1, sub-second delivery via /api/commands/stream).
-        v1.2 will flip the default to 'sse' and remove long-poll.
+        Must be ``'sse'`` (the v1.2 default and only accepted value).
+        ``'long-poll'`` was removed in v1.2 and now raises
+        ``ValueError`` with a migration hint pointing at CHANGELOG.md.
+        The kwarg shape is preserved so explicit ``transport="sse"``
+        callers continue to work unchanged.
     """
 
     def __init__(
@@ -156,11 +163,10 @@ class CommandConsumer:
         session_id: str,
         secret: bytes,
         executors: dict[str, Callable[[dict], None]],
-        poll_interval: float = _DEFAULT_POLL_INTERVAL,
         sleep_fn: Callable[[float], None] = time.sleep,
         client: Optional[httpx.Client] = None,
         stop_event: Optional[threading.Event] = None,
-        transport: str = "long-poll",
+        transport: str = "sse",
     ) -> None:
         if not isinstance(sm_url, str) or sm_url == "":
             raise ValueError("sm_url required")
@@ -170,6 +176,11 @@ class CommandConsumer:
             raise ValueError("secret must be non-empty bytes")
         if not isinstance(executors, dict):
             raise ValueError("executors must be a dict")
+        # Surface the v1.2 long-poll removal as a clear, actionable
+        # error rather than a generic "invalid transport" so callers
+        # upgrading from v1.1 see the migration path in the message.
+        if transport == "long-poll":
+            raise ValueError(_LONGPOLL_REMOVED_MSG)
         if transport not in _VALID_TRANSPORTS:
             raise ValueError(
                 f"transport must be one of {sorted(_VALID_TRANSPORTS)}; got {transport!r}"
@@ -179,7 +190,6 @@ class CommandConsumer:
         self.session_id = session_id
         self.secret = bytes(secret)
         self.executors = dict(executors)
-        self.poll_interval = float(poll_interval)
         self.transport = transport
         self._sleep = sleep_fn
         self._stop_event = stop_event if stop_event is not None else threading.Event()
@@ -210,24 +220,7 @@ class CommandConsumer:
             except Exception:
                 pass
 
-    # ─── Single-iteration helpers ─────────────────────────────────
-
-    def _fetch_pending(self) -> list[dict]:
-        """GET /api/commands/pending — returns [] on transport error."""
-        try:
-            resp = self._client.get(
-                "/api/commands/pending",
-                params={"session_id": self.session_id},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if not isinstance(data, list):
-                log.warning("pending response was not a list: %r", type(data))
-                return []
-            return data
-        except Exception as exc:  # pragma: no cover - defensive
-            log.warning("fetch pending failed: %s", exc)
-            return []
+    # ─── Single-row helpers ───────────────────────────────────────
 
     def _ack(self, cmd_id: str, status: str, error: Optional[str] = None) -> None:
         """POST /api/commands/{id}/ack — best-effort, never raises."""
@@ -320,44 +313,22 @@ class CommandConsumer:
 
     # ─── Main loop ─────────────────────────────────────────────────
 
-    def run_once(self) -> int:
-        """Run a single poll → process → ack cycle. Returns row count."""
-        rows = self._fetch_pending()
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            self._process_one(row)
-        return len(rows)
-
     def run_forever(self) -> None:
-        """Run the configured transport until ``stop_event`` is set.
+        """Run the SSE transport until ``stop_event`` is set.
 
-        Dispatch:
-          - ``transport='long-poll'``: legacy v1.0 path. Fetch via
-            /api/commands/pending every ``poll_interval`` seconds.
-          - ``transport='sse'`` (v1.1): subscribe to
-            /api/commands/stream and process each frame. Reconnects
-            with exponential backoff capped at ``_SSE_BACKOFF_CAP`` on
-            transport error.
+        Subscribes to /api/commands/stream and processes each frame.
+        Reconnects with exponential backoff capped at
+        ``_SSE_BACKOFF_CAP`` on transport error.
+
+        The body delegates to ``_run_sse`` rather than inlining it
+        because ``_run_sse`` is on the v1.1.0 do-not-touch contract
+        (Task K). Keeping the wrapper preserves the long-standing
+        ``run_forever`` public name without renaming the underlying
+        impl that v1.1.0 froze.
         """
-        if self.transport == "sse":
-            self._run_sse()
-            return
+        self._run_sse()
 
-        # Long-poll path. Each iteration: fetch pending, process each,
-        # sleep ``poll_interval``, then check the stop flag. The sleep
-        # happens before the stop check so tests can drive N iterations
-        # by setting the event after observing N sleep calls.
-        while True:
-            try:
-                self.run_once()
-            except Exception:  # pragma: no cover - defensive
-                log.exception("run_once failed; continuing loop")
-            self._sleep(self.poll_interval)
-            if self._stop_event.is_set():
-                return
-
-    # ─── SSE transport (v1.1) ────────────────────────────────────────
+    # ─── SSE transport ───────────────────────────────────────────────
 
     def _run_sse(self) -> None:
         """Subscribe to /api/commands/stream until ``stop_event`` is set.

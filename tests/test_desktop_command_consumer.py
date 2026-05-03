@@ -1,14 +1,27 @@
-"""Tests for the governed-side desktop_command consumer (Task E).
+"""Unit tests for the governed-side desktop_command consumer.
 
-Covers the security-critical happy + failure paths:
+Covers the security-critical happy + failure paths that are independent
+of the SSE transport layer:
   - valid signed command → executor called → ack=ok
   - bad signature → executor NOT called → ack=rejected, error='bad_sig'
   - unknown kind → ack=rejected, error='unknown_kind'
   - executor raises → ack=rejected, error=str(exc)[:200]
-  - poll loop sleeps poll_interval between iterations (recorded sleep_fn)
+  - executor exception is truncated to 200 chars
+  - constructor input validation
+  - _dispatched dedupe set prevents replay double-fire
+  - transport='long-poll' is rejected with the v1.2 removal message
+
+End-to-end SSE behaviour (transport, reconnect, backoff) is covered by
+``tests/test_desktop_command_sse.py`` against a live uvicorn fixture.
 
 The HMAC secret is set via monkeypatch on SM_DESKTOP_SECRET so the test
 never touches the real ``.bridge/secret`` file.
+
+Note: v1.2 (Task D) removed the long-poll transport. The SSE
+``run_once``-equivalent shape is exercised by calling ``_process_one``
+directly with a synthesized row, which is the post-parse hand-off point
+shared by both the (now-removed) long-poll fetch path and the surviving
+SSE frame iterator.
 """
 
 from __future__ import annotations
@@ -16,7 +29,6 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-import threading
 from typing import Any
 
 import httpx
@@ -84,31 +96,23 @@ def _make_row(
     }
 
 
-class _Recorder:
-    """Captures every request the consumer issues against MockTransport."""
+class _AckRecorder:
+    """Captures every ack POST the consumer issues against MockTransport.
+
+    GETs to the (removed) /api/commands/pending endpoint return 404 so
+    any accidental long-poll fetch in this test file would fail loud.
+    """
 
     def __init__(self) -> None:
-        self.gets: list[httpx.Request] = []
         self.acks: list[tuple[str, dict]] = []
 
-    def make_handler(self, pending_queue: list[list[dict]]):
-        """Returns an httpx.MockTransport handler.
-
-        ``pending_queue`` is a list-of-lists; each consumer GET pops the
-        next list to return. When exhausted, returns ``[]`` forever.
-        """
-
+    def make_handler(self):
         def handler(request: httpx.Request) -> httpx.Response:
-            if request.method == "GET" and request.url.path == "/api/commands/pending":
-                self.gets.append(request)
-                rows = pending_queue.pop(0) if pending_queue else []
-                return httpx.Response(200, json=rows)
             if (
                 request.method == "POST"
                 and request.url.path.startswith("/api/commands/")
                 and request.url.path.endswith("/ack")
             ):
-                # /api/commands/{id}/ack
                 parts = request.url.path.split("/")
                 cmd_id = parts[3]
                 body = (
@@ -132,13 +136,24 @@ def _safe_json(content: bytes) -> dict:
         return {}
 
 
+def _build_consumer(consumer_module, executors: dict, client: httpx.Client):
+    """Construct a CommandConsumer wired to ``client``."""
+    return consumer_module.CommandConsumer(
+        sm_url=SM_URL,
+        session_id=SESSION_ID,
+        secret=SECRET,
+        executors=executors,
+        client=client,
+    )
+
+
 # ─── Tests ────────────────────────────────────────────────────────────
 
 
 def test_valid_command_executes_and_acks_ok(consumer_module, desktop_commands):
     row = _make_row(desktop_commands, cmd_id="cmd-ok", kind="pause", args={"why": "test"})
-    rec = _Recorder()
-    transport = httpx.MockTransport(rec.make_handler([[row]]))
+    rec = _AckRecorder()
+    transport = httpx.MockTransport(rec.make_handler())
     client = httpx.Client(transport=transport, base_url=SM_URL)
 
     seen: list[dict] = []
@@ -146,16 +161,9 @@ def test_valid_command_executes_and_acks_ok(consumer_module, desktop_commands):
     def pause_executor(args: dict) -> None:
         seen.append(args)
 
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": pause_executor},
-        client=client,
-    )
+    consumer = _build_consumer(consumer_module, {"pause": pause_executor}, client)
+    consumer._process_one(row)
 
-    n = consumer.run_once()
-    assert n == 1
     assert seen == [{"why": "test"}]
     assert rec.acks == [("cmd-ok", {"status": "ok"})]
 
@@ -164,8 +172,8 @@ def test_bad_signature_rejects_without_executing(
     consumer_module, desktop_commands
 ):
     row = _make_row(desktop_commands, cmd_id="cmd-bad", tamper=True)
-    rec = _Recorder()
-    transport = httpx.MockTransport(rec.make_handler([[row]]))
+    rec = _AckRecorder()
+    transport = httpx.MockTransport(rec.make_handler())
     client = httpx.Client(transport=transport, base_url=SM_URL)
 
     calls = {"n": 0}
@@ -173,15 +181,9 @@ def test_bad_signature_rejects_without_executing(
     def pause_executor(args: dict) -> None:
         calls["n"] += 1
 
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": pause_executor},
-        client=client,
-    )
+    consumer = _build_consumer(consumer_module, {"pause": pause_executor}, client)
+    consumer._process_one(row)
 
-    consumer.run_once()
     assert calls["n"] == 0
     assert rec.acks == [("cmd-bad", {"status": "rejected", "error": "bad_sig"})]
 
@@ -192,19 +194,15 @@ def test_unknown_kind_rejects(consumer_module, desktop_commands):
     # consumer trusts only its own executors map, never the producer.
     assert "audible_cue" in desktop_commands.KIND_ALLOWLIST
     row = _make_row(desktop_commands, cmd_id="cmd-unk", kind="audible_cue")
-    rec = _Recorder()
-    transport = httpx.MockTransport(rec.make_handler([[row]]))
+    rec = _AckRecorder()
+    transport = httpx.MockTransport(rec.make_handler())
     client = httpx.Client(transport=transport, base_url=SM_URL)
 
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": lambda args: None},  # only pause registered
-        client=client,
-    )
+    consumer = _build_consumer(
+        consumer_module, {"pause": lambda args: None}, client
+    )  # only pause registered
+    consumer._process_one(row)
 
-    consumer.run_once()
     assert rec.acks == [
         ("cmd-unk", {"status": "rejected", "error": "unknown_kind"})
     ]
@@ -214,22 +212,16 @@ def test_executor_raises_acks_with_truncated_error(
     consumer_module, desktop_commands
 ):
     row = _make_row(desktop_commands, cmd_id="cmd-raise", kind="pause")
-    rec = _Recorder()
-    transport = httpx.MockTransport(rec.make_handler([[row]]))
+    rec = _AckRecorder()
+    transport = httpx.MockTransport(rec.make_handler())
     client = httpx.Client(transport=transport, base_url=SM_URL)
 
     def boom(args: dict) -> None:
         raise RuntimeError("kaboom")
 
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": boom},
-        client=client,
-    )
+    consumer = _build_consumer(consumer_module, {"pause": boom}, client)
+    consumer._process_one(row)
 
-    consumer.run_once()
     assert rec.acks == [
         ("cmd-raise", {"status": "rejected", "error": "kaboom"})
     ]
@@ -237,8 +229,8 @@ def test_executor_raises_acks_with_truncated_error(
 
 def test_executor_long_error_is_truncated(consumer_module, desktop_commands):
     row = _make_row(desktop_commands, cmd_id="cmd-long", kind="pause")
-    rec = _Recorder()
-    transport = httpx.MockTransport(rec.make_handler([[row]]))
+    rec = _AckRecorder()
+    transport = httpx.MockTransport(rec.make_handler())
     client = httpx.Client(transport=transport, base_url=SM_URL)
 
     long_msg = "x" * 500
@@ -246,15 +238,9 @@ def test_executor_long_error_is_truncated(consumer_module, desktop_commands):
     def boom(args: dict) -> None:
         raise RuntimeError(long_msg)
 
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": boom},
-        client=client,
-    )
+    consumer = _build_consumer(consumer_module, {"pause": boom}, client)
+    consumer._process_one(row)
 
-    consumer.run_once()
     assert len(rec.acks) == 1
     cmd_id, body = rec.acks[0]
     assert cmd_id == "cmd-long"
@@ -263,65 +249,34 @@ def test_executor_long_error_is_truncated(consumer_module, desktop_commands):
     assert len(body["error"]) == 200
 
 
-def test_run_forever_sleeps_poll_interval_between_iterations(
+def test_dispatched_dedupe_prevents_double_fire(
     consumer_module, desktop_commands
 ):
-    rec = _Recorder()
-    # Three iterations of empty pending lists.
-    transport = httpx.MockTransport(rec.make_handler([[], [], []]))
+    """Replay of an already-dispatched row must NOT re-fire the executor.
+
+    This is the SSE reconnect-replay safety net the consumer relies on
+    after the long-poll fetch path was removed in v1.2.
+    """
+    row = _make_row(desktop_commands, cmd_id="cmd-dup", kind="pause")
+    rec = _AckRecorder()
+    transport = httpx.MockTransport(rec.make_handler())
     client = httpx.Client(transport=transport, base_url=SM_URL)
 
-    sleeps: list[float] = []
-    stop_event = threading.Event()
+    fires = {"n": 0}
 
-    def recording_sleep(secs: float) -> None:
-        sleeps.append(secs)
-        if len(sleeps) >= 3:
-            stop_event.set()
+    def pause_executor(args: dict) -> None:
+        fires["n"] += 1
 
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": lambda args: None},
-        client=client,
-        poll_interval=1.0,
-        sleep_fn=recording_sleep,
-        stop_event=stop_event,
-    )
+    consumer = _build_consumer(consumer_module, {"pause": pause_executor}, client)
 
-    consumer.run_forever()
-    assert sleeps == [1.0, 1.0, 1.0]
-    # Three GETs were issued (one per iteration, before the sleep).
-    assert len(rec.gets) == 3
+    consumer._process_one(row)
+    consumer._process_one(row)  # replay
+    consumer._process_one(row)  # replay
 
-
-def test_stop_method_terminates_loop(consumer_module, desktop_commands):
-    rec = _Recorder()
-    transport = httpx.MockTransport(rec.make_handler([[]]))
-    client = httpx.Client(transport=transport, base_url=SM_URL)
-
-    stop_event = threading.Event()
-    sleeps: list[float] = []
-
-    def recording_sleep(secs: float) -> None:
-        sleeps.append(secs)
-
-    consumer = consumer_module.CommandConsumer(
-        sm_url=SM_URL,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"pause": lambda args: None},
-        client=client,
-        poll_interval=0.1,
-        sleep_fn=recording_sleep,
-        stop_event=stop_event,
-    )
-    # Pre-set the stop event so the loop runs exactly once and exits.
-    stop_event.set()
-    consumer.run_forever()
-    # Loop must have iterated at least once before checking stop.
-    assert len(sleeps) == 1
+    assert fires["n"] == 1
+    # Only the first dispatch acked; subsequent replays short-circuit
+    # before any HTTP call.
+    assert rec.acks == [("cmd-dup", {"status": "ok"})]
 
 
 def test_default_executors_cover_full_allowlist(
@@ -377,3 +332,35 @@ def test_constructor_validates_inputs(consumer_module):
         consumer_module.CommandConsumer(
             sm_url=SM_URL, session_id="s", secret=b"", executors={}
         )
+
+
+def test_longpoll_transport_rejected_with_migration_message(consumer_module):
+    """v1.2 (Task D) removed the long-poll transport. Passing it now must
+    raise ValueError with a clear migration hint pointing operators at
+    CHANGELOG.md / ADR-14, not a generic "invalid transport"."""
+    with pytest.raises(ValueError) as exc_info:
+        consumer_module.CommandConsumer(
+            sm_url=SM_URL,
+            session_id="s",
+            secret=SECRET,
+            executors={},
+            transport="long-poll",
+        )
+    msg = str(exc_info.value)
+    # The message must reference both v1.2 (the removal cycle) and SSE
+    # (the survivor) so a v1.1 operator stack-trace is self-explanatory.
+    assert "v1.2" in msg
+    assert "sse" in msg
+    assert "CHANGELOG" in msg or "ADR-14" in msg
+
+
+def test_default_transport_is_sse(consumer_module):
+    """The v1.2 default flipped from 'long-poll' to 'sse'."""
+    consumer = consumer_module.CommandConsumer(
+        sm_url=SM_URL,
+        session_id="s",
+        secret=SECRET,
+        executors={},
+    )
+    assert consumer.transport == "sse"
+    consumer.close()

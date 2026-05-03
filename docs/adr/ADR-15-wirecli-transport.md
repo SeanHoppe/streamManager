@@ -1,8 +1,10 @@
 # ADR-15: WireCLI as the default CLI transport in v1.2
 
-- **Status**: Accepted (v1.1, opt-in); default flip planned v1.2
+- **Status**: Accepted; v1.2 default flip + legacy `'json'` selector
+  removed (Task E).
 - **Date**: 2026-05-03
-- **Companion**: `docs/v1.1-task-plan.md` Task N
+- **Companion**: `docs/v1.1-task-plan.md` Task N,
+  `docs/v1.2-task-plan.md` Task E
 - **Builds on**: spike-c-final (tag `f05febbe`) — original WireCLI work
   sidelined during the api_governance → cli_governance migration.
 
@@ -119,3 +121,46 @@ Introduce **WireCLI** as a structured RPC transport over the same
 - Two soak reports under `reports/soak-wirecli-{json,wire}-*.md`
   comparing parser-fragility-induced ALLOWs.
 - This ADR.
+
+## v1.2 status (Task E): json selector removed
+
+The one-cycle deprecation window planned in the v1.1 rollout has
+closed. v1.2 removes the legacy `'json'` value from
+`cli_client.cli_transport()` and from the `BRIDGE_CLI_TRANSPORT` env
+slot, and flips the default to `'wirecli'`. The selector surface
+(`transport` kwarg on `cli_client`, `cli_transport()` resolver) is
+preserved per the reduced do-not-touch table in the v1.2 Task E brief
+— it now resolves only to WireCLI.
+
+What changed:
+
+- `cli_client.DEFAULT_TRANSPORT` flips `'json'` → `'wirecli'`.
+- `cli_client._VALID_TRANSPORTS` collapses to `{'wirecli'}`.
+- `cli_transport('json')` and `BRIDGE_CLI_TRANSPORT=json` raise
+  `ValueError` with a migration hint pointing at CHANGELOG and this
+  ADR. The error path is preferred over a silent fallback so soak
+  runs and operator scripts surface the migration explicitly.
+- `tools/wirecli_soak_compare.py` drops the `'json'` argparse choice
+  in favor of `'legacy'` (the historical fragility-comparison
+  report) so the `cli_transport()` migration hint surfaces instead
+  of a generic argparse error. The `legacy` mode still imports
+  `cli_governance._parse_envelope` directly — that function is the
+  shipped CLI envelope parser used by `CliGovernor` and is not
+  removed by this task. v1.3 plans its retirement (see "Rollout"
+  above).
+
+What did NOT change:
+
+- The `wirecli.py` module surface (`WireProtocolError`,
+  `WireSchemaVersionError`, `WireTransportError`, `WIRE_SCHEMA_VERSION`,
+  `parse_envelope`, `call`, `call_from_string`).
+- The `transport` kwarg shape on `cli_client` (kept; it just loses
+  `'json'` as a valid value).
+- `cli_governance.CliGovernor` and its envelope parser
+  `_parse_envelope` (still the shipped CLI escalation path; v1.3 will
+  retire it once WireCLI is the production parse path everywhere).
+- All v1.1 protected surfaces from the reduced do-not-touch table:
+  `cli_pool` / `CliPool` / `CliWorker`, `_install_lazy_hydrator`,
+  `matched_hash` (column + reads/writes), `_run_sse` /
+  `_consume_sse_stream`, `start_refresh` / `stop_refresh` /
+  `refresh_all` / `refresh_status`, `tools/perf_probe.py`.

@@ -150,6 +150,14 @@ expected to bring L4 p95 under 8 s; that would re-unify the budget.
 See `docs/v1.1-task-plan.md` §"v1.2 backlog" for the cassette/replay
 infrastructure needed to validate it cheaply.
 
+### Source of truth (v1.2 update)
+
+ADR-17 introduces a three-tier soak model (replay / record-cassette /
+ship-gate). **Only the ship-gate tier feeds the absolute latency
+numbers in this ADR.** Replay-tier and record-cassette-tier p95 are
+*relative* regression signals — they MUST NOT be compared against the
+budgets in the table above. See `docs/adr/ADR-17-soak-tiers.md`.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
