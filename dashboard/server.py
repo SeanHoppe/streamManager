@@ -1704,35 +1704,199 @@ async def api_commands_pending(session_id: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    out: list[dict[str, object]] = []
-    for r in rows:
-        try:
-            args = json.loads(r["args_json"]) if r["args_json"] else {}
-        except (TypeError, ValueError):
-            args = {}
-        payload = {
-            "id": r["id"],
-            "session_id": r["session_id"],
-            "kind": r["kind"],
-            "args": args,
-            "sent_at": float(r["sent_at"]),
-        }
-        out.append(
-            {
-                "id": r["id"],
-                "session_id": r["session_id"],
-                "kind": r["kind"],
-                "args": args,
-                "sent_at": float(r["sent_at"]),
-                "status": r["status"],
-                "signature": r["signature"],
-                "payload": payload,
-            }
-        )
-    return out
+    return [_serialize_command_row(r) for r in rows]
 
 
 _VALID_ACK_STATUS = {"ok", "rejected"}
+
+# Task K (v1.1): SSE tail-poll cadence for /api/commands/stream. The SSE
+# endpoint replays current pending rows on connect, then polls the
+# desktop_commands table at this interval to push new pending rows. 200ms
+# matches the v1.1 sub-second-delivery target while staying low enough that
+# the SQLite read pressure is negligible (one indexed SELECT per session).
+_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL = 0.2
+
+
+def _serialize_command_row(r: sqlite3.Row) -> dict[str, object]:
+    """Shared row → JSON shape used by /pending and /stream.
+
+    Mirrors the body in ``api_commands_pending`` so consumers can flip
+    transports without parsing differences.
+    """
+    try:
+        args = json.loads(r["args_json"]) if r["args_json"] else {}
+    except (TypeError, ValueError):
+        args = {}
+    payload = {
+        "id": r["id"],
+        "session_id": r["session_id"],
+        "kind": r["kind"],
+        "args": args,
+        "sent_at": float(r["sent_at"]),
+    }
+    return {
+        "id": r["id"],
+        "session_id": r["session_id"],
+        "kind": r["kind"],
+        "args": args,
+        "sent_at": float(r["sent_at"]),
+        "status": r["status"],
+        "signature": r["signature"],
+        "payload": payload,
+    }
+
+
+@app.get("/api/commands/stream")
+async def api_commands_stream(request: Request, session_id: str):
+    """SSE stream of pending desktop_commands for a session (Task K, v1.1).
+
+    On connect: replay current ``status='pending'`` rows oldest-first.
+    Then tail-poll the ``desktop_commands`` table every
+    ``_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL`` seconds and emit any new
+    pending rows whose rowid is strictly greater than the running cursor.
+
+    Server-side filters (defence-in-depth, mirroring ``/api/commands/pending``):
+      - session_id match required
+      - SM_OWN_SESSION_ID rows rejected up-front (HTTP 400)
+      - rows older than ``_DESKTOP_COMMAND_TTL_SECONDS`` are flipped to
+        ``expired`` in the same connection and are NOT emitted.
+
+    Frame shape matches the JSON returned by ``/api/commands/pending`` so
+    the consumer code path after parse() is transport-agnostic. The legacy
+    long-poll endpoint is preserved for one minor cycle (deprecated v1.2).
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    _reject_sm_own(session_id)
+
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    async def generate():
+        try:
+            conn = sqlite3.connect(
+                str(DB_PATH), check_same_thread=False, isolation_level=None
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            return
+
+        try:
+            if not _has_table(conn, "desktop_commands"):
+                # No table yet; emit a comment frame so the client sees
+                # the connection is alive, then loop on a slow heartbeat.
+                yield ": no desktop_commands table\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    await asyncio.sleep(1.0)
+                    yield ": keepalive\n\n"
+                return
+
+            last_rowid = 0  # cursor: only emit rows with rowid > last_rowid
+
+            # Replay phase: expire stale rows then send current pending
+            # rows oldest-first. Tracks last_rowid so the tail loop never
+            # double-emits replayed rows.
+            try:
+                cutoff = time.time() - _DESKTOP_COMMAND_TTL_SECONDS
+                conn.execute(
+                    "UPDATE desktop_commands SET status='expired' "
+                    "WHERE session_id=? AND status='pending' AND sent_at < ?",
+                    (session_id, cutoff),
+                )
+                # SM_OWN_SESSION_ID rows must never reach a consumer even
+                # if they somehow landed in the table; the WHERE clause
+                # excludes them server-side.
+                params: list[object] = [session_id]
+                where_extra = ""
+                if sm_own:
+                    where_extra = " AND session_id != ?"
+                    params.append(sm_own)
+                replay_sql = (
+                    "SELECT rowid AS rid, id, session_id, kind, args_json, "
+                    "signature, sent_at, status FROM desktop_commands "
+                    "WHERE session_id=? AND status='pending'"
+                    + where_extra
+                    + " ORDER BY sent_at ASC, rowid ASC"
+                )
+                rows = conn.execute(replay_sql, tuple(params)).fetchall()
+                for r in rows:
+                    rid = int(r["rid"])
+                    if rid > last_rowid:
+                        last_rowid = rid
+                    payload = _serialize_command_row(r)
+                    yield f"data: {json.dumps(payload)}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+            # Tail phase: poll for newly-inserted pending rows. We use the
+            # rowid cursor (monotonic, no clock skew) rather than sent_at
+            # so producer clock drift can't hide rows.
+            tail_params_template: list[object] = [session_id]
+            tail_where_extra = ""
+            if sm_own:
+                tail_where_extra = " AND session_id != ?"
+                tail_params_template.append(sm_own)
+            tail_sql = (
+                "SELECT rowid AS rid, id, session_id, kind, args_json, "
+                "signature, sent_at, status FROM desktop_commands "
+                "WHERE rowid > ? AND session_id=? AND status='pending'"
+                + tail_where_extra
+                + " ORDER BY rowid ASC"
+            )
+
+            heartbeat_every = 15.0  # seconds
+            last_heartbeat = time.time()
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                # Expire stale rows on each tick so the producer side
+                # observes consistent TTL behaviour with /pending.
+                try:
+                    cutoff = time.time() - _DESKTOP_COMMAND_TTL_SECONDS
+                    conn.execute(
+                        "UPDATE desktop_commands SET status='expired' "
+                        "WHERE session_id=? AND status='pending' AND sent_at < ?",
+                        (session_id, cutoff),
+                    )
+                    rows = conn.execute(
+                        tail_sql, (last_rowid, *tail_params_template),
+                    ).fetchall()
+                    for r in rows:
+                        rid = int(r["rid"])
+                        if rid > last_rowid:
+                            last_rowid = rid
+                        payload = _serialize_command_row(r)
+                        yield f"data: {json.dumps(payload)}\n\n"
+                except Exception:
+                    # Defensive: keep the connection alive on transient
+                    # SQLite errors; the next tick will retry.
+                    pass
+
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_every:
+                    yield ": keepalive\n\n"
+                    last_heartbeat = now
+
+                await asyncio.sleep(_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":        "keep-alive",
+        },
+    )
 
 
 @app.post("/api/commands/{cmd_id}/ack")
