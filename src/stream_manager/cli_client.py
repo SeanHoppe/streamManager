@@ -38,7 +38,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from stream_manager.message_bus import Message
 
@@ -47,6 +47,33 @@ log = logging.getLogger(__name__)
 THROTTLE_SECONDS = 0.25
 LAST_LINE_MAX_CHARS = 200
 EVENT_TYPE = "background_job"
+
+# Task N (v1.1): structured-RPC transport selector. ``"json"`` is the
+# legacy ad-hoc path (cli_governance._parse_envelope); ``"wirecli"``
+# routes through stream_manager.wirecli with typed exceptions on parse
+# failure. Default stays ``"json"`` for v1.1 — ADR-15 plans the v1.2
+# default flip. See docs/adr/ADR-15-wirecli-transport.md.
+Transport = Literal["json", "wirecli"]
+DEFAULT_TRANSPORT: Transport = "json"
+_VALID_TRANSPORTS: frozenset[str] = frozenset({"json", "wirecli"})
+
+
+def cli_transport(transport: str | None = None) -> Transport:
+    """Resolve and validate the CLI transport selector.
+
+    Precedence: explicit arg > ``BRIDGE_CLI_TRANSPORT`` env > default.
+    Unknown values raise ``ValueError`` — silent fallback would mask
+    typos that matter for soak comparisons.
+    """
+    import os
+
+    chosen = transport or os.environ.get("BRIDGE_CLI_TRANSPORT") or DEFAULT_TRANSPORT
+    if chosen not in _VALID_TRANSPORTS:
+        raise ValueError(
+            f"unknown cli transport {chosen!r}; "
+            f"expected one of {sorted(_VALID_TRANSPORTS)}"
+        )
+    return chosen  # type: ignore[return-value]
 
 
 class _BusLike(Protocol):
