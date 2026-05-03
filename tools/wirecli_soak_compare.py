@@ -256,7 +256,7 @@ def _format_report(transport: str, fixtures: list[Fixture]) -> str:
     class_outcome: dict[str, dict[str, int]] = {}
     silent_degrade_classes: set[str] = set()
     for fx in fixtures:
-        if transport == "json":
+        if transport == "legacy":
             outcome, detail = _run_legacy(fx.stdout)
         else:
             outcome, detail = _run_wirecli(fx.stdout)
@@ -286,7 +286,7 @@ def _format_report(transport: str, fixtures: list[Fixture]) -> str:
     lines.append("")
     lines.append("## Verdict")
     lines.append("")
-    if transport == "json":
+    if transport == "legacy":
         n_silent = counts.get("silent-degrade", 0)
         if n_silent:
             lines.append(
@@ -323,11 +323,28 @@ def _format_report(transport: str, fixtures: list[Fixture]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    # v1.2 (Task E) removed the 'json' transport selector from
+    # cli_client.cli_transport(). The legacy `_parse_envelope` parser
+    # is still importable for this comparison driver (it backs the
+    # historical fragility report), but `--transport json` is no
+    # longer a runnable production path. Keep the legacy column for
+    # historical comparison runs only.
     parser.add_argument(
         "--transport",
-        choices=["json", "wirecli", "both"],
-        default="both",
+        default="wirecli",
+        help=(
+            "wirecli: production parser (v1.2 default); "
+            "legacy: historical _parse_envelope path for fragility "
+            "comparison only — not a supported runtime transport; "
+            "both: emit both reports."
+        ),
     )
+    # NOTE: argparse `choices=` is intentionally NOT used. v1.2 (Task E)
+    # removed the `json` selector from cli_client.cli_transport(); a
+    # post-parse check below maps `--transport json` to the explicit
+    # migration message rather than argparse's generic "invalid choice"
+    # error. Same pattern as tools/sm_consumer.py for Task D's long-poll
+    # removal (PR #44 fix commit 6d6493e).
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -340,12 +357,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # v1.2 (Task E): surface the cli_client migration hint at the CLI
+    # layer so v1.1 launch scripts using `--transport json` see the
+    # actionable pointer instead of a stack trace later.
+    if args.transport == "json":
+        from stream_manager.cli_client import _JSON_REMOVED_MSG
+        print(f"error: {_JSON_REMOVED_MSG}", file=sys.stderr)
+        return 2
+    if args.transport not in ("wirecli", "legacy", "both"):
+        print(
+            f"error: --transport {args.transport!r} is not valid; "
+            "expected one of: wirecli, legacy, both",
+            file=sys.stderr,
+        )
+        return 2
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
     fixtures = _fixtures()
 
-    if args.transport in ("json", "both"):
-        report = _format_report("json", fixtures)
-        path = args.out_dir / f"soak-wirecli-json-{args.ts}.md"
+    if args.transport in ("legacy", "both"):
+        report = _format_report("legacy", fixtures)
+        path = args.out_dir / f"soak-wirecli-legacy-{args.ts}.md"
         path.write_text(report, encoding="utf-8")
         print(f"wrote {path}")
 
