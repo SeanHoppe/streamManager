@@ -62,9 +62,15 @@ def dispatch_resolution(
     """Apply side-effects for a resolved hitl_pending row.
 
     Today only `trigger_reason == "cross_session_flag"` carries side-effects:
-    on `approved` the underlying pattern hash (encoded in proposed_action as
-    `flag_cross_session:<hash>`) is flagged for cross-session hydration.
-    Rejection or override leaves the flag at 0.
+    on `approved` the underlying pattern hash is flagged for cross-session
+    hydration. Rejection or override leaves the flag at 0.
+
+    Task L: the hash is read from the dedicated hitl_pending.matched_hash
+    column. For backward compatibility with v1.0 rows that pre-date the
+    migration (and weren't backfilled — e.g. a stale in-memory bus or a DB
+    not yet re-opened post-upgrade) we fall back to the legacy
+    `flag_cross_session:<hash>` proposed_action encoding when matched_hash
+    is empty.
     """
     try:
         row = bus.get_hitl_pending_row(pending_id)
@@ -77,10 +83,13 @@ def dispatch_resolution(
         return
     if resolution != "approved":
         return
-    proposed = str(row.get("proposed_action") or "")
-    if not proposed.startswith("flag_cross_session:"):
-        return
-    hash_ = proposed.split(":", 1)[1]
+
+    hash_ = str(row.get("matched_hash") or "")
+    if not hash_:
+        # Legacy fallback (pre-Task L rows that escaped backfill).
+        proposed = str(row.get("proposed_action") or "")
+        if ":" in proposed and proposed.startswith("flag_cross_session:"):
+            hash_ = proposed.split(":", 1)[1]
     if not hash_:
         return
     try:

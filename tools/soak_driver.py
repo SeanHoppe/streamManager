@@ -605,6 +605,13 @@ def main() -> int:
         action="store_true",
         help="Don't write a deferral report when claude CLI is missing (testing only)",
     )
+    ap.add_argument(
+        "--cli-pool-size",
+        type=int,
+        default=0,
+        help="Task J / v1.1: warm-pool size for `claude` workers. 0 = legacy "
+             "spawn-per-call (default). 2 is the recommended pool size.",
+    )
     args = ap.parse_args()
 
     cli_present = _check_cli_on_path()
@@ -680,8 +687,30 @@ def main() -> int:
         session_id = f"soak-{iso_ts}"
         bus.open_session(session_id, project_slug="soak", pid=os.getpid())
         snap = load_project_context(str(ROOT))
+
+        # Task J / v1.1: optional CLI warm-pool. When --cli-pool-size > 0,
+        # the engine routes BRIDGE_API_GOV escalations through a pool of
+        # long-lived `claude` workers; this is the path being measured for
+        # the v1.1 p50 budget (≤ 3s). Pool is shut down in the finally
+        # block to avoid orphan claude.exe processes.
+        cli_pool_obj = None
+        if args.cli_pool_size > 0:
+            try:
+                from stream_manager.cli_pool import CliPool, reap_stale_workers
+                reaped = reap_stale_workers(root=ROOT)
+                if reaped:
+                    print(f"[soak] reaped {reaped} stale CLI worker(s) at boot")
+                cli_pool_obj = CliPool(size=args.cli_pool_size, pid_root=ROOT)
+                cli_pool_obj.warmup()
+                print(f"[soak] CLI warm-pool enabled (size={args.cli_pool_size})")
+            except Exception as exc:
+                print(f"[soak] cli_pool init failed: {exc}; falling back to spawn-per-call",
+                      file=sys.stderr)
+                cli_pool_obj = None
+
         engine = GovernanceEngine(
-            project_context=snap, bus=bus, session_id=session_id
+            project_context=snap, bus=bus, session_id=session_id,
+            cli_pool=cli_pool_obj,
         )
 
         # 4. Publish loop with per-minute psutil sampling
@@ -786,6 +815,14 @@ def main() -> int:
         # the full tail.
         _terminate(consumer_proc, "sse_consumer")
         _terminate(dashboard_proc, "dashboard")
+        # Task J / v1.1: shut the warm-pool down BEFORE closing the bus so
+        # any final governance_call events from in-flight workers can land.
+        # Idempotent — safe even if init failed and cli_pool_obj is None.
+        try:
+            if 'cli_pool_obj' in locals() and cli_pool_obj is not None:  # type: ignore[name-defined]
+                cli_pool_obj.shutdown()  # type: ignore[union-attr]
+        except Exception as exc:
+            print(f"[soak] cli_pool shutdown raised: {exc}", file=sys.stderr)
         if bus is not None:
             try:
                 bus.close_session(session_id)

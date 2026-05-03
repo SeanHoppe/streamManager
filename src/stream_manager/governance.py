@@ -184,6 +184,10 @@ class GovernanceEngine:
     # Phase 5 / FR-OG-7: optional MaturityReader. When None, all FR-OG-7
     # signals are dormant (gate condition).
     maturity: MaturityReader | None = None
+    # Task J / v1.1: optional CLI warm-pool. When supplied, the lazily-built
+    # CliGovernor inherits this pool and routes escalation through it
+    # instead of spawning a fresh subprocess per call. None = legacy path.
+    cli_pool: object | None = None
     _sweep_job_agents_seen: list[str] = field(default_factory=list)
 
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
@@ -696,6 +700,7 @@ class GovernanceEngine:
                 self.project_context,
                 bus=self.bus,
                 session_id=self.session_id or None,
+                pool=self.cli_pool,  # type: ignore[arg-type]
             )
         # Phase 4 / NFR-M2: caller selects the model tier via the
         # pre-routing pass in _evaluate_inner_core. When omitted, fall back
@@ -770,9 +775,9 @@ class GovernanceEngine:
 
         OQ5/OQ6/OQ8: cross-session promotion is gated on operator approval.
         Auto-flagging is replaced by a HITL row with trigger_reason
-        "cross_session_flag" and proposed_action "flag_cross_session:<hash>"
-        so the resolution dispatcher can recover the hash without a schema
-        change.
+        "cross_session_flag"; the pattern hash travels in the dedicated
+        hitl_pending.matched_hash column (Task L, v1.1; replaces the v1.0
+        `flag_cross_session:<hash>` proposed_action hack).
         """
         if self.bus is None or not self.session_id:
             return
@@ -814,9 +819,10 @@ class GovernanceEngine:
             self.bus.publish(anchor)
             self.bus.queue_hitl(
                 message_id=anchor.id,
-                proposed_action=f"flag_cross_session:{new_hash}",
+                proposed_action="flag",
                 proposed_confidence=0.9,
                 trigger_reason="cross_session_flag",
+                matched_hash=new_hash,
             )
         except Exception:
             log.exception("cross-session: queue_hitl failed")
@@ -894,6 +900,7 @@ class EngineRegistry:
         rate_limit_per_min: int = DEFAULT_RATE_LIMIT_PER_MIN,
         auto_refresh: bool = False,
         refresh_interval_s: float = 60.0,
+        cli_pool: object | None = None,
     ) -> None:
         self._bus = bus
         self._project_context = project_context
@@ -902,6 +909,9 @@ class EngineRegistry:
         self._hitl = hitl
         self._maturity = maturity
         self._rate_limit_per_min = rate_limit_per_min
+        # Task J / v1.1: optional shared CLI warm-pool, propagated to every
+        # engine instantiated by this registry.
+        self._cli_pool = cli_pool
         self._engines: dict[str, GovernanceEngine] = {}
         self._lock = threading.RLock()
         # Task F: cross-session pattern refresh. Disabled by default —
@@ -910,6 +920,10 @@ class EngineRegistry:
         self._refresh_interval_s = float(refresh_interval_s)
         self._refresh_timer: threading.Timer | None = None
         self._refresh_stopped = True
+        # Task M: timestamp (epoch seconds) of the last refresh_all() return,
+        # or None if refresh_all has never completed. Surfaced via
+        # /api/registry/active for operator visibility.
+        self.last_refresh_ts: float | None = None
         if auto_refresh:
             self.start_refresh()
 
@@ -938,19 +952,51 @@ class EngineRegistry:
                 hitl=self._hitl,
                 maturity=self._maturity,
                 rate_limit_per_min=self._rate_limit_per_min,
+                cli_pool=self._cli_pool,
             )
             self._engines[session_id] = eng
-            # Task F: spawn cross-session Hydrator (daemon) so the engine
-            # picks up operator-approved cross_session=1 patterns. evaluate()
-            # does NOT block on hydrated — pre-hydration decisions just skip
-            # the cross-session advisory.
+            # Task I (v1.1): Hydrator is now lazy — it does NOT spawn during
+            # engine construction. The first evaluate() call after creation
+            # spawns the daemon thread, so the cost of reading the patterns
+            # table is not paid on the synchronous get_or_create path. This
+            # frees the dashboard hot-path of any sync DB read.
+            #
+            # Hydrator semantics are unchanged: still daemon=True, still
+            # publishes via engine.hydrated, still idempotent on the
+            # patterns-already-present case.
             if self._bus is not None:
+                self._install_lazy_hydrator(eng)
+            return eng
+
+    @staticmethod
+    def _install_lazy_hydrator(eng: GovernanceEngine) -> None:
+        """Wrap ``eng.evaluate`` so the first call spawns the Hydrator.
+
+        Subsequent evaluate() calls cost a single attribute read + a
+        method-call hop. The Hydrator thread itself is daemon=True so
+        evaluate() never blocks on it.
+        """
+        bus = eng.bus
+        if bus is None:
+            return
+        original_evaluate = eng.evaluate
+        # Use a list as a one-shot latch — closures + bool would need
+        # ``nonlocal`` which dataclass-bound methods can't access cleanly.
+        spawned = [False]
+
+        def evaluate_with_lazy_hydrator(msg: Message) -> GovDecision:
+            if not spawned[0]:
+                spawned[0] = True
                 try:
                     from stream_manager.cross_session_hydrator import Hydrator
-                    Hydrator(eng, self._bus).start()
+                    Hydrator(eng, bus).start()
                 except Exception:
-                    log.exception("registry: hydrator spawn failed")
-            return eng
+                    log.exception("registry: lazy hydrator spawn failed")
+            return original_evaluate(msg)
+
+        # Bind on the instance — this shadows the class method only for
+        # this engine. type:ignore — dataclass field binding is fine here.
+        eng.evaluate = evaluate_with_lazy_hydrator  # type: ignore[method-assign]
 
     def close(self, session_id: str) -> None:
         """Drop the engine for a session. Idempotent."""
@@ -977,7 +1023,15 @@ class EngineRegistry:
         Idempotent: existing pattern hashes are not downgraded. Returns
         the total number of newly-injected entries across all engines.
         Tests call this directly to avoid timer races.
+
+        Task M coordination with Task I lazy-init: engines whose initial
+        spawn-time Hydrator hasn't completed (engine.hydrated=False) are
+        skipped to avoid racing the per-engine background thread. The
+        next 60s tick will pick them up once the lazy hydrator finishes.
         """
+        # Always update the timestamp so /api/registry/active reflects
+        # liveness even when there's nothing to inject (no bus, no engines).
+        self.last_refresh_ts = time.time()
         if self._bus is None:
             return 0
         try:
@@ -989,6 +1043,11 @@ class EngineRegistry:
         with self._lock:
             engines = list(self._engines.values())
         for eng in engines:
+            # Task I/M coordination: if the per-engine spawn-time Hydrator
+            # is still in flight, skip — re-running hydrate_now now would
+            # race the background thread and double-inject the same rows.
+            if not getattr(eng, "hydrated", False):
+                continue
             try:
                 total += hydrate_now(eng, self._bus)
             except Exception:
@@ -1002,16 +1061,42 @@ class EngineRegistry:
             if self._refresh_timer is None:
                 self._arm_refresh_locked()
 
-    def stop_refresh(self) -> None:
-        """Stop the periodic refresh timer. Idempotent."""
+    def stop_refresh(self, join_timeout: float = 1.0) -> None:
+        """Stop the periodic refresh timer. Idempotent.
+
+        Task M: cancel the pending Timer and best-effort join it so a
+        host process (uvicorn shutdown) doesn't hang on a daemon timer
+        whose payload is mid-flight. Daemon=True already prevents hangs
+        at process exit, but explicit join makes shutdown deterministic.
+        """
         with self._lock:
             self._refresh_stopped = True
-            if self._refresh_timer is not None:
-                try:
-                    self._refresh_timer.cancel()
-                except Exception:
-                    log.exception("registry: timer cancel failed")
-                self._refresh_timer = None
+            timer = self._refresh_timer
+            self._refresh_timer = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                log.exception("registry: timer cancel failed")
+            try:
+                timer.join(timeout=join_timeout)
+            except Exception:
+                log.exception("registry: timer join failed")
+
+    @property
+    def refresh_active(self) -> bool:
+        """True iff start_refresh() has been called and stop_refresh() hasn't."""
+        with self._lock:
+            return not self._refresh_stopped
+
+    def refresh_status(self) -> dict:
+        """Snapshot of refresh-loop liveness for /api/registry/active."""
+        with self._lock:
+            return {
+                "refresh_active": not self._refresh_stopped,
+                "last_refresh_ts": self.last_refresh_ts,
+                "refresh_interval_s": self._refresh_interval_s,
+            }
 
     def _arm_refresh_locked(self) -> None:
         # Caller holds self._lock.

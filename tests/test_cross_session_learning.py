@@ -111,7 +111,9 @@ def test_l3_promotion_queues_hitl_not_autoflag(tmp_path):
         r for r in pending if r["trigger_reason"] == "cross_session_flag"
     ]
     assert flag_rows, "expected a cross_session_flag HITL pending row"
-    assert flag_rows[0]["proposed_action"] == f"flag_cross_session:{target_hash}"
+    # Task L: hash now lives in dedicated matched_hash column.
+    assert flag_rows[0]["proposed_action"] == "flag"
+    assert flag_rows[0]["matched_hash"] == target_hash
     bus.close()
 
 
@@ -134,7 +136,7 @@ def test_operator_approval_flags_cross_session(tmp_path):
     ]
     assert flag_rows
     pending_id = flag_rows[0]["id"]
-    target_hash = flag_rows[0]["proposed_action"].split(":", 1)[1]
+    target_hash = flag_rows[0]["matched_hash"]
 
     # Resolution dispatcher fires from bus.resolve_hitl.
     bus.resolve_hitl(pending_id, "approved")
@@ -157,7 +159,7 @@ def test_rejected_resolution_leaves_flag_zero(tmp_path):
 
     pending = bus.get_pending_hitl("s-A")
     flag = next(r for r in pending if r["trigger_reason"] == "cross_session_flag")
-    target_hash = flag["proposed_action"].split(":", 1)[1]
+    target_hash = flag["matched_hash"]
     bus.resolve_hitl(flag["id"], "dismissed")
 
     row = bus.get_pattern(target_hash)
@@ -178,7 +180,7 @@ def test_hydrator_injects_flagged_patterns_at_l1(tmp_path):
         r for r in bus.get_pending_hitl("s-A")
         if r["trigger_reason"] == "cross_session_flag"
     )
-    target_hash = flag["proposed_action"].split(":", 1)[1]
+    target_hash = flag["matched_hash"]
     bus.resolve_hitl(flag["id"], "approved")
 
     # Fresh engine for session B — its graph starts empty.
@@ -207,7 +209,7 @@ def test_hydrator_idempotent_does_not_downgrade(tmp_path):
         r for r in bus.get_pending_hitl("s-A")
         if r["trigger_reason"] == "cross_session_flag"
     )
-    target_hash = flag["proposed_action"].split(":", 1)[1]
+    target_hash = flag["matched_hash"]
     bus.resolve_hitl(flag["id"], "approved")
 
     # Engine A already holds this hash at L3 — second hydrate should be no-op.
@@ -235,7 +237,7 @@ def test_hydrated_l1_requires_local_revalidation(tmp_path):
         r for r in bus.get_pending_hitl("s-A")
         if r["trigger_reason"] == "cross_session_flag"
     )
-    target_hash = flag["proposed_action"].split(":", 1)[1]
+    target_hash = flag["matched_hash"]
     bus.resolve_hitl(flag["id"], "approved")
 
     eng_b = GovernanceEngine(project_context=_ctx(), bus=bus, session_id="s-B")
@@ -370,12 +372,15 @@ def test_engine_registry_refresh_all_idempotent(tmp_path):
         r for r in bus.get_pending_hitl("s-A")
         if r["trigger_reason"] == "cross_session_flag"
     )
-    target_hash = flag["proposed_action"].split(":", 1)[1]
+    target_hash = flag["matched_hash"]
     bus.resolve_hitl(flag["id"], "approved")
 
     eng_b = reg.get_or_create("s-B")
-    # Ensure the spawn-time hydrator (daemon) has run; refresh_all is a
-    # synchronous deterministic backstop that doesn't depend on thread timing.
+    # Post-Task-I: Hydrator is lazy and only spawns on first evaluate().
+    # Post-Task-M: refresh_all skips engines with hydrated=False to avoid
+    # racing the in-flight hydrator. For this deterministic backstop test,
+    # mark eng_b hydrated so refresh_all picks it up directly.
+    eng_b.hydrated = True
     n = reg.refresh_all()
     assert eng_b.graph.patterns.get(target_hash) is not None
     assert eng_b.graph.patterns[target_hash].level == PatternLevel.L1

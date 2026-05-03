@@ -73,9 +73,94 @@ cold-start across calls. Target outcomes:
 - p95: meaningful reduction; alignment path still bounded by model TTFT
 - Re-issue ADR-5 (or a successor) with the warm-pool measurements.
 
+### v1.1 status (Task J — CLI warm-pool)
+
+- **Implemented:** `src/stream_manager/cli_pool.py` + `CliGovernor(pool=...)`
+  + `EngineRegistry(cli_pool=...)` wiring + dashboard startup/shutdown
+  lifecycle. PID-file at `.bridge/cli-pool.pids` with boot-time reaper.
+- **Pending budget revision:** awaiting paired 5-min and 30-min soaks
+  with `--cli-pool-size 2`. Per `docs/v1.1-scope.md`, revised target is:
+
+  | Metric        | v1.1 target |
+  |---------------|-------------|
+  | p50           | ≤ 3 s       |
+  | p95           | ≤ 8 s       |
+  | hard timeout  | 25 s (unchanged) |
+
+  The v1.0 budget (p50 ≤ 7 s, p95 ≤ 15 s) remains in force until a
+  measured warm-pool soak either confirms or re-baselines the v1.1
+  target. If measured numbers fall short, document and re-baseline
+  rather than block release (per `docs/v1.1-scope.md` §"Latency budget
+  targets").
+
+### Task I (v1.1) — Hydrator profile, no budget change
+
+Task I (`docs/v1.1-task-plan.md` §I) profiled the suspected
+cross-session-Hydrator overhead on `EngineRegistry.get_or_create` and
+found it is **not** the p95 driver:
+
+- Hydrator thread runs in <1 ms on the empty/near-empty patterns table.
+- `engine_construct` (first `get_or_create`) is ~2–3 ms.
+- `cli_subprocess` p95 is 17–21 s — accounts for ~100% of per-call
+  wall time.
+
+See `reports/perf-hydrator-20260502T232639Z.md` for the full per-call
+breakdown. Task I applied the lazy-init refactor as a defensive cleanup
+(engine construction now does zero sync DB work) but the v1.0 baseline
+p95 = 19.08s persists because cold-start CLI cost is structural. The
+substantive p95 fix is **Task J — CLI subprocess warm-pool**. The v1.0
+budget table above is **not** ratcheted by Task I alone.
+
+### v1.1 ship-gate re-baseline (post-N, 2026-05-03)
+
+The original v1.1 single-target budget (p50 ≤ 3 s, p95 ≤ 8 s) assumed
+warm-pool would close the gap to a flat distribution. The 30-min
+ship-gate soak on post-Task-N HEAD `0d8cecc` with `--cli-pool-size 2`
+showed the gap is **bimodal**, not flat:
+
+| Path             | n  | p50     | p95     | source |
+|------------------|----|---------|---------|--------|
+| L2/L3 escalation | 5  | 0.00 s  | 4.06 s  | report |
+| L4 alignment     | 5  | 11.83 s | 13.35 s | report |
+| **Overall**      | 60 | 4.97 s  | 11.17 s | report |
+
+L4 alignment latency is **structural** — reflects depth of the
+underlying model's reasoning pass, not framework overhead. Pool
+collapsed cold-start cost on the ALLOW / L2 / L3 paths (29% p95
+improvement vs no-pool re-soak the same day). No further framework
+lever is available without changing model selection policy.
+
+Per `docs/v1.1-task-plan.md` §"v1.1 ship gate checklist" option B
+("p95 ≤ 8s OR re-baselined ADR-5"), the budget is re-baselined here:
+
+| Path                 | v1.1 target |
+|----------------------|-------------|
+| ALLOW p95            | ≤ 6 s       |
+| L2/L3 escalation p95 | ≤ 8 s       |
+| L4 alignment p95     | ≤ 14 s      |
+| Overall p95          | ≤ 12 s      |
+| Hard timeout         | 25 s (unchanged) |
+
+Source soak: `reports/soak-20260503T101758Z.md`. The single-rolled-up
+p95 ≤ 8 s target from `docs/v1.1-scope.md` is **superseded** by this
+table.
+
+Future work (v1.2 backlog): a Haiku fastpath for routine L4 calls is
+expected to bring L4 p95 under 8 s; that would re-unify the budget.
+See `docs/v1.1-task-plan.md` §"v1.2 backlog" for the cassette/replay
+infrastructure needed to validate it cheaply.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
+- `reports/soak-20260502T201806Z.md` — v1.0 final soak (p95 = 19.08s,
+  the regression Task I was scoped to investigate)
+- `reports/perf-hydrator-20260502T232639Z.md` — Task I per-call probe
+- `reports/soak-20260503T094438Z.md` — v1.1 30-min soak, no pool
+  (operator-error baseline; reproduces v1.0 numbers)
+- `reports/soak-20260503T101758Z.md` — v1.1 30-min soak, pool size 2
+  (the re-baseline source)
 - `docs/v1.0-ship-plan.md` — Task G scope
+- `docs/v1.1-task-plan.md` — Task I (hydrator lazy-init), Task J (warm-pool)
 - Project memory: `project_cli_migration` (api_governance → cli_governance)
 - `REQUIREMENTS.md` §5.1 NFR-P (aligned with this ADR)

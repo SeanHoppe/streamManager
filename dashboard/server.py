@@ -58,6 +58,13 @@ _registry = None  # type: ignore[var-annotated]
 # is exposed via /api/registry/active so operators (and future SM
 # components) can see which session_ids have hot engines in this process.
 _engine_registry = None  # type: ignore[var-annotated]
+# Task J / v1.1: warm-pool of long-lived `claude` workers, shared across
+# every CliGovernor / engine constructed in this dashboard process. Built
+# lazily by `_get_cli_pool()`; size controlled by SM_CLI_POOL_SIZE (default
+# 2). Disabled entirely when SM_CLI_POOL_SIZE=0 or when the `claude` CLI is
+# not on PATH (the spawn-per-call legacy path remains the fallback).
+_cli_pool = None  # type: ignore[var-annotated]
+_cli_pool_init_lock: object = None  # populated lazily inside _get_cli_pool
 
 
 def _get_bus():
@@ -111,10 +118,68 @@ def _get_engine_registry():
                 bus=_get_bus(),
                 project_context=load_project(ROOT),
                 agent_registry=_get_registry(),
+                cli_pool=_get_cli_pool(),
             )
         except Exception:
             _engine_registry = None
     return _engine_registry
+
+
+def _get_cli_pool():
+    """Return a lazily-initialized warm-pool of `claude` CLI workers.
+
+    Task J / v1.1. Returns None when:
+      * SM_CLI_POOL_SIZE=0 (operator opt-out)
+      * `claude` CLI is not on PATH (legacy spawn-per-call path still works
+        when BRIDGE_API_GOV is set; the pool would just fail at spawn)
+      * cli_pool import / spawn fails (degrade silently — governance still
+        runs via the per-call path)
+    """
+    global _cli_pool
+    if _cli_pool is not None:
+        return _cli_pool
+    try:
+        size_raw = os.environ.get("SM_CLI_POOL_SIZE", "2")
+        size = int(size_raw)
+    except ValueError:
+        size = 2
+    if size <= 0:
+        return None
+    try:
+        from stream_manager.cli_pool import CliPool, cli_on_path, reap_stale_workers
+    except Exception:
+        log.exception("cli_pool: import failed; pool disabled")
+        return None
+    if not cli_on_path():
+        log.info("cli_pool: `claude` CLI not on PATH; pool disabled")
+        return None
+    try:
+        # Reap any stale workers from a prior crashed run before opening
+        # a fresh pool. Idempotent and safe on a clean boot.
+        reaped = reap_stale_workers(root=ROOT)
+        if reaped:
+            log.warning("cli_pool: reaped %d stale worker(s) at startup", reaped)
+        _cli_pool = CliPool(size=size, pid_root=ROOT)
+        # warmup() spawns up front; if the model rejects the args we want
+        # to know now rather than on first governance call.
+        _cli_pool.warmup()
+        log.info("cli_pool: warmup complete (size=%d)", size)
+    except Exception:
+        log.exception("cli_pool: warmup failed; pool disabled")
+        _cli_pool = None
+    return _cli_pool
+
+
+def _shutdown_cli_pool() -> None:
+    """Kill every worker. Idempotent; safe to call from atexit + signal."""
+    global _cli_pool
+    if _cli_pool is None:
+        return
+    try:
+        _cli_pool.shutdown()
+    except Exception:
+        log.exception("cli_pool: shutdown raised; ignoring")
+    _cli_pool = None
 
 
 def _get_hitl_queue():
@@ -142,6 +207,79 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+# ── Task J / v1.1: CLI warm-pool lifecycle ──────────────────────────────
+# Pool is built at FastAPI startup (so the cold-start cost is paid before
+# the first governance call hits) and torn down on shutdown + atexit +
+# SIGTERM/SIGINT. Multi-layered shutdown protects against operator-issued
+# Ctrl-C, parent-process kill, and clean uvicorn stop.
+
+@app.on_event("startup")
+async def _startup_cli_pool() -> None:
+    # Best-effort. Failure to warm the pool must never prevent the
+    # dashboard from starting; the per-call CLI path remains as fallback.
+    try:
+        _get_cli_pool()
+    except Exception:
+        log.exception("cli_pool: startup warmup raised; continuing")
+    # Task M (v1.1): wire EngineRegistry.start_refresh() so cross-session
+    # pattern flips made via the operator UI propagate to hot engines on
+    # the chained 60s tick. Best-effort: a missing registry must not
+    # block startup.
+    try:
+        reg = _get_engine_registry()
+        if reg is not None:
+            reg.start_refresh()
+    except Exception:
+        log.exception("registry: start_refresh raised; continuing")
+
+
+@app.on_event("shutdown")
+async def _shutdown_cli_pool_event() -> None:
+    # Task M (v1.1): stop the EngineRegistry refresh timer first so the
+    # daemon Timer is joined deterministically before the pool tears down.
+    try:
+        reg = _get_engine_registry()
+        if reg is not None:
+            reg.stop_refresh()
+    except Exception:
+        log.exception("registry: stop_refresh raised; continuing")
+    _shutdown_cli_pool()
+
+
+def _install_pool_signal_handlers() -> None:
+    import atexit
+    import signal
+
+    atexit.register(_shutdown_cli_pool)
+
+    def _handler(signum, frame):  # pragma: no cover - signal path
+        _shutdown_cli_pool()
+        # Re-raise default behaviour: exit non-zero on terminal signals.
+        # We avoid sys.exit so uvicorn's own signal handling can finish
+        # tearing down the loop.
+
+    for sig_name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            existing = signal.getsignal(sig)
+            def _chained(signum, frame, _existing=existing):  # pragma: no cover
+                try:
+                    _shutdown_cli_pool()
+                finally:
+                    if callable(_existing) and _existing not in (signal.SIG_DFL, signal.SIG_IGN):
+                        _existing(signum, frame)
+            signal.signal(sig, _chained)
+        except (ValueError, OSError):
+            # ValueError: signal only works in main thread (uvicorn worker).
+            # OSError: signal not supported on this platform.
+            pass
+
+
+_install_pool_signal_handlers()
 
 _SEED_SQL = """
     SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id,
@@ -406,9 +544,20 @@ async def api_registry_active():
     """
     reg = _get_engine_registry()
     if reg is None:
-        return {"active_session_ids": [], "count": 0}
+        return {
+            "active_session_ids": [],
+            "count": 0,
+            "refresh_active": False,
+            "last_refresh_ts": None,
+        }
     ids = reg.active_session_ids()
-    return {"active_session_ids": ids, "count": len(ids)}
+    status = reg.refresh_status()
+    return {
+        "active_session_ids": ids,
+        "count": len(ids),
+        "refresh_active": status["refresh_active"],
+        "last_refresh_ts": status["last_refresh_ts"],
+    }
 
 
 @app.get("/api/sessions")
@@ -1584,35 +1733,199 @@ async def api_commands_pending(session_id: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    out: list[dict[str, object]] = []
-    for r in rows:
-        try:
-            args = json.loads(r["args_json"]) if r["args_json"] else {}
-        except (TypeError, ValueError):
-            args = {}
-        payload = {
-            "id": r["id"],
-            "session_id": r["session_id"],
-            "kind": r["kind"],
-            "args": args,
-            "sent_at": float(r["sent_at"]),
-        }
-        out.append(
-            {
-                "id": r["id"],
-                "session_id": r["session_id"],
-                "kind": r["kind"],
-                "args": args,
-                "sent_at": float(r["sent_at"]),
-                "status": r["status"],
-                "signature": r["signature"],
-                "payload": payload,
-            }
-        )
-    return out
+    return [_serialize_command_row(r) for r in rows]
 
 
 _VALID_ACK_STATUS = {"ok", "rejected"}
+
+# Task K (v1.1): SSE tail-poll cadence for /api/commands/stream. The SSE
+# endpoint replays current pending rows on connect, then polls the
+# desktop_commands table at this interval to push new pending rows. 200ms
+# matches the v1.1 sub-second-delivery target while staying low enough that
+# the SQLite read pressure is negligible (one indexed SELECT per session).
+_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL = 0.2
+
+
+def _serialize_command_row(r: sqlite3.Row) -> dict[str, object]:
+    """Shared row → JSON shape used by /pending and /stream.
+
+    Mirrors the body in ``api_commands_pending`` so consumers can flip
+    transports without parsing differences.
+    """
+    try:
+        args = json.loads(r["args_json"]) if r["args_json"] else {}
+    except (TypeError, ValueError):
+        args = {}
+    payload = {
+        "id": r["id"],
+        "session_id": r["session_id"],
+        "kind": r["kind"],
+        "args": args,
+        "sent_at": float(r["sent_at"]),
+    }
+    return {
+        "id": r["id"],
+        "session_id": r["session_id"],
+        "kind": r["kind"],
+        "args": args,
+        "sent_at": float(r["sent_at"]),
+        "status": r["status"],
+        "signature": r["signature"],
+        "payload": payload,
+    }
+
+
+@app.get("/api/commands/stream")
+async def api_commands_stream(request: Request, session_id: str):
+    """SSE stream of pending desktop_commands for a session (Task K, v1.1).
+
+    On connect: replay current ``status='pending'`` rows oldest-first.
+    Then tail-poll the ``desktop_commands`` table every
+    ``_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL`` seconds and emit any new
+    pending rows whose rowid is strictly greater than the running cursor.
+
+    Server-side filters (defence-in-depth, mirroring ``/api/commands/pending``):
+      - session_id match required
+      - SM_OWN_SESSION_ID rows rejected up-front (HTTP 400)
+      - rows older than ``_DESKTOP_COMMAND_TTL_SECONDS`` are flipped to
+        ``expired`` in the same connection and are NOT emitted.
+
+    Frame shape matches the JSON returned by ``/api/commands/pending`` so
+    the consumer code path after parse() is transport-agnostic. The legacy
+    long-poll endpoint is preserved for one minor cycle (deprecated v1.2).
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    _reject_sm_own(session_id)
+
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    async def generate():
+        try:
+            conn = sqlite3.connect(
+                str(DB_PATH), check_same_thread=False, isolation_level=None
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            return
+
+        try:
+            if not _has_table(conn, "desktop_commands"):
+                # No table yet; emit a comment frame so the client sees
+                # the connection is alive, then loop on a slow heartbeat.
+                yield ": no desktop_commands table\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    await asyncio.sleep(1.0)
+                    yield ": keepalive\n\n"
+                return
+
+            last_rowid = 0  # cursor: only emit rows with rowid > last_rowid
+
+            # Replay phase: expire stale rows then send current pending
+            # rows oldest-first. Tracks last_rowid so the tail loop never
+            # double-emits replayed rows.
+            try:
+                cutoff = time.time() - _DESKTOP_COMMAND_TTL_SECONDS
+                conn.execute(
+                    "UPDATE desktop_commands SET status='expired' "
+                    "WHERE session_id=? AND status='pending' AND sent_at < ?",
+                    (session_id, cutoff),
+                )
+                # SM_OWN_SESSION_ID rows must never reach a consumer even
+                # if they somehow landed in the table; the WHERE clause
+                # excludes them server-side.
+                params: list[object] = [session_id]
+                where_extra = ""
+                if sm_own:
+                    where_extra = " AND session_id != ?"
+                    params.append(sm_own)
+                replay_sql = (
+                    "SELECT rowid AS rid, id, session_id, kind, args_json, "
+                    "signature, sent_at, status FROM desktop_commands "
+                    "WHERE session_id=? AND status='pending'"
+                    + where_extra
+                    + " ORDER BY sent_at ASC, rowid ASC"
+                )
+                rows = conn.execute(replay_sql, tuple(params)).fetchall()
+                for r in rows:
+                    rid = int(r["rid"])
+                    if rid > last_rowid:
+                        last_rowid = rid
+                    payload = _serialize_command_row(r)
+                    yield f"data: {json.dumps(payload)}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+            # Tail phase: poll for newly-inserted pending rows. We use the
+            # rowid cursor (monotonic, no clock skew) rather than sent_at
+            # so producer clock drift can't hide rows.
+            tail_params_template: list[object] = [session_id]
+            tail_where_extra = ""
+            if sm_own:
+                tail_where_extra = " AND session_id != ?"
+                tail_params_template.append(sm_own)
+            tail_sql = (
+                "SELECT rowid AS rid, id, session_id, kind, args_json, "
+                "signature, sent_at, status FROM desktop_commands "
+                "WHERE rowid > ? AND session_id=? AND status='pending'"
+                + tail_where_extra
+                + " ORDER BY rowid ASC"
+            )
+
+            heartbeat_every = 15.0  # seconds
+            last_heartbeat = time.time()
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                # Expire stale rows on each tick so the producer side
+                # observes consistent TTL behaviour with /pending.
+                try:
+                    cutoff = time.time() - _DESKTOP_COMMAND_TTL_SECONDS
+                    conn.execute(
+                        "UPDATE desktop_commands SET status='expired' "
+                        "WHERE session_id=? AND status='pending' AND sent_at < ?",
+                        (session_id, cutoff),
+                    )
+                    rows = conn.execute(
+                        tail_sql, (last_rowid, *tail_params_template),
+                    ).fetchall()
+                    for r in rows:
+                        rid = int(r["rid"])
+                        if rid > last_rowid:
+                            last_rowid = rid
+                        payload = _serialize_command_row(r)
+                        yield f"data: {json.dumps(payload)}\n\n"
+                except Exception:
+                    # Defensive: keep the connection alive on transient
+                    # SQLite errors; the next tick will retry.
+                    pass
+
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_every:
+                    yield ": keepalive\n\n"
+                    last_heartbeat = now
+
+                await asyncio.sleep(_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":        "keep-alive",
+        },
+    )
 
 
 @app.post("/api/commands/{cmd_id}/ack")

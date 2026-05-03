@@ -216,6 +216,30 @@ class MessageBus:
                     "ALTER TABLE patterns ADD COLUMN cross_session INTEGER NOT NULL DEFAULT 0"
                 )
 
+            # Task L (v1.1) — additive migration for hitl_pending: dedicated
+            # matched_hash column replacing the Task F string-encoded
+            # `flag_cross_session:<hash>` proposed_action hack. Idempotent:
+            # ALTER raises OperationalError on re-run.
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(
+                    "ALTER TABLE hitl_pending ADD COLUMN matched_hash TEXT NOT NULL DEFAULT ''"
+                )
+
+            # One-time backfill: rows authored before Task L encoded the
+            # pattern hash inside proposed_action as `flag_cross_session:<h>`.
+            # Migrate them to (matched_hash=<h>, proposed_action='flag').
+            # Skip rows already migrated (matched_hash != '') so re-runs are
+            # safe.
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(
+                    "UPDATE hitl_pending "
+                    "SET matched_hash = substr(proposed_action, "
+                    "length('flag_cross_session:') + 1), "
+                    "proposed_action = 'flag' "
+                    "WHERE proposed_action LIKE 'flag_cross_session:%' "
+                    "AND (matched_hash IS NULL OR matched_hash = '')"
+                )
+
     def open_session(
         self,
         session_id: str,
@@ -361,20 +385,27 @@ class MessageBus:
         proposed_action: str,
         proposed_confidence: float,
         trigger_reason: str,
+        matched_hash: str = "",
     ) -> int:
-        """Queue a decision for human approval. Returns hitl_pending.id."""
+        """Queue a decision for human approval. Returns hitl_pending.id.
+
+        Task L: matched_hash carries the pattern hash for cross_session_flag
+        rows so the dispatcher does not need to parse it out of
+        proposed_action. Default '' for non-cross-session callers.
+        """
         queued_at = _dt.datetime.now(_dt.UTC).isoformat()
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO hitl_pending (message_id, proposed_action, "
-                "proposed_confidence, trigger_reason, queued_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "proposed_confidence, trigger_reason, queued_at, matched_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     message_id,
                     proposed_action,
                     float(proposed_confidence),
                     trigger_reason,
                     queued_at,
+                    matched_hash,
                 ),
             )
             pending_id = int(cur.lastrowid or 0)
@@ -405,7 +436,7 @@ class MessageBus:
             rows = self._conn.execute(
                 "SELECT hp.id, hp.message_id, hp.proposed_action, "
                 "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
-                "hp.resolved_at, hp.resolution "
+                "hp.resolved_at, hp.resolution, hp.matched_hash "
                 "FROM hitl_pending hp "
                 "JOIN messages m ON hp.message_id = m.id "
                 "WHERE m.session_id=? AND hp.resolved_at IS NULL "
@@ -424,6 +455,7 @@ class MessageBus:
                     "queued_at": r[5],
                     "resolved_at": r[6],
                     "resolution": r[7],
+                    "matched_hash": r[8] or "",
                 }
             )
         return out
@@ -433,7 +465,8 @@ class MessageBus:
         with self._lock:
             row = self._conn.execute(
                 "SELECT id, message_id, proposed_action, proposed_confidence, "
-                "trigger_reason, queued_at, resolved_at, resolution "
+                "trigger_reason, queued_at, resolved_at, resolution, "
+                "matched_hash "
                 "FROM hitl_pending WHERE id=?",
                 (pending_id,),
             ).fetchone()
@@ -448,6 +481,7 @@ class MessageBus:
             "queued_at": row[5],
             "resolved_at": row[6],
             "resolution": row[7],
+            "matched_hash": row[8] or "",
         }
 
     def annotate_decision(
@@ -699,22 +733,27 @@ class MessageBus:
         }
 
     def get_hitl_pending_for_hash(self, matched_hash: str) -> list[dict[str, object]]:
-        """Return unresolved hitl_pending rows whose metadata.matched_hash equals hash.
+        """Return hitl_pending rows for the given pattern hash.
 
-        Used by the HITL resolution dispatcher to look up the pattern hash a
-        cross_session_flag entry refers to. The matched_hash is stored in the
-        proposed_action column suffix `flag_cross_session:<hash>` so it
-        survives the existing schema unchanged.
+        Task L: queries the dedicated hitl_pending.matched_hash column.
+        For backward compat with rows authored under the v1.0 hack
+        (proposed_action='flag_cross_session:<hash>') we also union those
+        in — the migration backfill handles already-migrated DBs but a
+        caller hitting an un-initialized legacy DB still gets correct
+        results.
         """
-        # Implemented via proposed_action prefix scan to avoid a new column.
-        prefix = f"flag_cross_session:{matched_hash}"
+        if not matched_hash:
+            return []
+        legacy_prefix = f"flag_cross_session:{matched_hash}"
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, message_id, proposed_action, proposed_confidence, "
-                "trigger_reason, queued_at, resolved_at, resolution "
-                "FROM hitl_pending WHERE proposed_action=? "
+                "trigger_reason, queued_at, resolved_at, resolution, "
+                "matched_hash "
+                "FROM hitl_pending "
+                "WHERE matched_hash=? OR proposed_action=? "
                 "ORDER BY id ASC",
-                (prefix,),
+                (matched_hash, legacy_prefix),
             ).fetchall()
         return [
             {
@@ -726,6 +765,7 @@ class MessageBus:
                 "queued_at": r[5],
                 "resolved_at": r[6],
                 "resolution": r[7],
+                "matched_hash": r[8] or "",
             }
             for r in rows
         ]
