@@ -48,14 +48,15 @@ THROTTLE_SECONDS = 0.25
 LAST_LINE_MAX_CHARS = 200
 EVENT_TYPE = "background_job"
 
-# Task N (v1.1): structured-RPC transport selector. ``"json"`` is the
-# legacy ad-hoc path (cli_governance._parse_envelope); ``"wirecli"``
+# Task N (v1.1): structured-RPC transport selector. ``"wirecli"``
 # routes through stream_manager.wirecli with typed exceptions on parse
-# failure. Default stays ``"json"`` for v1.1 — ADR-15 plans the v1.2
-# default flip. See docs/adr/ADR-15-wirecli-transport.md.
-Transport = Literal["json", "wirecli"]
-DEFAULT_TRANSPORT: Transport = "json"
-_VALID_TRANSPORTS: frozenset[str] = frozenset({"json", "wirecli"})
+# failure. v1.2 (Task E) removed the legacy ``"json"`` value; WireCLI
+# is now the only accepted transport and the default. Passing
+# ``"json"`` raises ValueError with a CHANGELOG / ADR-15 migration
+# hint. See docs/adr/ADR-15-wirecli-transport.md.
+Transport = Literal["wirecli"]
+DEFAULT_TRANSPORT: Transport = "wirecli"
+_VALID_TRANSPORTS: frozenset[str] = frozenset({"wirecli"})
 
 
 def cli_transport(transport: str | None = None) -> Transport:
@@ -64,10 +65,20 @@ def cli_transport(transport: str | None = None) -> Transport:
     Precedence: explicit arg > ``BRIDGE_CLI_TRANSPORT`` env > default.
     Unknown values raise ``ValueError`` — silent fallback would mask
     typos that matter for soak comparisons.
+
+    v1.2 (Task E) removed ``"json"``; passing it raises ``ValueError``
+    with a migration hint pointing at CHANGELOG and ADR-15.
     """
     import os
 
     chosen = transport or os.environ.get("BRIDGE_CLI_TRANSPORT") or DEFAULT_TRANSPORT
+    if chosen == "json":
+        raise ValueError(
+            "cli transport 'json' was removed in v1.2 (deprecated in v1.1, "
+            "ADR-15). Use transport='wirecli' (now the default) or unset "
+            "BRIDGE_CLI_TRANSPORT. See CHANGELOG.md [Unreleased] Removed "
+            "and docs/adr/ADR-15-wirecli-transport.md for migration."
+        )
     if chosen not in _VALID_TRANSPORTS:
         raise ValueError(
             f"unknown cli transport {chosen!r}; "

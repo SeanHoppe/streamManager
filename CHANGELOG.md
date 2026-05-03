@@ -19,6 +19,21 @@ Targets v1.2.
   `--transport long-poll` flag; the default and only accepted value is
   now `sse`. See `docs/adr/ADR-14-desktop-command-sse.md` and
   `docs/v1.2-task-plan.md` Task D.
+- **json CLI transport selector** (deprecated in v1.1, ADR-15). The
+  legacy `transport='json'` value on `cli_client.cli_transport()` and
+  the `BRIDGE_CLI_TRANSPORT=json` env value have been removed.
+  `WireCLI` (`transport='wirecli'`) is now the unconditional default
+  and the only accepted value. `cli_transport('json')` and
+  `BRIDGE_CLI_TRANSPORT=json` raise `ValueError` with a migration hint
+  pointing at this entry. The `cli_client.transport` kwarg surface and
+  the `cli_transport()` resolver are preserved (still used as the
+  governance escalation selector); only the `'json'` value goes away.
+  Operators running `tools/wirecli_soak_compare.py` should drop any
+  `--transport json` flag and use `--transport wirecli` (or
+  `--transport legacy` for the historical fragility-comparison report,
+  which is no longer a runtime transport). See
+  `docs/adr/ADR-15-wirecli-transport.md` and
+  `docs/v1.2-task-plan.md` Task E.
 
 ## [1.1.0] — 2026-05-03
 

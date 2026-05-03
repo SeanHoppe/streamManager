@@ -256,7 +256,7 @@ def _format_report(transport: str, fixtures: list[Fixture]) -> str:
     class_outcome: dict[str, dict[str, int]] = {}
     silent_degrade_classes: set[str] = set()
     for fx in fixtures:
-        if transport == "json":
+        if transport == "legacy":
             outcome, detail = _run_legacy(fx.stdout)
         else:
             outcome, detail = _run_wirecli(fx.stdout)
@@ -286,7 +286,7 @@ def _format_report(transport: str, fixtures: list[Fixture]) -> str:
     lines.append("")
     lines.append("## Verdict")
     lines.append("")
-    if transport == "json":
+    if transport == "legacy":
         n_silent = counts.get("silent-degrade", 0)
         if n_silent:
             lines.append(
@@ -323,10 +323,22 @@ def _format_report(transport: str, fixtures: list[Fixture]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    # v1.2 (Task E) removed the 'json' transport selector from
+    # cli_client.cli_transport(). The legacy `_parse_envelope` parser
+    # is still importable for this comparison driver (it backs the
+    # historical fragility report), but `--transport json` is no
+    # longer a runnable production path. Keep the legacy column for
+    # historical comparison runs only.
     parser.add_argument(
         "--transport",
-        choices=["json", "wirecli", "both"],
-        default="both",
+        choices=["wirecli", "legacy", "both"],
+        default="wirecli",
+        help=(
+            "wirecli: production parser (v1.2 default); "
+            "legacy: historical _parse_envelope path for fragility "
+            "comparison only — not a supported runtime transport; "
+            "both: emit both reports."
+        ),
     )
     parser.add_argument(
         "--out-dir",
@@ -343,9 +355,9 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     fixtures = _fixtures()
 
-    if args.transport in ("json", "both"):
-        report = _format_report("json", fixtures)
-        path = args.out_dir / f"soak-wirecli-json-{args.ts}.md"
+    if args.transport in ("legacy", "both"):
+        report = _format_report("legacy", fixtures)
+        path = args.out_dir / f"soak-wirecli-legacy-{args.ts}.md"
         path.write_text(report, encoding="utf-8")
         print(f"wrote {path}")
 

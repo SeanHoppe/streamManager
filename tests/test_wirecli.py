@@ -322,19 +322,40 @@ def test_cli_nonzero_exit_raises_transport_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_transport_default_is_json(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_transport_default_is_wirecli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v1.2 (Task E): default flipped from 'json' to 'wirecli'."""
     monkeypatch.delenv("BRIDGE_CLI_TRANSPORT", raising=False)
-    assert cli_transport() == "json"
+    assert cli_transport() == "wirecli"
 
 
-def test_cli_transport_explicit_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_transport_explicit_wirecli_overrides_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("BRIDGE_CLI_TRANSPORT", "wirecli")
-    assert cli_transport("json") == "json"
+    assert cli_transport("wirecli") == "wirecli"
 
 
 def test_cli_transport_env_selects_wirecli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BRIDGE_CLI_TRANSPORT", "wirecli")
     assert cli_transport() == "wirecli"
+
+
+def test_cli_transport_json_removed_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v1.2 (Task E): the 'json' value was removed; explicit usage must fail
+    with a migration hint pointing at CHANGELOG / ADR-15."""
+    monkeypatch.delenv("BRIDGE_CLI_TRANSPORT", raising=False)
+    with pytest.raises(ValueError, match="removed in v1.2"):
+        cli_transport("json")
+
+
+def test_cli_transport_json_env_removed_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v1.2 (Task E): BRIDGE_CLI_TRANSPORT=json must also raise the migration
+    error rather than silently falling back to wirecli."""
+    monkeypatch.setenv("BRIDGE_CLI_TRANSPORT", "json")
+    with pytest.raises(ValueError, match="removed in v1.2"):
+        cli_transport()
 
 
 def test_cli_transport_unknown_value_raises(monkeypatch: pytest.MonkeyPatch) -> None:
