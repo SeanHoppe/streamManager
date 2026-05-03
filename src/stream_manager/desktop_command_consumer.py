@@ -1,15 +1,29 @@
 """Governed-session consumer of SM → desktop_command control plane.
 
-Reference: docs/sync-comms-qa.md OQ4 (long-poll transport lock).
-memory/project_sync_comms.md is the canonical design freeze.
+Reference:
+  - docs/sync-comms-qa.md OQ4 (v1.0 long-poll transport lock).
+  - docs/adr/ADR-14-desktop-command-sse.md (v1.1 SSE transport, long-poll
+    deprecated v1.2).
+  - memory/project_sync_comms.md is the canonical design freeze.
 
 This module is the read/ack side of the desktop_commands WAL table.
 Counterpart to ``stream_manager.desktop_commands`` (Task D writer).
 
 The governed Claude Code session spawns a sidecar daemon (see
-``tools/sm_consumer.py``) that long-polls SM for pending commands,
+``tools/sm_consumer.py``) that subscribes to SM for pending commands,
 validates the HMAC-SHA256 signature against the shared secret, runs a
 locally-registered executor for the command's kind, and posts an ack.
+
+Two transports are supported:
+
+  * ``transport='long-poll'`` (v1.0 default, **still default in v1.1** to
+    keep one-cycle compatibility window): GET /api/commands/pending on a
+    fixed interval, ack each row.
+  * ``transport='sse'`` (v1.1, opt-in; will become default in v1.2): GET
+    /api/commands/stream as a Server-Sent Events stream. Frames arrive
+    sub-second after producer insert; the SSE handler also re-emits
+    current pending rows on connect, so reconnect is loss-free as long
+    as a row is still ``pending`` (not yet expired/acked) on resume.
 
 Security model:
   - The HMAC secret never leaves the consumer process; it's loaded once
@@ -26,6 +40,7 @@ Security model:
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -39,8 +54,17 @@ from stream_manager import desktop_commands
 log = logging.getLogger(__name__)
 
 # Default poll cadence — OQ4 lock specifies long-poll @ 1 Hz so the
-# producer side sees ~1s of ack latency in the steady state.
+# producer side sees ~1s of ack latency in the steady state. Used only
+# when transport='long-poll'.
 _DEFAULT_POLL_INTERVAL = 1.0
+
+# SSE reconnect backoff: start at 0.5s, double each failure, cap at 10s
+# per Task K spec. Reset to base after a successful streaming session.
+_SSE_BACKOFF_BASE = 0.5
+_SSE_BACKOFF_CAP = 10.0
+
+# Valid transport modes. Default 'long-poll' until v1.2 default flip.
+_VALID_TRANSPORTS = frozenset({"long-poll", "sse"})
 
 
 def _default_executors() -> dict[str, Callable[[dict], None]]:
@@ -106,17 +130,24 @@ class CommandConsumer:
         registered executors, never the producer's allowlist.
     poll_interval:
         Seconds to wait between polls (default ``1.0`` per OQ4 lock).
+        Only consulted when ``transport='long-poll'``.
     sleep_fn:
         Injected sleep — defaults to ``time.sleep``. Tests pass a
         recorder so they can assert cadence without a real wait.
     client:
         Optional preconstructed ``httpx.Client``. Tests pass one wired
         to ``httpx.MockTransport(handler)``. When ``None`` the consumer
-        builds its own client against ``sm_url``.
+        builds its own client against ``sm_url``. The same client is
+        used for both transports — for SSE we set timeout=None on the
+        per-request stream to override the default read timeout.
     stop_event:
         Optional ``threading.Event``. The run loop checks
         ``stop_event.is_set()`` after each iteration and returns when
         set, which is how tests terminate ``run_forever``.
+    transport:
+        ``'long-poll'`` (default, v1.0 + v1.1 compatibility) or
+        ``'sse'`` (v1.1, sub-second delivery via /api/commands/stream).
+        v1.2 will flip the default to 'sse' and remove long-poll.
     """
 
     def __init__(
@@ -129,6 +160,7 @@ class CommandConsumer:
         sleep_fn: Callable[[float], None] = time.sleep,
         client: Optional[httpx.Client] = None,
         stop_event: Optional[threading.Event] = None,
+        transport: str = "long-poll",
     ) -> None:
         if not isinstance(sm_url, str) or sm_url == "":
             raise ValueError("sm_url required")
@@ -138,14 +170,26 @@ class CommandConsumer:
             raise ValueError("secret must be non-empty bytes")
         if not isinstance(executors, dict):
             raise ValueError("executors must be a dict")
+        if transport not in _VALID_TRANSPORTS:
+            raise ValueError(
+                f"transport must be one of {sorted(_VALID_TRANSPORTS)}; got {transport!r}"
+            )
 
         self.sm_url = sm_url.rstrip("/")
         self.session_id = session_id
         self.secret = bytes(secret)
         self.executors = dict(executors)
         self.poll_interval = float(poll_interval)
+        self.transport = transport
         self._sleep = sleep_fn
         self._stop_event = stop_event if stop_event is not None else threading.Event()
+
+        # Track ids we've already dispatched in this process so SSE
+        # reconnect — which replays current pending rows — never re-runs
+        # an executor for a row we already acked locally. Bounded growth
+        # is fine: rows hit terminal state quickly and SSE replay only
+        # ever sends rows still in 'pending' status.
+        self._dispatched: set[str] = set()
 
         self._owns_client = client is None
         self._client = client if client is not None else httpx.Client(
@@ -209,11 +253,31 @@ class CommandConsumer:
 
         All exit paths terminate in exactly one ack POST so producer
         UIs always see a deterministic terminal state.
+
+        Idempotent for SSE reconnect: if the producer's
+        /api/commands/stream re-replays a still-pending row we've
+        already dispatched in this process, the ``self._dispatched``
+        guard short-circuits before re-running the executor. The ack
+        was already sent in the original dispatch; the producer's row
+        will reach terminal state on its side regardless of replay.
         """
         cmd_id = row.get("id")
         if not isinstance(cmd_id, str) or cmd_id == "":
             log.warning("skipping row without id: %r", row)
             return
+
+        if cmd_id in self._dispatched:
+            # Replay of an in-flight or recently-acked row. Do NOT
+            # re-fire the executor; the original dispatch already
+            # acked. (If the ack POST failed, the row stays 'pending'
+            # at the producer and would replay — accepting that
+            # exactly-once is best-effort, with at-least-once executor
+            # invocation gated by this in-process set.)
+            return
+        # Mark dispatched up-front so even if an exception below races
+        # with a reconnect-triggered replay, the second arrival exits
+        # via the guard above.
+        self._dispatched.add(cmd_id)
 
         try:
             payload = row.get("payload")
@@ -266,13 +330,24 @@ class CommandConsumer:
         return len(rows)
 
     def run_forever(self) -> None:
-        """Long-poll loop until ``stop_event`` is set.
+        """Run the configured transport until ``stop_event`` is set.
 
-        Each iteration: fetch pending, process each, sleep
-        ``poll_interval``, then check the stop flag. The sleep happens
-        before the stop check so tests can drive N iterations by setting
-        the event after observing N sleep calls.
+        Dispatch:
+          - ``transport='long-poll'``: legacy v1.0 path. Fetch via
+            /api/commands/pending every ``poll_interval`` seconds.
+          - ``transport='sse'`` (v1.1): subscribe to
+            /api/commands/stream and process each frame. Reconnects
+            with exponential backoff capped at ``_SSE_BACKOFF_CAP`` on
+            transport error.
         """
+        if self.transport == "sse":
+            self._run_sse()
+            return
+
+        # Long-poll path. Each iteration: fetch pending, process each,
+        # sleep ``poll_interval``, then check the stop flag. The sleep
+        # happens before the stop check so tests can drive N iterations
+        # by setting the event after observing N sleep calls.
         while True:
             try:
                 self.run_once()
@@ -281,3 +356,86 @@ class CommandConsumer:
             self._sleep(self.poll_interval)
             if self._stop_event.is_set():
                 return
+
+    # ─── SSE transport (v1.1) ────────────────────────────────────────
+
+    def _run_sse(self) -> None:
+        """Subscribe to /api/commands/stream until ``stop_event`` is set.
+
+        Outer loop owns reconnect with exponential backoff (cap 10s).
+        Inner loop reads SSE frames and dispatches each one through
+        ``_process_one`` (which is idempotent across replays via
+        ``self._dispatched``).
+        """
+        backoff = _SSE_BACKOFF_BASE
+        while not self._stop_event.is_set():
+            connected = False
+            try:
+                with self._client.stream(
+                    "GET",
+                    "/api/commands/stream",
+                    params={"session_id": self.session_id},
+                    timeout=None,
+                ) as resp:
+                    if resp.status_code != 200:
+                        log.warning(
+                            "SSE connect HTTP %d: %s",
+                            resp.status_code,
+                            getattr(resp, "text", ""),
+                        )
+                    else:
+                        connected = True
+                        backoff = _SSE_BACKOFF_BASE  # reset on success
+                        self._consume_sse_stream(resp)
+            except Exception as exc:
+                log.warning("SSE stream error: %s", exc)
+
+            if self._stop_event.is_set():
+                return
+            # Reconnect: success-then-EOF or transport error both go
+            # through the same backoff path. On clean EOF after a long
+            # session this is essentially free (0.5s sleep).
+            wait = backoff if connected else min(backoff, _SSE_BACKOFF_CAP)
+            self._sleep(wait)
+            backoff = min(backoff * 2, _SSE_BACKOFF_CAP)
+
+    def _consume_sse_stream(self, resp: httpx.Response) -> None:
+        """Iterate ``data:`` frames from an open SSE response.
+
+        Frame format: standard SSE (frames separated by blank lines,
+        ``data:`` line carries one JSON object). Comment lines starting
+        with ``:`` (heartbeats) are ignored. The loop returns on
+        ``stop_event`` or when the iterator ends (EOF / disconnect).
+        """
+        buf = ""
+        for chunk in resp.iter_text():
+            if self._stop_event.is_set():
+                return
+            if not chunk:
+                continue
+            buf += chunk
+            while "\n\n" in buf:
+                frame, buf = buf.split("\n\n", 1)
+                data_line: Optional[str] = None
+                for line in frame.splitlines():
+                    if line.startswith(":"):
+                        # SSE comment / heartbeat — ignore.
+                        continue
+                    if line.startswith("data:"):
+                        data_line = line[len("data:"):].strip()
+                        break
+                if not data_line:
+                    continue
+                try:
+                    row = json.loads(data_line)
+                except json.JSONDecodeError:
+                    log.warning("SSE frame not JSON: %r", data_line[:200])
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if "error" in row and "id" not in row:
+                    # Server-side stream error envelope; logged so the
+                    # operator sees it without aborting the loop.
+                    log.warning("SSE server error: %s", row.get("error"))
+                    continue
+                self._process_one(row)

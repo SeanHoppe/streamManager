@@ -57,7 +57,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--poll-interval",
         type=float,
         default=1.0,
-        help="Seconds between polls (default 1.0, OQ4 lock).",
+        help="Seconds between polls (default 1.0, OQ4 lock). long-poll only.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("long-poll", "sse"),
+        default="long-poll",
+        help=(
+            "Command delivery transport. 'long-poll' (default in v1.1 for "
+            "compatibility) GETs /api/commands/pending each interval. 'sse' "
+            "(v1.1, ADR-14) subscribes to /api/commands/stream for "
+            "sub-second delivery. v1.2 will flip the default to 'sse'."
+        ),
     )
     parser.add_argument(
         "--log-level",
@@ -88,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         secret=secret,
         executors=_default_executors(),
         poll_interval=args.poll_interval,
+        transport=args.transport,
     )
     try:
         consumer.run_forever()
