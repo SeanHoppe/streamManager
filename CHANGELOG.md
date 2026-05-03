@@ -6,7 +6,28 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
-Targets v1.2.
+## [1.2.0] — 2026-05-03
+
+Tagged ship of the v1.2 cycle. See `docs/v1.2-task-plan.md` for the
+full task list. Highlights:
+
+- Task A: three-tier soak model (replay / cassette / ship-gate) —
+  ADR-17. Replay tier removes upstream rate-limit variance from
+  per-CI runs; ship-gate remains the source of truth for ADR-5
+  absolute latency budget.
+- Task B: `sm sessions list/tail` operator CLI + dashboard session
+  picker (`sm:session-changed` event, `PHASE6.selectedSessionId`).
+- Task C: Claude Code lifecycle bridge — `LifecycleBridge` +
+  `HookFolderPoller` shim for BG jobs / spawned subagents,
+  `/api/lifecycle/jobs` read endpoint, dashboard pane.
+- Task D: long-poll command transport removed (see Removed entry
+  below). SSE is the sole desktop_command transport.
+- Task E: json CLI transport selector removed (see Removed entry
+  below). WireCLI is the sole and default cli transport.
+- Tasks F (per-instance HMAC keypairs default) and G (browser
+  dashboard auth) deferred — gates did not fire in v1.2.
+- `docs/v1.2-followup.md`: running ledger of deferred review
+  findings carried into v1.3.
 
 ### Removed
 - **Long-poll command transport** (deprecated in v1.1, ADR-14). The
