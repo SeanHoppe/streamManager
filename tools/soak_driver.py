@@ -50,6 +50,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import psutil  # noqa: E402
 
 from stream_manager.governance import GovernanceEngine  # noqa: E402
+from stream_manager.message_bus import Message as _BusMsgT  # noqa: E402
 from stream_manager.message_bus import MessageBus  # noqa: E402
 from stream_manager.messages import Message  # noqa: E402
 from stream_manager.project_context import load as load_project_context  # noqa: E402
@@ -587,6 +588,175 @@ def _write_deferral_report(reason: str) -> Path:
     return path
 
 
+def _load_cassette(path: Path) -> list[dict]:
+    """Load a cassette JSONL file. Each line is a recorded envelope.
+
+    Required fields per row::
+        idx, kind, content, recorded_latency_ms,
+        decision: {action, confidence, reasoning}
+    """
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as fp:
+        for line_no, raw in enumerate(fp, 1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except Exception as exc:
+                raise ValueError(
+                    f"cassette {path}: malformed JSON at line {line_no}: {exc}"
+                ) from exc
+            for k in ("kind", "content", "recorded_latency_ms", "decision"):
+                if k not in rec:
+                    raise ValueError(
+                        f"cassette {path} line {line_no}: missing field {k!r}"
+                    )
+            rows.append(rec)
+    if not rows:
+        raise ValueError(f"cassette {path} is empty")
+    return rows
+
+
+def _run_replay(args) -> int:
+    """Task A / v1.2: replay tier — no `claude` subprocess.
+
+    Reads a cassette JSONL, sleeps the recorded latency per envelope, and
+    drives the bus + decision recording exactly like a real soak. This
+    exercises pool-/bus-/governance plumbing only and is safe to run in
+    CI on hosts without the `claude` binary on PATH.
+    """
+    cassette_path = Path(args.cli_replay).resolve()
+    if not cassette_path.exists():
+        print(f"[soak] replay: cassette not found: {cassette_path}", file=sys.stderr)
+        return 2
+
+    rows = _load_cassette(cassette_path)
+    print(f"[soak] replay mode: {len(rows)} envelopes from {cassette_path}")
+
+    gov_db = (ROOT / args.gov_db).resolve()
+    gov_db.parent.mkdir(parents=True, exist_ok=True)
+    for ext in ("", "-wal", "-shm"):
+        p = Path(str(gov_db) + ext)
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+    iso_ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    started_at_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    report_path = ROOT / "reports" / f"replay-{iso_ts}.md"
+
+    bus = MessageBus(str(gov_db))
+    session_id = f"replay-{iso_ts}"
+    bus.open_session(session_id, project_slug="soak-replay", pid=os.getpid())
+
+    state = _DriverState()
+    start_mono = time.monotonic()
+
+    try:
+        for row in rows:
+            kind = row.get("kind", "routine")
+            content = row["content"]
+            latency_ms = float(row["recorded_latency_ms"])
+            dec = row["decision"]
+
+            t0 = time.perf_counter()
+            # Recreate the inbound governance_eval row exactly as
+            # GovernanceEngine.evaluate would, so consumers see the same
+            # message shape across replay and ship-gate tiers.
+            user_msg = Message.new(role="user", content=content)
+            bm = _BusMsgT.new(
+                session_id=session_id,
+                type="governance_eval",
+                direction="inbound",
+                content=content,
+                metadata={"role": "user", "msg_id": user_msg.id, "replay": True},
+            )
+            bus.publish(bm)
+
+            # Sleep the recorded wall-clock latency to preserve the
+            # bus/SSE pacing characteristics of the original soak.
+            time.sleep(max(0.0, latency_ms / 1000.0))
+
+            bus.record_decision(
+                message_id=bm.id,
+                action=dec["action"],
+                confidence=float(dec.get("confidence", 0.0)),
+                reasoning=dec.get("reasoning", ""),
+                matched_hash=dec.get("matched_hash", ""),
+                model_used=dec.get("model_used", "replay"),
+                layer=int(dec.get("layer", 0)),
+            )
+
+            elapsed = time.perf_counter() - t0
+            state.publish_latencies_s.append(elapsed)
+            if kind == "l2_l3":
+                state.escalation_latencies_s.append(elapsed)
+            elif kind == "l4":
+                state.alignment_latencies_s.append(elapsed)
+            state.decision_actions[dec["action"]] = (
+                state.decision_actions.get(dec["action"], 0) + 1
+            )
+            state.events_emitted += 1
+    finally:
+        try:
+            bus.close_session(session_id)
+        except Exception:
+            pass
+        try:
+            bus.close()
+        except Exception:
+            pass
+
+    ended_at_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    total_runtime = time.monotonic() - start_mono
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    lines.append(f"# Soak replay -- {started_at_iso}")
+    lines.append("")
+    lines.append(f"- mode: REPLAY (Task A / v1.2; ADR-17)")
+    lines.append(f"- cassette: `{cassette_path}`")
+    lines.append(f"- envelopes: {len(rows)}")
+    lines.append(f"- gov DB: `{gov_db}`")
+    lines.append(f"- started_at: {started_at_iso}")
+    lines.append(f"- ended_at:   {ended_at_iso}")
+    lines.append(f"- runtime:    {total_runtime:.1f}s")
+    lines.append("- claude subprocesses spawned: 0 (replay tier)")
+    lines.append("")
+    lines.append("## Latency (replayed)")
+    lines.append("")
+    if state.publish_latencies_s:
+        lats = state.publish_latencies_s
+        lines.append(f"- count: {len(lats)}")
+        lines.append(f"- min:   {min(lats):.3f}s")
+        lines.append(f"- p50:   {_percentile(lats, 50):.3f}s")
+        lines.append(f"- p95:   {_percentile(lats, 95):.3f}s")
+        lines.append(f"- max:   {max(lats):.3f}s")
+        lines.append("")
+        lines.append("> WARNING: replay p95 is a *relative* regression signal,")
+        lines.append("> not an absolute target. Only ship-gate soak feeds the")
+        lines.append("> ADR-5 absolute latency budget.")
+        lines.append("")
+    lines.append("## Decision-action distribution")
+    lines.append("")
+    if state.decision_actions:
+        total = sum(state.decision_actions.values()) or 1
+        for action, n in sorted(state.decision_actions.items(), key=lambda kv: -kv[1]):
+            lines.append(f"- {action}: {n} ({n/total*100:.1f}%)")
+    lines.append("")
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+
+    print(f"[soak] replay wrote {report_path}")
+    print(
+        f"[soak] replay emitted={state.events_emitted} "
+        f"runtime={total_runtime:.1f}s subprocesses_spawned=0"
+    )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8766)
@@ -612,7 +782,22 @@ def main() -> int:
         help="Task J / v1.1: warm-pool size for `claude` workers. 0 = legacy "
              "spawn-per-call (default). 2 is the recommended pool size.",
     )
+    ap.add_argument(
+        "--cli-replay",
+        type=str,
+        default=None,
+        help="Task A / v1.2: path to a recorded cassette JSONL. When set, the "
+             "driver does NOT spawn a real `claude` subprocess; instead it "
+             "replays canned envelopes from the cassette, sleeping "
+             "`recorded_latency_ms` per envelope. See ADR-17.",
+    )
     args = ap.parse_args()
+
+    # Task A / v1.2: replay tier. Skip the claude-on-PATH check and the
+    # BRIDGE_API_GOV / cli_pool init paths — replay exercises bus +
+    # decision-record plumbing only, without any model call.
+    if args.cli_replay:
+        return _run_replay(args)
 
     cli_present = _check_cli_on_path()
     if not cli_present and not args.skip_cli_check:
