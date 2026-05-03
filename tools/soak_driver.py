@@ -654,7 +654,6 @@ def _run_replay(args) -> int:
 
     state = _DriverState()
     start_mono = time.monotonic()
-    spawned_subprocesses = 0  # always 0 in replay; surfaced in the report
 
     try:
         for row in rows:
@@ -725,7 +724,7 @@ def _run_replay(args) -> int:
     lines.append(f"- started_at: {started_at_iso}")
     lines.append(f"- ended_at:   {ended_at_iso}")
     lines.append(f"- runtime:    {total_runtime:.1f}s")
-    lines.append(f"- claude subprocesses spawned: {spawned_subprocesses}")
+    lines.append("- claude subprocesses spawned: 0 (replay tier)")
     lines.append("")
     lines.append("## Latency (replayed)")
     lines.append("")

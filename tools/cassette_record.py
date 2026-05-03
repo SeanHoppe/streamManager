@@ -63,6 +63,11 @@ from soak_driver import _build_payload_sequence  # noqa: E402
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
+# Map cassette `kind` → governance routing layer. Mirrors the kind classes
+# emitted by `_build_payload_sequence` and the layer integer that
+# `engine.evaluate` persists via `bus.record_decision(layer=...)`.
+_KIND_TO_LAYER = {"routine": 0, "l2_l3": 2, "l4": 4}
+
 
 def _check_cli_on_path() -> bool:
     return shutil.which("claude") is not None or shutil.which("claude.exe") is not None
@@ -109,12 +114,6 @@ def main() -> int:
         default=HAIKU_MODEL,
         help=f"CLI model id; defaults to {HAIKU_MODEL} for cheap refresh.",
     )
-    ap.add_argument(
-        "--allow-no-cli",
-        action="store_true",
-        help="Permit running without `claude` on PATH (synthetic mode; "
-             "produces a cassette with placeholder decisions for tests).",
-    )
     args = ap.parse_args()
 
     out_dir = (ROOT / args.out).resolve()
@@ -122,19 +121,16 @@ def main() -> int:
     today = _dt.date.today().isoformat()
     cassette_path = out_dir / f"soak_cassette_{today}.jsonl"
 
-    cli_present = _check_cli_on_path()
-    synthetic_mode = not cli_present
-    if synthetic_mode and not args.allow_no_cli:
+    if not _check_cli_on_path():
         print(
-            "[cassette] `claude` not on PATH; pass --allow-no-cli to record a "
-            "synthetic-decision cassette for replay-tier tests.",
+            "[cassette] `claude` not on PATH; cassette recorder requires the "
+            "real CLI to capture authentic decisions. Aborting.",
             file=sys.stderr,
         )
         return 2
 
-    if cli_present:
-        os.environ["BRIDGE_API_GOV"] = "1"
-        os.environ.setdefault("BRIDGE_CLI_MODEL", args.model)
+    os.environ["BRIDGE_API_GOV"] = "1"
+    os.environ.setdefault("BRIDGE_CLI_MODEL", args.model)
 
     payloads = _build_payload_sequence(args.seed)
     if args.limit > 0:
@@ -158,7 +154,7 @@ def main() -> int:
     snap = load_project_context(str(ROOT))
 
     cli_pool_obj = None
-    if cli_present and args.cli_pool_size > 0:
+    if args.cli_pool_size > 0:
         try:
             from stream_manager.cli_pool import CliPool, reap_stale_workers
             reap_stale_workers(root=ROOT)
@@ -181,22 +177,11 @@ def main() -> int:
                 msg = Message.new(role="user", content=content)
                 t0 = time.perf_counter()
                 try:
-                    if synthetic_mode:
-                        # Placeholder decision used to seed sample cassettes
-                        # for the replay-tier unit test. ALLOW + 0.5
-                        # mirrors the cli_governance default-degrade path.
-                        decision_action = "ALLOW"
-                        decision_conf = 0.5
-                        decision_reason = "synthetic (no CLI on PATH)"
-                        decision_layer = 0
-                        # Tiny fake latency so replay tests don't sleep long.
-                        time.sleep(0.01)
-                    else:
-                        dec = engine.evaluate(msg)
-                        decision_action = dec.action
-                        decision_conf = dec.confidence
-                        decision_reason = dec.reasoning
-                        decision_layer = 0
+                    dec = engine.evaluate(msg)
+                    decision_action = dec.action
+                    decision_conf = dec.confidence
+                    decision_reason = dec.reasoning
+                    decision_layer = _KIND_TO_LAYER.get(kind, 0)
                 except Exception as exc:
                     failures += 1
                     print(
@@ -215,7 +200,7 @@ def main() -> int:
                         "confidence": round(decision_conf, 4),
                         "reasoning": decision_reason,
                         "matched_hash": "",
-                        "model_used": args.model if cli_present else "synthetic",
+                        "model_used": args.model,
                         "layer": decision_layer,
                     },
                 }
