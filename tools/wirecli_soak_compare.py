@@ -331,7 +331,6 @@ def main() -> int:
     # historical comparison runs only.
     parser.add_argument(
         "--transport",
-        choices=["wirecli", "legacy", "both"],
         default="wirecli",
         help=(
             "wirecli: production parser (v1.2 default); "
@@ -340,6 +339,12 @@ def main() -> int:
             "both: emit both reports."
         ),
     )
+    # NOTE: argparse `choices=` is intentionally NOT used. v1.2 (Task E)
+    # removed the `json` selector from cli_client.cli_transport(); a
+    # post-parse check below maps `--transport json` to the explicit
+    # migration message rather than argparse's generic "invalid choice"
+    # error. Same pattern as tools/sm_consumer.py for Task D's long-poll
+    # removal (PR #44 fix commit 6d6493e).
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -351,6 +356,21 @@ def main() -> int:
         help="ISO timestamp for filename (default: now UTC)",
     )
     args = parser.parse_args()
+
+    # v1.2 (Task E): surface the cli_client migration hint at the CLI
+    # layer so v1.1 launch scripts using `--transport json` see the
+    # actionable pointer instead of a stack trace later.
+    if args.transport == "json":
+        from stream_manager.cli_client import _JSON_REMOVED_MSG
+        print(f"error: {_JSON_REMOVED_MSG}", file=sys.stderr)
+        return 2
+    if args.transport not in ("wirecli", "legacy", "both"):
+        print(
+            f"error: --transport {args.transport!r} is not valid; "
+            "expected one of: wirecli, legacy, both",
+            file=sys.stderr,
+        )
+        return 2
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     fixtures = _fixtures()

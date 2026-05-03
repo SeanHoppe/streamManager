@@ -58,6 +58,18 @@ Transport = Literal["wirecli"]
 DEFAULT_TRANSPORT: Transport = "wirecli"
 _VALID_TRANSPORTS: frozenset[str] = frozenset({"wirecli"})
 
+# Migration hint surfaced when a caller still passes the v1.2-removed
+# ``"json"`` value. Module-level constant so tests + downstream tools
+# (e.g. tools/wirecli_soak_compare.py) can match against it without
+# duplicating wording. Mirrors the _LONGPOLL_REMOVED_MSG pattern from
+# Task D (PR #44, src/stream_manager/desktop_command_consumer.py).
+_JSON_REMOVED_MSG = (
+    "cli transport 'json' was removed in v1.2 (deprecated in v1.1, "
+    "ADR-15). Use transport='wirecli' (now the default) or unset "
+    "BRIDGE_CLI_TRANSPORT. See CHANGELOG.md [Unreleased] Removed "
+    "and docs/adr/ADR-15-wirecli-transport.md for migration."
+)
+
 
 def cli_transport(transport: str | None = None) -> Transport:
     """Resolve and validate the CLI transport selector.
@@ -73,12 +85,7 @@ def cli_transport(transport: str | None = None) -> Transport:
 
     chosen = transport or os.environ.get("BRIDGE_CLI_TRANSPORT") or DEFAULT_TRANSPORT
     if chosen == "json":
-        raise ValueError(
-            "cli transport 'json' was removed in v1.2 (deprecated in v1.1, "
-            "ADR-15). Use transport='wirecli' (now the default) or unset "
-            "BRIDGE_CLI_TRANSPORT. See CHANGELOG.md [Unreleased] Removed "
-            "and docs/adr/ADR-15-wirecli-transport.md for migration."
-        )
+        raise ValueError(_JSON_REMOVED_MSG)
     if chosen not in _VALID_TRANSPORTS:
         raise ValueError(
             f"unknown cli transport {chosen!r}; "
