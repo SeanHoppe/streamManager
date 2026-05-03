@@ -31,9 +31,10 @@ dev = [
 
 [project.scripts]
 stream-manager = "stream_manager.__main__:main"
+sm = "tools.sm_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/stream_manager"]
+packages = ["src/stream_manager", "tools"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
