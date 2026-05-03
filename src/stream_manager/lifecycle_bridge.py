@@ -54,6 +54,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from stream_manager.message_bus import Message
+
 if TYPE_CHECKING:  # pragma: no cover - import-time only
     from stream_manager.message_bus import MessageBus
 
@@ -192,10 +194,6 @@ class LifecycleBridge:
         if not session_id or not job_id:
             raise ValueError("session_id and job_id are required")
         key = (event_type, job_id)
-        with self._lock:
-            if key in self._seen:
-                return False
-            self._seen.add(key)
         meta: dict[str, object] = {
             "event_type": event_type,
             "job_id": job_id,
@@ -207,12 +205,6 @@ class LifecycleBridge:
         }
         if extra:
             meta.update(extra)
-        # Lazy import: keeps lifecycle_bridge importable in stub
-        # environments where message_bus would pull sqlite3 etc. The
-        # circular import guard above (TYPE_CHECKING) gives us types
-        # without a runtime cost.
-        from stream_manager.message_bus import Message
-
         msg = Message.new(
             session_id=session_id,
             type=BUS_TYPE,
@@ -220,14 +212,28 @@ class LifecycleBridge:
             content=name or job_id,
             metadata=meta,
         )
-        try:
-            self._bus.publish(msg)
-        except Exception:
-            log.exception("lifecycle_bridge: bus.publish failed")
-            # Roll back the dedup so a later retry can succeed.
-            with self._lock:
-                self._seen.discard(key)
-            return False
+        # Hold the lock across the publish so two threads racing on the
+        # same (event_type, job_id) cannot both observe a miss and double-
+        # publish. bus.publish writes one row to the SQLite WAL bus; cost
+        # is a single bounded I/O so the held window stays short.
+        with self._lock:
+            if key in self._seen:
+                return False
+            try:
+                self._bus.publish(msg)
+            except Exception:
+                log.exception("lifecycle_bridge: bus.publish failed")
+                return False
+            self._seen.add(key)
+            # Bound _seen by evicting the matching start key once the
+            # corresponding end/done lands. Long-lived processes can
+            # otherwise leak one tuple per completed job indefinitely.
+            if event_type == EVENT_BG_JOB_END:
+                self._seen.discard((EVENT_BG_JOB_START, job_id))
+                self._seen.discard((EVENT_BG_JOB_END, job_id))
+            elif event_type == EVENT_AGENT_DONE:
+                self._seen.discard((EVENT_AGENT_SPAWN, job_id))
+                self._seen.discard((EVENT_AGENT_DONE, job_id))
         return True
 
 

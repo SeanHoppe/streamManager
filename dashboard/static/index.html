@@ -2398,8 +2398,11 @@ async function fetchLifecycleJobs(){
   const empty = document.getElementById('lifecycleEmpty');
   const cnt = document.getElementById('lifecycleCount');
   if(!list || !cnt) return;
+  // Task B owns selected session state via PHASE6.selectedSessionId.
+  // Read from there so this pane scopes to the same session as the
+  // session picker / HITL queue / decisions feed.
   let sid = '';
-  try{ sid = (window.SM_SELECTED_SESSION_ID || '').trim(); }catch(_){}
+  try{ sid = ((window.PHASE6 && PHASE6.selectedSessionId) || '').trim(); }catch(_){}
   const url = sid ? `/api/lifecycle/jobs?session_id=${encodeURIComponent(sid)}` : '/api/lifecycle/jobs';
   let data = null;
   try{

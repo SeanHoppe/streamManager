@@ -581,10 +581,14 @@ async def api_lifecycle_jobs(session_id: str | None = None, limit: int = 100):
             limit=min(int(limit or 100), 500),
         )
         return {"jobs": rows, "count": len(rows)}
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive
+        # Detail goes to the server log, not the response body, so we
+        # don't leak internal paths / SQL fragments / stack hints to any
+        # caller of the dashboard.
         log.exception("lifecycle/jobs: query failed")
         return JSONResponse(
-            {"error": str(exc), "jobs": [], "count": 0}, status_code=500
+            {"error": "internal error", "jobs": [], "count": 0},
+            status_code=500,
         )
 
 

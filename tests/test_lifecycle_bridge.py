@@ -298,8 +298,10 @@ def dashboard_client(tmp_path, monkeypatch):
     if "dashboard.server" in sys.modules:
         del sys.modules["dashboard.server"]
     server = importlib.import_module("dashboard.server")
+    # The /api/lifecycle/jobs endpoint reads DB_PATH from the env var
+    # (set above via monkeypatch.setenv("GOV_DB", ...)); no module-attr
+    # injection is needed.
     bus = MessageBus(str(db))
-    server._bus = bus
     client = TestClient(server.app)
     try:
         yield client, bus
