@@ -560,6 +560,34 @@ async def api_registry_active():
     }
 
 
+@app.get("/api/lifecycle/jobs")
+async def api_lifecycle_jobs(session_id: str | None = None, limit: int = 100):
+    """Active BG jobs + spawned subagents (Task C / v1.2 lifecycle bridge).
+
+    Read-only view over WAL ``messages`` rows authored by
+    ``stream_manager.lifecycle_bridge``. Returns rows whose latest
+    envelope is a ``*_start`` (no matching ``*_end`` / ``*_done``
+    observed yet), newest-start first.
+
+    If a ``session_id`` query param is provided, scope to that session
+    (pairs with the Task B session selector). Otherwise return all open
+    jobs/agents across sessions.
+    """
+    try:
+        from stream_manager.lifecycle_bridge import list_active_jobs
+        rows = list_active_jobs(
+            db_path=str(DB_PATH),
+            session_id=session_id,
+            limit=min(int(limit or 100), 500),
+        )
+        return {"jobs": rows, "count": len(rows)}
+    except Exception as exc:  # pragma: no cover - defensive
+        log.exception("lifecycle/jobs: query failed")
+        return JSONResponse(
+            {"error": str(exc), "jobs": [], "count": 0}, status_code=500
+        )
+
+
 @app.get("/api/sessions")
 async def api_sessions(limit: int = 10):
     """Recent sessions, newest first.
