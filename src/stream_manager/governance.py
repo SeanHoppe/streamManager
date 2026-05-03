@@ -910,6 +910,10 @@ class EngineRegistry:
         self._refresh_interval_s = float(refresh_interval_s)
         self._refresh_timer: threading.Timer | None = None
         self._refresh_stopped = True
+        # Task M: timestamp (epoch seconds) of the last refresh_all() return,
+        # or None if refresh_all has never completed. Surfaced via
+        # /api/registry/active for operator visibility.
+        self.last_refresh_ts: float | None = None
         if auto_refresh:
             self.start_refresh()
 
@@ -977,7 +981,15 @@ class EngineRegistry:
         Idempotent: existing pattern hashes are not downgraded. Returns
         the total number of newly-injected entries across all engines.
         Tests call this directly to avoid timer races.
+
+        Task M coordination with Task I lazy-init: engines whose initial
+        spawn-time Hydrator hasn't completed (engine.hydrated=False) are
+        skipped to avoid racing the per-engine background thread. The
+        next 60s tick will pick them up once the lazy hydrator finishes.
         """
+        # Always update the timestamp so /api/registry/active reflects
+        # liveness even when there's nothing to inject (no bus, no engines).
+        self.last_refresh_ts = time.time()
         if self._bus is None:
             return 0
         try:
@@ -989,6 +1001,11 @@ class EngineRegistry:
         with self._lock:
             engines = list(self._engines.values())
         for eng in engines:
+            # Task I/M coordination: if the per-engine spawn-time Hydrator
+            # is still in flight, skip — re-running hydrate_now now would
+            # race the background thread and double-inject the same rows.
+            if not getattr(eng, "hydrated", False):
+                continue
             try:
                 total += hydrate_now(eng, self._bus)
             except Exception:
@@ -1002,16 +1019,42 @@ class EngineRegistry:
             if self._refresh_timer is None:
                 self._arm_refresh_locked()
 
-    def stop_refresh(self) -> None:
-        """Stop the periodic refresh timer. Idempotent."""
+    def stop_refresh(self, join_timeout: float = 1.0) -> None:
+        """Stop the periodic refresh timer. Idempotent.
+
+        Task M: cancel the pending Timer and best-effort join it so a
+        host process (uvicorn shutdown) doesn't hang on a daemon timer
+        whose payload is mid-flight. Daemon=True already prevents hangs
+        at process exit, but explicit join makes shutdown deterministic.
+        """
         with self._lock:
             self._refresh_stopped = True
-            if self._refresh_timer is not None:
-                try:
-                    self._refresh_timer.cancel()
-                except Exception:
-                    log.exception("registry: timer cancel failed")
-                self._refresh_timer = None
+            timer = self._refresh_timer
+            self._refresh_timer = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                log.exception("registry: timer cancel failed")
+            try:
+                timer.join(timeout=join_timeout)
+            except Exception:
+                log.exception("registry: timer join failed")
+
+    @property
+    def refresh_active(self) -> bool:
+        """True iff start_refresh() has been called and stop_refresh() hasn't."""
+        with self._lock:
+            return not self._refresh_stopped
+
+    def refresh_status(self) -> dict:
+        """Snapshot of refresh-loop liveness for /api/registry/active."""
+        with self._lock:
+            return {
+                "refresh_active": not self._refresh_stopped,
+                "last_refresh_ts": self.last_refresh_ts,
+                "refresh_interval_s": self._refresh_interval_s,
+            }
 
     def _arm_refresh_locked(self) -> None:
         # Caller holds self._lock.
