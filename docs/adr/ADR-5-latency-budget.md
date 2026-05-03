@@ -111,12 +111,55 @@ p95 = 19.08s persists because cold-start CLI cost is structural. The
 substantive p95 fix is **Task J — CLI subprocess warm-pool**. The v1.0
 budget table above is **not** ratcheted by Task I alone.
 
+### v1.1 ship-gate re-baseline (post-N, 2026-05-03)
+
+The original v1.1 single-target budget (p50 ≤ 3 s, p95 ≤ 8 s) assumed
+warm-pool would close the gap to a flat distribution. The 30-min
+ship-gate soak on post-Task-N HEAD `0d8cecc` with `--cli-pool-size 2`
+showed the gap is **bimodal**, not flat:
+
+| Path             | n  | p50     | p95     | source |
+|------------------|----|---------|---------|--------|
+| L2/L3 escalation | 5  | 0.00 s  | 4.06 s  | report |
+| L4 alignment     | 5  | 11.83 s | 13.35 s | report |
+| **Overall**      | 60 | 4.97 s  | 11.17 s | report |
+
+L4 alignment latency is **structural** — reflects depth of the
+underlying model's reasoning pass, not framework overhead. Pool
+collapsed cold-start cost on the ALLOW / L2 / L3 paths (29% p95
+improvement vs no-pool re-soak the same day). No further framework
+lever is available without changing model selection policy.
+
+Per `docs/v1.1-task-plan.md` §"v1.1 ship gate checklist" option B
+("p95 ≤ 8s OR re-baselined ADR-5"), the budget is re-baselined here:
+
+| Path                 | v1.1 target |
+|----------------------|-------------|
+| ALLOW p95            | ≤ 6 s       |
+| L2/L3 escalation p95 | ≤ 8 s       |
+| L4 alignment p95     | ≤ 14 s      |
+| Overall p95          | ≤ 12 s      |
+| Hard timeout         | 25 s (unchanged) |
+
+Source soak: `reports/soak-20260503T101758Z.md`. The single-rolled-up
+p95 ≤ 8 s target from `docs/v1.1-scope.md` is **superseded** by this
+table.
+
+Future work (v1.2 backlog): a Haiku fastpath for routine L4 calls is
+expected to bring L4 p95 under 8 s; that would re-unify the budget.
+See `docs/v1.1-task-plan.md` §"v1.2 backlog" for the cassette/replay
+infrastructure needed to validate it cheaply.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
 - `reports/soak-20260502T201806Z.md` — v1.0 final soak (p95 = 19.08s,
   the regression Task I was scoped to investigate)
 - `reports/perf-hydrator-20260502T232639Z.md` — Task I per-call probe
+- `reports/soak-20260503T094438Z.md` — v1.1 30-min soak, no pool
+  (operator-error baseline; reproduces v1.0 numbers)
+- `reports/soak-20260503T101758Z.md` — v1.1 30-min soak, pool size 2
+  (the re-baseline source)
 - `docs/v1.0-ship-plan.md` — Task G scope
 - `docs/v1.1-task-plan.md` — Task I (hydrator lazy-init), Task J (warm-pool)
 - Project memory: `project_cli_migration` (api_governance → cli_governance)
