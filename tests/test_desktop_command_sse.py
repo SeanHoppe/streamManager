@@ -1,6 +1,6 @@
-"""SSE transport tests for the desktop_command consumer (Task K, v1.1).
+"""SSE transport tests for the desktop_command consumer.
 
-Covers:
+Covers (Task K, v1.1; sole transport as of v1.2 Task D):
   - Live uvicorn + real CommandConsumer over the SSE transport:
       producer emits → consumer SSE receives + acks within 250ms.
   - Reconnect after server-initiated disconnect resumes from cursor
@@ -8,7 +8,10 @@ Covers:
     already dispatched do NOT re-fire executors).
   - SM_OWN_SESSION_ID rows are filtered server-side and never reach
     the consumer even when explicitly inserted into the WAL table.
-  - Long-poll (legacy) path still works on the same dashboard.
+
+The long-poll regression test was removed in v1.2 along with the
+``GET /api/commands/pending`` endpoint; SSE is now the only supported
+transport. See CHANGELOG.md and ADR-14 for the migration record.
 
 Mirrors the live-uvicorn fixture pattern in
 ``tests/test_dashboard_og7_banner.py``.
@@ -169,20 +172,21 @@ async def test_sse_producer_to_consumer_under_250ms(live_server):
     assert elapsed_ms < 1500.0, f"SSE dispatch too slow: {elapsed_ms:.1f} ms"
 
     # Wait briefly for the ack POST to land before we assert state.
+    # Pre-v1.2 this read /api/commands/pending; that endpoint was
+    # removed in Task D, so we now query the desktop_commands table
+    # directly through the test fixture's bus connection.
     deadline = time.time() + 2.0
     final_status = None
-    async with httpx.AsyncClient(base_url=base_url, timeout=2.0) as c:
-        while time.time() < deadline:
-            r = await c.get(
-                "/api/commands/pending", params={"session_id": SESSION_ID},
-            )
-            pending = r.json()
-            if not any(row["id"] == cmd_id for row in pending):
-                final_status = "acked-or-expired"
-                break
-            await asyncio.sleep(0.05)
-    assert final_status == "acked-or-expired", (
-        f"command {cmd_id} still pending after dispatch"
+    while time.time() < deadline:
+        row = bus._conn.execute(
+            "SELECT status FROM desktop_commands WHERE id=?", (cmd_id,)
+        ).fetchone()
+        if row is not None and row[0] != "pending":
+            final_status = row[0]
+            break
+        await asyncio.sleep(0.05)
+    assert final_status in ("ok", "rejected", "expired"), (
+        f"command {cmd_id} still pending after dispatch (status={final_status!r})"
     )
 
     consumer.stop()
@@ -293,52 +297,29 @@ async def test_sse_filters_sm_own_session_id(live_server, monkeypatch):
     # as a different session and emit a row whose session_id matches
     # SM_OWN — which can only happen if the env was changed after the
     # row landed in the WAL (precisely the case we're covering).
-    # Verify: GET /api/commands/pending?session_id=other_id is rejected.
+    # Verify: GET /api/commands/stream?session_id=other_id is rejected.
     async with httpx.AsyncClient(base_url=base_url, timeout=2.0) as c:
-        resp = await c.get(
-            "/api/commands/pending", params={"session_id": other_id}
-        )
-        assert resp.status_code == 400
-
-        # And: GET /api/commands/stream?session_id=other_id is rejected too.
         resp = await c.get(
             "/api/commands/stream", params={"session_id": other_id}
         )
         assert resp.status_code == 400
 
 
-# ─── Test 4: long-poll path still works (regression) ─────────────────
+# ─── Test 4: long-poll endpoint and consumer path are removed (v1.2) ─
 
 
-async def test_long_poll_path_still_works(live_server):
-    """The /api/commands/pending endpoint must keep working for one
-    more minor cycle so v1.0 consumers don't break."""
-    base_url, bus = live_server
-    from stream_manager.desktop_command_consumer import CommandConsumer
-
-    fired = threading.Event()
-
-    def _flash(args: dict) -> None:
-        fired.set()
-
-    consumer = CommandConsumer(
-        sm_url=base_url,
-        session_id=SESSION_ID,
-        secret=SECRET,
-        executors={"flash": _flash},
-        poll_interval=0.1,  # speed up the test
-        transport="long-poll",
-    )
-    thread = _run_consumer_thread(consumer)
-    try:
-        await _emit_via_http(base_url, SESSION_ID, "flash", {"tag": "lp"})
-        assert await asyncio.to_thread(fired.wait, 3.0), (
-            "long-poll consumer never fired"
+async def test_long_poll_endpoint_removed(live_server):
+    """v1.2 (Task D) removed the legacy ``GET /api/commands/pending``
+    long-poll endpoint. The dashboard must now return 404 for it; SSE
+    is the sole desktop_command transport."""
+    base_url, _bus = live_server
+    async with httpx.AsyncClient(base_url=base_url, timeout=2.0) as c:
+        resp = await c.get(
+            "/api/commands/pending", params={"session_id": SESSION_ID}
         )
-    finally:
-        consumer.stop()
-        thread.join(timeout=5.0)
-        consumer.close()
+        assert resp.status_code == 404, (
+            f"/api/commands/pending should be removed; got {resp.status_code}"
+        )
 
 
 # ─── Unit-level test: invalid transport raises ───────────────────────

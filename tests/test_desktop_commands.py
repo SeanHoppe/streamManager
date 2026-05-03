@@ -1,16 +1,21 @@
-"""Tests for the desktop_command outbound control plane (Task D).
+"""Tests for the desktop_command outbound control plane (Task D, v1.0).
 
 Covers:
   - secret auto-generation on first call + 0600 perm (POSIX only)
   - env override beats file
   - sign / validate round-trip
   - kind allowlist rejection (ValueError)
-  - TTL expiry on pending read
   - SM_OWN_SESSION_ID rejection (ValueError + HTTP 400)
-  - dashboard POST /api/commands → row in DB → GET /api/commands/pending
-    → POST /api/commands/{id}/ack updates status
+  - dashboard POST /api/commands → row in DB →
+    POST /api/commands/{id}/ack updates status
   - emit_command does not touch the messages table (no engine.evaluate
     can fire because no row was published)
+
+v1.2 (Task D long-poll removal): the legacy
+``GET /api/commands/pending`` endpoint was removed. Tests previously
+covering its read-side TTL expiry and pending-list shape were dropped;
+the SSE handler retains the same TTL behaviour and is exercised by
+``tests/test_desktop_command_sse.py``.
 """
 
 from __future__ import annotations
@@ -292,7 +297,15 @@ def _dashboard(tmp_path, monkeypatch, *, sm_own: str | None = None):
     return TestClient(server.app), bus
 
 
-def test_dashboard_emit_then_pending_then_ack(tmp_path, monkeypatch):
+def test_dashboard_emit_then_ack_round_trip(tmp_path, monkeypatch):
+    """Round-trip: POST /api/commands → DB row → POST /api/commands/{id}/ack.
+
+    v1.2 (Task D): the GET /api/commands/pending readback step was
+    removed along with the endpoint; the row's signed shape is now
+    asserted by reading the desktop_commands row directly through the
+    bus connection and re-validating. Live SSE delivery is covered by
+    tests/test_desktop_command_sse.py.
+    """
     client, bus = _dashboard(tmp_path, monkeypatch)
     try:
         # Emit
@@ -305,21 +318,31 @@ def test_dashboard_emit_then_pending_then_ack(tmp_path, monkeypatch):
         cmd_id = body["id"]
         assert body["status"] == "pending"
 
-        # GET pending should return the row with signature + payload
-        resp = client.get("/api/commands/pending", params={"session_id": "s-target"})
-        assert resp.status_code == 200, resp.text
-        rows = resp.json()
-        assert len(rows) == 1
-        r = rows[0]
-        assert r["id"] == cmd_id
-        assert r["kind"] == "pause"
-        assert r["args"] == {"why": "x"}
-        assert r["status"] == "pending"
-        assert r["signature"]
-        # Verify the signature using the helper module — proves the
-        # consumer can validate without ambiguity.
+        # Read the row directly from the WAL table and verify the
+        # signed payload round-trips. This replaces the removed
+        # GET /api/commands/pending readback.
         from stream_manager.desktop_commands import validate
-        assert validate(r["payload"], r["signature"]) is True
+        import json as _json
+        row = bus._conn.execute(
+            "SELECT id, session_id, kind, args_json, signature, sent_at, "
+            "status FROM desktop_commands WHERE id=?",
+            (cmd_id,),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == cmd_id
+        assert row[1] == "s-target"
+        assert row[2] == "pause"
+        assert _json.loads(row[3]) == {"why": "x"}
+        assert row[4]  # signature non-empty
+        assert row[6] == "pending"
+        payload = {
+            "id": row[0],
+            "session_id": row[1],
+            "kind": row[2],
+            "args": _json.loads(row[3]),
+            "sent_at": float(row[5]),
+        }
+        assert validate(payload, row[4]) is True
 
         # ACK
         resp = client.post(
@@ -328,10 +351,6 @@ def test_dashboard_emit_then_pending_then_ack(tmp_path, monkeypatch):
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "ok"
-
-        # Pending list now empty
-        resp = client.get("/api/commands/pending", params={"session_id": "s-target"})
-        assert resp.json() == []
 
         # Row updated in DB
         row = bus._conn.execute(
@@ -345,27 +364,19 @@ def test_dashboard_emit_then_pending_then_ack(tmp_path, monkeypatch):
         bus.close()
 
 
-def test_dashboard_ttl_expiry_on_read(tmp_path, monkeypatch):
+def test_dashboard_pending_endpoint_returns_404(tmp_path, monkeypatch):
+    """v1.2 (Task D) removed the legacy ``GET /api/commands/pending``
+    long-poll endpoint. The dashboard must now 404 it; SSE
+    (``GET /api/commands/stream``) is the sole desktop_command transport.
+    """
     client, bus = _dashboard(tmp_path, monkeypatch)
     try:
-        resp = client.post(
-            "/api/commands",
-            json={"session_id": "s-target", "kind": "flash", "args": {}},
+        resp = client.get(
+            "/api/commands/pending", params={"session_id": "s-target"}
         )
-        cmd_id = resp.json()["id"]
-        # Force the row's sent_at to be > 30s old.
-        bus._conn.execute(
-            "UPDATE desktop_commands SET sent_at=? WHERE id=?",
-            (time.time() - 60, cmd_id),
+        assert resp.status_code == 404, (
+            f"/api/commands/pending should be removed; got {resp.status_code}"
         )
-        resp = client.get("/api/commands/pending", params={"session_id": "s-target"})
-        assert resp.status_code == 200
-        assert resp.json() == []
-        # Row's status was flipped to 'expired'.
-        row = bus._conn.execute(
-            "SELECT status FROM desktop_commands WHERE id=?", (cmd_id,)
-        ).fetchone()
-        assert row[0] == "expired"
     finally:
         bus.close()
 
@@ -380,8 +391,10 @@ def test_dashboard_rejects_sm_own(tmp_path, monkeypatch):
         assert resp.status_code == 400
         assert "SM_OWN_SESSION_ID" in resp.json()["detail"]
 
+        # SM_OWN check on the SSE transport (the v1.2 sole transport).
+        # The legacy long-poll endpoint check is gone with the endpoint.
         resp = client.get(
-            "/api/commands/pending", params={"session_id": "sm-owner"}
+            "/api/commands/stream", params={"session_id": "sm-owner"}
         )
         assert resp.status_code == 400
     finally:

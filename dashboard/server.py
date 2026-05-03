@@ -1725,48 +1725,10 @@ async def api_commands_emit(request: Request):
     return {"id": cmd_id, "status": "pending"}
 
 
-@app.get("/api/commands/pending")
-async def api_commands_pending(session_id: str):
-    """Return pending desktop_commands for a session.
-
-    Side effect: rows older than ``_DESKTOP_COMMAND_TTL_SECONDS`` get
-    their status flipped to ``expired`` in the same transaction and are
-    excluded from the response. Returned rows include the parsed args
-    payload and the signature so the consumer can re-validate.
-    """
-    if not isinstance(session_id, str) or not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
-    _reject_sm_own(session_id)
-
-    try:
-        conn = _open_rw()
-        if not _has_table(conn, "desktop_commands"):
-            conn.close()
-            return []
-        cutoff = time.time() - _DESKTOP_COMMAND_TTL_SECONDS
-        # Expire stale pending rows in the same call so subsequent reads
-        # don't keep returning them. session_id-scoped to avoid touching
-        # other sessions' rows.
-        conn.execute(
-            "UPDATE desktop_commands SET status='expired' "
-            "WHERE session_id=? AND status='pending' AND sent_at < ?",
-            (session_id, cutoff),
-        )
-        rows = conn.execute(
-            "SELECT id, session_id, kind, args_json, signature, sent_at, "
-            "status FROM desktop_commands "
-            "WHERE session_id=? AND status='pending' "
-            "ORDER BY sent_at ASC",
-            (session_id,),
-        ).fetchall()
-        conn.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    return [_serialize_command_row(r) for r in rows]
-
+# Note: the legacy ``GET /api/commands/pending`` long-poll endpoint was
+# removed in v1.2 (Task D). SSE — ``GET /api/commands/stream`` below —
+# is now the sole transport for the desktop_command control plane.
+# See CHANGELOG.md and ADR-14 for the migration record.
 
 _VALID_ACK_STATUS = {"ok", "rejected"}
 
@@ -1809,22 +1771,28 @@ def _serialize_command_row(r: sqlite3.Row) -> dict[str, object]:
 
 @app.get("/api/commands/stream")
 async def api_commands_stream(request: Request, session_id: str):
-    """SSE stream of pending desktop_commands for a session (Task K, v1.1).
+    """SSE stream of pending desktop_commands for a session.
+
+    Sole desktop_command transport as of v1.2 (Task D removed the
+    legacy ``GET /api/commands/pending`` long-poll endpoint).
 
     On connect: replay current ``status='pending'`` rows oldest-first.
     Then tail-poll the ``desktop_commands`` table every
     ``_DESKTOP_COMMAND_STREAM_TAIL_INTERVAL`` seconds and emit any new
     pending rows whose rowid is strictly greater than the running cursor.
 
-    Server-side filters (defence-in-depth, mirroring ``/api/commands/pending``):
+    Server-side filters (defence-in-depth):
       - session_id match required
       - SM_OWN_SESSION_ID rows rejected up-front (HTTP 400)
       - rows older than ``_DESKTOP_COMMAND_TTL_SECONDS`` are flipped to
         ``expired`` in the same connection and are NOT emitted.
 
-    Frame shape matches the JSON returned by ``/api/commands/pending`` so
-    the consumer code path after parse() is transport-agnostic. The legacy
-    long-poll endpoint is preserved for one minor cycle (deprecated v1.2).
+    Frame shape: the JSON object emitted on each ``data:`` line is
+    produced by ``_serialize_command_row`` (id, session_id, kind, args,
+    sent_at, status, signature, payload). Consumers parse one frame at a
+    time; the post-parse code path was kept transport-agnostic in v1.1
+    so v1.2's removal of the long-poll endpoint required no consumer-
+    side reshape.
     """
     if not isinstance(session_id, str) or not session_id:
         raise HTTPException(status_code=400, detail="session_id required")

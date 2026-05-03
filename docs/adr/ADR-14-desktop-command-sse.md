@@ -148,3 +148,24 @@ keeping logs readable.
   with `transport=` parameter and `_run_sse` / `_consume_sse_stream`
   methods.
 - `tests/test_desktop_command_sse.py` — coverage.
+
+## v1.2 status: long-poll removed
+
+In v1.2 (Task D, branch `feat/v1.2-longpoll-removal`) the deprecation
+window closed and the legacy long-poll path was removed:
+
+- `GET /api/commands/pending` — deleted. The endpoint now 404s.
+- `CommandConsumer.run_forever` long-poll branch — deleted. The
+  surviving body unconditionally calls `_run_sse()`.
+- `CommandConsumer(transport='long-poll')` — raises `ValueError` with a
+  migration message pointing at `CHANGELOG.md` (the v1.2 Removed entry).
+- `tools/sm_consumer.py --transport` — accepts only `sse`; the default
+  flipped from `long-poll` to `sse`.
+- `--poll-interval` flag and the `poll_interval` ctor kwarg were
+  removed (they were only consulted on the deleted long-poll branch).
+
+The migration path in this ADR's "v1.3.0 (or v1.2.x …)" bullet
+collapsed to v1.2.0; see `CHANGELOG.md` for the operator-facing entry.
+
+This ADR is **kept as the historical record** of the SSE design and the
+long-poll deprecation window. It is not superseded.
