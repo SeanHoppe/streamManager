@@ -319,6 +319,12 @@ class CommandConsumer:
         Subscribes to /api/commands/stream and processes each frame.
         Reconnects with exponential backoff capped at
         ``_SSE_BACKOFF_CAP`` on transport error.
+
+        The body delegates to ``_run_sse`` rather than inlining it
+        because ``_run_sse`` is on the v1.1.0 do-not-touch contract
+        (Task K). Keeping the wrapper preserves the long-standing
+        ``run_forever`` public name without renaming the underlying
+        impl that v1.1.0 froze.
         """
         self._run_sse()
 

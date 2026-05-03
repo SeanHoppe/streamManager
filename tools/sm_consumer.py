@@ -57,14 +57,22 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--transport",
-        choices=("sse",),
         default="sse",
         help=(
             "Command delivery transport. Only 'sse' is accepted as of "
             "v1.2 — the legacy 'long-poll' value was removed. Subscribes "
-            "to /api/commands/stream for sub-second delivery (ADR-14)."
+            "to /api/commands/stream for sub-second delivery (ADR-14). "
+            "Passing the removed 'long-poll' value surfaces the v1.2 "
+            "migration message from CommandConsumer."
         ),
     )
+    # NOTE: choices=(...) on argparse is intentionally NOT used here.
+    # If we constrained the value at the argparse layer, operators
+    # upgrading from v1.1 launch scripts that still pass
+    # `--transport long-poll` would see a generic argparse "invalid
+    # choice" error instead of the actionable migration hint that
+    # CommandConsumer raises (`_LONGPOLL_REMOVED_MSG`). Letting the
+    # ctor reject the value preserves the upgrade path.
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -88,13 +96,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    consumer = CommandConsumer(
-        sm_url=args.sm_url,
-        session_id=args.session_id,
-        secret=secret,
-        executors=_default_executors(),
-        transport=args.transport,
-    )
+    try:
+        consumer = CommandConsumer(
+            sm_url=args.sm_url,
+            session_id=args.session_id,
+            secret=secret,
+            executors=_default_executors(),
+            transport=args.transport,
+        )
+    except ValueError as exc:
+        # Surface the ctor's migration hint (e.g. v1.2 long-poll removal)
+        # as a clean CLI error rather than a Python traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     try:
         consumer.run_forever()
     except KeyboardInterrupt:

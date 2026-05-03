@@ -4,7 +4,9 @@ All notable changes to streamManager are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to semantic versioning per `docs/ROADMAP.md`.
 
-## [Unreleased] — v1.2
+## [Unreleased]
+
+Targets v1.2.
 
 ### Removed
 - **Long-poll command transport** (deprecated in v1.1, ADR-14). The
