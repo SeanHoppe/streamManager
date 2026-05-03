@@ -28,9 +28,18 @@ def _seed_bus(tmp_path, sessions: list[tuple[str, int]]) -> MessageBus:
     for sid, count in sessions:
         bus.open_session(sid, project_slug=f"proj-{sid}", pid=1234)
         for i in range(count):
-            bus.publish(Message.new(sid, "chat", "inbound", f"msg-{sid}-{i}"))
+            bus.publish(
+                Message.new(
+                    session_id=sid,
+                    type="chat",
+                    direction="inbound",
+                    content=f"msg-{sid}-{i}",
+                )
+            )
             # Stagger timestamps so MAX(timestamp) ordering is meaningful.
-            time.sleep(0.001)
+            # 20ms exceeds Windows clock resolution (~15ms) so consecutive
+            # inserts always land on distinct ticks.
+            time.sleep(0.02)
     return bus
 
 
@@ -173,8 +182,18 @@ def test_tail_session_picks_up_envelopes_published_after_start(tmp_path):
         t.start()
         # Give the reader a tick to drain the existing row.
         time.sleep(0.1)
-        bus.publish(Message.new("late", "chat", "inbound", "live-1"))
-        bus.publish(Message.new("late", "chat", "inbound", "live-2"))
+        bus.publish(
+            Message.new(
+                session_id="late", type="chat", direction="inbound",
+                content="live-1",
+            )
+        )
+        bus.publish(
+            Message.new(
+                session_id="late", type="chat", direction="inbound",
+                content="live-2",
+            )
+        )
         t.join(timeout=5.0)
         assert not t.is_alive(), "tail_session did not exit after stop_after"
 

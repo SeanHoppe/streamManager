@@ -34,7 +34,13 @@ stream-manager = "stream_manager.__main__:main"
 sm = "tools.sm_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/stream_manager", "tools"]
+packages = ["src/stream_manager"]
+
+# Ship only sm_cli (operator CLI) from tools/; perf_probe, soak_driver,
+# cassette_record are dev-only scripts and must not enter the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"tools/__init__.py" = "tools/__init__.py"
+"tools/sm_cli.py" = "tools/sm_cli.py"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

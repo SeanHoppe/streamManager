@@ -3121,6 +3121,14 @@ async function refreshSessionSelector(){
         // Notify dependent panes once on initial pick.
         try{ fetchHitlPending(); }catch(_){}
         try{ fetchAgents(); }catch(_){}
+        // Match the change-handler contract: external subscribers
+        // (Session Mirror, etc.) should learn about the initial
+        // selection too, not just user-driven changes.
+        try{
+          document.dispatchEvent(new CustomEvent('sm:session-changed', {
+            detail: { sessionId: PHASE6.selectedSessionId },
+          }));
+        }catch(_){}
       }else{
         sessSelect.value = ALL_SESSIONS_VALUE;
       }

@@ -47,30 +47,33 @@ def _default_db_path() -> Path:
     return ROOT / ".claude" / "gov.db"
 
 
-def _fetch_active_session_ids(dashboard_url: str | None) -> set[str]:
+def _fetch_active_session_ids(dashboard_url: str | None) -> set[str] | None:
     """Hit /api/registry/active and return active_session_ids set.
 
-    Returns empty set on any failure (network, parse, missing field). Lazy
-    httpx import keeps the CLI usable in environments without httpx.
+    Returns ``None`` on any failure (no URL, missing httpx, network,
+    non-200, parse, bad payload) so callers can distinguish a
+    registry-unavailable state from a registry that legitimately
+    reports zero hot engines (which returns an empty set). Lazy httpx
+    import keeps the CLI usable in environments without httpx.
     """
     if not dashboard_url:
-        return set()
+        return None
     try:
         import httpx  # noqa: WPS433 — lazy import is intentional
     except ImportError:
-        return set()
+        return None
     url = dashboard_url.rstrip("/") + "/api/registry/active"
     try:
         with httpx.Client(timeout=2.0) as client:
             resp = client.get(url)
             if resp.status_code != 200:
-                return set()
+                return None
             data = resp.json()
     except Exception:
-        return set()
+        return None
     ids = data.get("active_session_ids") if isinstance(data, dict) else None
     if not isinstance(ids, list):
-        return set()
+        return None
     return {str(x) for x in ids if x}
 
 
@@ -92,7 +95,7 @@ def list_sessions(
     if not db_path.exists():
         return []
     active_from_registry = _fetch_active_session_ids(dashboard_url)
-    have_registry = bool(active_from_registry) or bool(dashboard_url)
+    have_registry = active_from_registry is not None
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
@@ -100,9 +103,12 @@ def list_sessions(
             conn.execute("PRAGMA journal_mode=WAL")
         rows = conn.execute(
             "SELECT s.id AS session_id, s.started_at, s.ended_at, "
-            "(SELECT MAX(timestamp) FROM messages m WHERE m.session_id = s.id) "
-            "  AS last_msg_ts "
+            "  m.last_msg_ts "
             "FROM sessions s "
+            "LEFT JOIN ("
+            "  SELECT session_id, MAX(timestamp) AS last_msg_ts "
+            "  FROM messages GROUP BY session_id"
+            ") m ON m.session_id = s.id "
             "ORDER BY s.started_at DESC"
         ).fetchall()
     finally:
@@ -110,7 +116,7 @@ def list_sessions(
     out: list[dict[str, Any]] = []
     for r in rows:
         sid = str(r["session_id"])
-        if dashboard_url:
+        if have_registry:
             active = sid in active_from_registry
         else:
             active = r["ended_at"] is None
