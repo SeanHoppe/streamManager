@@ -376,8 +376,11 @@ def test_engine_registry_refresh_all_idempotent(tmp_path):
     bus.resolve_hitl(flag["id"], "approved")
 
     eng_b = reg.get_or_create("s-B")
-    # Ensure the spawn-time hydrator (daemon) has run; refresh_all is a
-    # synchronous deterministic backstop that doesn't depend on thread timing.
+    # Post-Task-I: Hydrator is lazy and only spawns on first evaluate().
+    # Post-Task-M: refresh_all skips engines with hydrated=False to avoid
+    # racing the in-flight hydrator. For this deterministic backstop test,
+    # mark eng_b hydrated so refresh_all picks it up directly.
+    eng_b.hydrated = True
     n = reg.refresh_all()
     assert eng_b.graph.patterns.get(target_hash) is not None
     assert eng_b.graph.patterns[target_hash].level == PatternLevel.L1

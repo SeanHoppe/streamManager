@@ -223,10 +223,28 @@ async def _startup_cli_pool() -> None:
         _get_cli_pool()
     except Exception:
         log.exception("cli_pool: startup warmup raised; continuing")
+    # Task M (v1.1): wire EngineRegistry.start_refresh() so cross-session
+    # pattern flips made via the operator UI propagate to hot engines on
+    # the chained 60s tick. Best-effort: a missing registry must not
+    # block startup.
+    try:
+        reg = _get_engine_registry()
+        if reg is not None:
+            reg.start_refresh()
+    except Exception:
+        log.exception("registry: start_refresh raised; continuing")
 
 
 @app.on_event("shutdown")
 async def _shutdown_cli_pool_event() -> None:
+    # Task M (v1.1): stop the EngineRegistry refresh timer first so the
+    # daemon Timer is joined deterministically before the pool tears down.
+    try:
+        reg = _get_engine_registry()
+        if reg is not None:
+            reg.stop_refresh()
+    except Exception:
+        log.exception("registry: stop_refresh raised; continuing")
     _shutdown_cli_pool()
 
 
@@ -526,9 +544,20 @@ async def api_registry_active():
     """
     reg = _get_engine_registry()
     if reg is None:
-        return {"active_session_ids": [], "count": 0}
+        return {
+            "active_session_ids": [],
+            "count": 0,
+            "refresh_active": False,
+            "last_refresh_ts": None,
+        }
     ids = reg.active_session_ids()
-    return {"active_session_ids": ids, "count": len(ids)}
+    status = reg.refresh_status()
+    return {
+        "active_session_ids": ids,
+        "count": len(ids),
+        "refresh_active": status["refresh_active"],
+        "last_refresh_ts": status["last_refresh_ts"],
+    }
 
 
 @app.get("/api/sessions")
