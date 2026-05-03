@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """sm_consumer — governed-session daemon for SM desktop_command control plane.
 
-Spawned alongside a Claude Code instance in a governed session. Long-polls
-the SM dashboard for pending commands addressed to ``--session-id``,
-validates HMAC, runs the matching executor, and acks.
+Spawned alongside a Claude Code instance in a governed session. Subscribes
+to the SM dashboard's SSE stream for pending commands addressed to
+``--session-id``, validates HMAC, runs the matching executor, and acks.
 
 Usage:
     python tools/sm_consumer.py \
@@ -13,7 +13,9 @@ Usage:
 
 The shared secret is read from an env var (default ``SM_DESKTOP_SECRET``)
 so the secret never appears on the command line / process list.
-Reference: docs/sync-comms-qa.md OQ4.
+
+Reference: docs/sync-comms-qa.md OQ4 (long-poll, removed v1.2),
+docs/adr/ADR-14-desktop-command-sse.md (SSE, sole transport as of v1.2).
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from stream_manager.desktop_command_consumer import (  # noqa: E402
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="sm_consumer",
-        description="Governed-session daemon: poll SM for desktop_command, validate, ack.",
+        description="Governed-session daemon: SSE-subscribe to SM, validate, ack.",
     )
     parser.add_argument(
         "--sm-url",
@@ -54,20 +56,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Env var holding the HMAC shared secret (default: SM_DESKTOP_SECRET).",
     )
     parser.add_argument(
-        "--poll-interval",
-        type=float,
-        default=1.0,
-        help="Seconds between polls (default 1.0, OQ4 lock). long-poll only.",
-    )
-    parser.add_argument(
         "--transport",
-        choices=("long-poll", "sse"),
-        default="long-poll",
+        choices=("sse",),
+        default="sse",
         help=(
-            "Command delivery transport. 'long-poll' (default in v1.1 for "
-            "compatibility) GETs /api/commands/pending each interval. 'sse' "
-            "(v1.1, ADR-14) subscribes to /api/commands/stream for "
-            "sub-second delivery. v1.2 will flip the default to 'sse'."
+            "Command delivery transport. Only 'sse' is accepted as of "
+            "v1.2 — the legacy 'long-poll' value was removed. Subscribes "
+            "to /api/commands/stream for sub-second delivery (ADR-14)."
         ),
     )
     parser.add_argument(
@@ -98,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
         session_id=args.session_id,
         secret=secret,
         executors=_default_executors(),
-        poll_interval=args.poll_interval,
         transport=args.transport,
     )
     try:
