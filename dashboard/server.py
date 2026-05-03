@@ -403,12 +403,63 @@ async def api_registry_active():
     visibility. The dashboard process today does not host engines, so
     on a fresh boot this list is empty; future in-process engine hosts
     (soak driver, SM daemon) will populate it.
+
+    Task M: also surfaces cross-session refresh-loop liveness:
+    - refresh_active: True iff the periodic refresh timer is running
+    - last_refresh_ts: epoch seconds of the last refresh_all() return
+      (None if it has never run)
     """
     reg = _get_engine_registry()
     if reg is None:
-        return {"active_session_ids": [], "count": 0}
+        return {
+            "active_session_ids": [],
+            "count": 0,
+            "refresh_active": False,
+            "last_refresh_ts": None,
+        }
     ids = reg.active_session_ids()
-    return {"active_session_ids": ids, "count": len(ids)}
+    status = reg.refresh_status() if hasattr(reg, "refresh_status") else {}
+    return {
+        "active_session_ids": ids,
+        "count": len(ids),
+        "refresh_active": bool(status.get("refresh_active", False)),
+        "last_refresh_ts": status.get("last_refresh_ts"),
+    }
+
+
+# ── Task M: EngineRegistry refresh wiring ────────────────────────────
+# The dashboard is the canonical long-lived host for the per-session
+# EngineRegistry. Operator pattern flips (promote/demote via the dash)
+# need to propagate to hot in-process engines within ~60s, which means
+# the periodic refresh timer must be running. Task F left auto_refresh
+# defaulted to False to keep test runs deterministic; here we opt in
+# explicitly at startup and tear down cleanly at shutdown.
+
+
+@app.on_event("startup")
+async def _startup_registry_refresh() -> None:  # pragma: no cover - boot path
+    reg = _get_engine_registry()
+    if reg is None:
+        log.warning("registry refresh: registry unavailable, skipping start_refresh")
+        return
+    try:
+        reg.start_refresh()
+        log.info("registry refresh: started (60s interval)")
+    except Exception:
+        log.exception("registry refresh: start_refresh failed")
+
+
+@app.on_event("shutdown")
+async def _shutdown_registry_refresh() -> None:  # pragma: no cover - boot path
+    global _engine_registry
+    reg = _engine_registry
+    if reg is None:
+        return
+    try:
+        reg.stop_refresh()
+        log.info("registry refresh: stopped")
+    except Exception:
+        log.exception("registry refresh: stop_refresh failed")
 
 
 @app.get("/api/sessions")
