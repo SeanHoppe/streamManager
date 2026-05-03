@@ -775,9 +775,9 @@ class GovernanceEngine:
 
         OQ5/OQ6/OQ8: cross-session promotion is gated on operator approval.
         Auto-flagging is replaced by a HITL row with trigger_reason
-        "cross_session_flag" and proposed_action "flag_cross_session:<hash>"
-        so the resolution dispatcher can recover the hash without a schema
-        change.
+        "cross_session_flag"; the pattern hash travels in the dedicated
+        hitl_pending.matched_hash column (Task L, v1.1; replaces the v1.0
+        `flag_cross_session:<hash>` proposed_action hack).
         """
         if self.bus is None or not self.session_id:
             return
@@ -819,9 +819,10 @@ class GovernanceEngine:
             self.bus.publish(anchor)
             self.bus.queue_hitl(
                 message_id=anchor.id,
-                proposed_action=f"flag_cross_session:{new_hash}",
+                proposed_action="flag",
                 proposed_confidence=0.9,
                 trigger_reason="cross_session_flag",
+                matched_hash=new_hash,
             )
         except Exception:
             log.exception("cross-session: queue_hitl failed")
