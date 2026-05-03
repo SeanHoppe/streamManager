@@ -2526,7 +2526,13 @@ function tickHitlBar(pid){
 
 async function fetchHitlPending(){
   try{
-    const r = await fetch('/api/hitl/pending');
+    // v1.2 Task B: scope queue to the picked session when one is set;
+    // empty value or '__all__' restores pre-task all-sessions behavior.
+    const sid = (window.PHASE6 && PHASE6.selectedSessionId) || null;
+    const url = sid
+      ? `/api/hitl/pending?session_id=${encodeURIComponent(sid)}`
+      : '/api/hitl/pending';
+    const r = await fetch(url);
     const rows = await r.json();
     HITL.pending = Array.isArray(rows) ? rows : [];
     renderHitlPanel();
@@ -3046,47 +3052,106 @@ setInterval(()=>{
 /* ── session selector ────────────────────────────────── */
 const sessSelect = $('sessSelect');
 let _lastSessionList = [];
+let _activeSessionIdSet = new Set();
+// v1.2 Task B: track first-render so we can pick the most recently
+// active session as the default selection on page load. Subsequent
+// refreshes preserve the user's explicit choice.
+let _sessSelectInitialized = false;
+const ALL_SESSIONS_VALUE = '__all__';
+
+async function _fetchActiveSessionIds(){
+  // Task M shipped /api/registry/active. Treat any failure as "no
+  // registry" → fall back to listing all sessions without an active
+  // tag. Do not modify the payload shape.
+  try{
+    const r = await fetch('/api/registry/active');
+    if(!r.ok) return new Set();
+    const data = await r.json();
+    const ids = (data && Array.isArray(data.active_session_ids))
+      ? data.active_session_ids : [];
+    return new Set(ids);
+  }catch(_){ return new Set(); }
+}
 
 async function refreshSessionSelector(){
   try{
-    const r = await fetch('/api/sessions?limit=20');
+    const [r, activeIds] = await Promise.all([
+      fetch('/api/sessions?limit=20'),
+      _fetchActiveSessionIds(),
+    ]);
     if(!r.ok) return;
     const rows = await r.json();
     if(!Array.isArray(rows)) return;
     _lastSessionList = rows;
-    if(rows.length < 2){
-      sessSelect.classList.remove('show');
+    _activeSessionIdSet = activeIds;
+    // Re-render only when the (id, active-flag) tuple list changes.
+    const sig = rows
+      .map(s=>`${s.id||''}:${activeIds.has(s.id) ? '1' : '0'}`).join('|');
+    if(sessSelect.dataset.ids === sig){
+      // Even on no-op, ensure visibility on first run.
+      if(rows.length >= 1) sessSelect.classList.add('show');
       return;
     }
-    // Re-render only when the id list changes
-    const ids = rows.map(s=>s.id||'').join('|');
-    if(sessSelect.dataset.ids === ids) return;
-    sessSelect.dataset.ids = ids;
+    sessSelect.dataset.ids = sig;
     sessSelect.innerHTML = '';
     const optAll = document.createElement('option');
-    optAll.value = '';
+    optAll.value = ALL_SESSIONS_VALUE;
     optAll.textContent = '— all sessions —';
     sessSelect.appendChild(optAll);
     rows.forEach(s=>{
       const opt = document.createElement('option');
       opt.value = s.id || '';
       const when = s.started_at ? new Date(s.started_at*1000).toLocaleTimeString() : '–';
-      opt.textContent = `${s.project_slug || s.id?.slice(0,8) || '?'} — ${when}`;
+      const tag = activeIds.has(s.id) ? ' ●' : '';
+      opt.textContent = `${s.project_slug || s.id?.slice(0,8) || '?'} — ${when}${tag}`;
       sessSelect.appendChild(opt);
     });
     if(PHASE6.selectedSessionId){
       sessSelect.value = PHASE6.selectedSessionId;
+    }else if(!_sessSelectInitialized){
+      // Default selection on first page load: most recently active
+      // session if the registry surfaced any; otherwise the most
+      // recently started session in the list. The list is already
+      // sorted started_at DESC by /api/sessions.
+      const firstActive = rows.find(s => activeIds.has(s.id));
+      const pick = firstActive || rows[0];
+      if(pick && pick.id){
+        PHASE6.selectedSessionId = pick.id;
+        sessSelect.value = pick.id;
+        // Notify dependent panes once on initial pick.
+        try{ fetchHitlPending(); }catch(_){}
+        try{ fetchAgents(); }catch(_){}
+        // Match the change-handler contract: external subscribers
+        // (Session Mirror, etc.) should learn about the initial
+        // selection too, not just user-driven changes.
+        try{
+          document.dispatchEvent(new CustomEvent('sm:session-changed', {
+            detail: { sessionId: PHASE6.selectedSessionId },
+          }));
+        }catch(_){}
+      }else{
+        sessSelect.value = ALL_SESSIONS_VALUE;
+      }
     }
-    sessSelect.classList.add('show');
+    _sessSelectInitialized = true;
+    if(rows.length >= 1) sessSelect.classList.add('show');
+    else sessSelect.classList.remove('show');
   }catch(_){ /* ignore */ }
 }
 sessSelect.addEventListener('change', ()=>{
-  PHASE6.selectedSessionId = sessSelect.value || null;
+  const v = sessSelect.value;
+  PHASE6.selectedSessionId = (v && v !== ALL_SESSIONS_VALUE) ? v : null;
   // Re-fetch all session-scoped panels.
   fetchHitlPending();
   fetchAgents();
-  // Hint: browser users can hard-refresh to reseed feed; SSE filtering
-  // happens client-side via shouldShowForSession() below.
+  // Notify any external subscribers (Session Mirror wires its own
+  // change handler; this dispatch is a no-op for it but lets future
+  // panes opt in via a single hook).
+  try{
+    document.dispatchEvent(new CustomEvent('sm:session-changed', {
+      detail: { sessionId: PHASE6.selectedSessionId },
+    }));
+  }catch(_){}
 });
 
 function shouldShowForSession(sessId){
