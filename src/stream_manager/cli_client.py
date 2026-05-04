@@ -54,6 +54,7 @@ EVENT_TYPE = "background_job"
 # is now the only accepted transport and the default. Passing
 # ``"json"`` raises ValueError with a CHANGELOG / ADR-15 migration
 # hint. See docs/adr/ADR-15-wirecli-transport.md.
+# Single-value Literal: kept as a contract surface for future transports; do not collapse to `str`.
 Transport = Literal["wirecli"]
 DEFAULT_TRANSPORT: Transport = "wirecli"
 _VALID_TRANSPORTS: frozenset[str] = frozenset({"wirecli"})

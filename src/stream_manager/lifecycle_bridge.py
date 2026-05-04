@@ -247,6 +247,11 @@ class LifecycleBridge:
 # ──────────────────────────────────────────────────────────────────────
 
 
+_VALID_EVENT_SUBTYPES = frozenset(
+    {EVENT_BG_JOB_START, EVENT_BG_JOB_END, EVENT_AGENT_SPAWN, EVENT_AGENT_DONE}
+)
+
+
 def _record_event_type(rec: dict) -> str | None:
     """Map a Claude Code JSONL record to a lifecycle event_type, or None.
 
@@ -255,8 +260,24 @@ def _record_event_type(rec: dict) -> str | None:
     spawns. ``message.content[*].name`` is the conventional Anthropic
     tool-use name for either Bash or Task. ``stop_reason`` / ``status``
     fields signal completion.
+
+    Disambiguation order (v1.3 tightening):
+
+    1. If the record carries an explicit ``event_subtype`` field that is
+       one of the known lifecycle event types, use it directly. This is
+       the durable contract surface — upstream emitters can opt in to
+       deterministic classification without us inferring from
+       ``type == "tool_result"`` + ``background``, which is ambiguous
+       on same-tick start/end pairs.
+    2. Otherwise fall back to the heuristic: tool name + completion
+       hints (``stopReason``/``stop_reason``/``status``/``type``).
     """
     try:
+        # 1. Explicit subtype wins over inference.
+        explicit = rec.get("event_subtype")
+        if isinstance(explicit, str) and explicit in _VALID_EVENT_SUBTYPES:
+            return explicit
+        # 2. Heuristic fallback.
         tool_name = ""
         msg = rec.get("message") or {}
         content_list = msg.get("content")
@@ -320,6 +341,18 @@ class HookFolderPoller:
     Designed as a thin shim — when upstream Claude Code ships first-class
     BackgroundJobStart/AgentSpawn hooks, this poller becomes redundant
     and can be retired without touching ``LifecycleBridge``.
+
+    .. note::
+        Rotation detection uses ``(st_ino, st_mtime)`` which is the
+        preferred path on POSIX. ``st_ino`` is unstable on Windows
+        (NTFS file IDs are not always preserved across rename/replace,
+        and ``st_mtime`` resolution can be coarse), so a same-or-larger
+        truncate-and-rewrite may slip past the rotation guard. Windows
+        callers should not rely on rotation invalidation for
+        correctness; the JSONL append-mostly contract makes this an
+        acceptable trade-off in practice. A content-hash sentinel of
+        the first 64 B is the next-step option if Windows reliability
+        is needed.
     """
 
     def __init__(

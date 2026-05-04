@@ -770,6 +770,24 @@ class MessageBus:
             for r in rows
         ]
 
+    def fetch_rows(
+        self,
+        query: str,
+        params: tuple = (),
+    ) -> list[tuple]:
+        """Read-only helper for tests / introspection.
+
+        Run a SELECT (or any read-only statement) under the bus lock and
+        return ``fetchall()`` as a list of tuples. This exists so callers
+        do not have to reach into ``self._conn`` directly. The helper is
+        intentionally narrow: no row factory, no DDL, no commit semantics
+        — pass the query and bound parameters and consume the rows.
+
+        Added in v1.3 to migrate tests off ``bus._conn.execute(...)``.
+        """
+        with self._lock:
+            return list(self._conn.execute(query, params).fetchall())
+
     def stats(self) -> dict[str, int]:
         with self._lock:
             mrow = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()

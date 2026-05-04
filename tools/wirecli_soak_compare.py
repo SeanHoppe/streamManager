@@ -29,6 +29,17 @@ For each transport we record per-payload outcome:
 
 Output: a markdown report with one row per payload, summary counts,
 and a verdict line.
+
+.. note::
+    Output filename history (v1.1 → v1.2): pre-v1.2 reports were
+    written as ``soak-wirecli-json-*.md``. v1.2 (Task E) removed the
+    JSON-transport leg of the comparison and the report stem was
+    flipped to ``soak-wirecli-wire-*.md``. Old reports under the
+    ``soak-wirecli-json-*.md`` stem are NOT auto-renamed; operators
+    comparing soak results across the v1.1/v1.2 boundary should grep
+    BOTH stems (e.g. ``ls reports/soak-wirecli-{json,wire}-*.md``).
+    Implementing the on-disk migration is deferred — the rename is
+    documentation-only at the v1.3 boundary.
 """
 
 from __future__ import annotations
