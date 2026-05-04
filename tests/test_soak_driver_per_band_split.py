@@ -13,10 +13,37 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
 import soak_driver  # noqa: E402
+
+
+def _parse_band_rows(block: str) -> dict[str, dict[str, str]]:
+    """Parse the per-band markdown table into ``{label: {col: value}}``.
+
+    P1 / v1.3 review fix (Fix C): the prior assertions like
+    ``block.count("| 5  |") == 2`` coupled the test to the format-spec
+    padding. Split the block into lines, find rows whose first non-empty
+    column matches a known band label, and parse the ``| n | p50 | p95 |``
+    columns from there. The parser strips whitespace so it is robust to
+    column-width tweaks.
+    """
+    out: dict[str, dict[str, str]] = {}
+    labels = {"ALLOW (routine)", "L2/L3 escalation", "L4 alignment"}
+    for line in block.splitlines():
+        if not line.startswith("|"):
+            continue
+        # Split on `|`, drop leading/trailing empty cells, strip whitespace.
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cells) < 4:
+            continue
+        label = cells[0]
+        if label in labels:
+            out[label] = {"n": cells[1], "p50": cells[2], "p95": cells[3]}
+    return out
 
 
 def test_per_band_split_renders_three_rows() -> None:
@@ -30,10 +57,8 @@ def test_per_band_split_renders_three_rows() -> None:
     assert "### Per-band latency (p50/p95)" in block
     # Header row of the table.
     assert "| Path" in block and "p50" in block and "p95" in block
-    # Three band rows.
-    assert "ALLOW (routine)" in block
-    assert "L2/L3 escalation" in block
-    assert "L4 alignment" in block
+    rows = _parse_band_rows(block)
+    assert set(rows) == {"ALLOW (routine)", "L2/L3 escalation", "L4 alignment"}
 
 
 def test_per_band_split_records_n_per_band() -> None:
@@ -44,10 +69,10 @@ def test_per_band_split_records_n_per_band() -> None:
             l4=[10.0] * 5,
         )
     )
-    # Numerator on each row should be the band count (50 / 5 / 5).
-    assert "| 50 |" in block
-    # The L2/L3 + L4 bands both have n=5 — make sure both rows render.
-    assert block.count("| 5  |") == 2
+    rows = _parse_band_rows(block)
+    assert int(rows["ALLOW (routine)"]["n"]) == 50
+    assert int(rows["L2/L3 escalation"]["n"]) == 5
+    assert int(rows["L4 alignment"]["n"]) == 5
 
 
 def test_per_band_split_handles_empty_band_gracefully() -> None:
@@ -59,10 +84,14 @@ def test_per_band_split_handles_empty_band_gracefully() -> None:
             l4=[1.0, 2.0],
         )
     )
-    assert "ALLOW (routine)" in block
-    assert "n/a" in block
-    # The L4 row with one sample should still render p50/p95.
-    assert "L4 alignment" in block
+    rows = _parse_band_rows(block)
+    assert int(rows["ALLOW (routine)"]["n"]) == 0
+    assert rows["ALLOW (routine)"]["p50"] == "n/a"
+    assert rows["ALLOW (routine)"]["p95"] == "n/a"
+    assert int(rows["L2/L3 escalation"]["n"]) == 0
+    # The L4 row with two samples should still render p50/p95 (not n/a).
+    assert int(rows["L4 alignment"]["n"]) == 2
+    assert rows["L4 alignment"]["p50"] != "n/a"
 
 
 def test_driver_state_has_allow_latency_bucket() -> None:
@@ -84,6 +113,7 @@ def test_per_band_split_p50_p95_match_percentile_helper() -> None:
     assert f"{p95:.2f} s" in block
 
 
+@pytest.mark.slow
 def test_replay_report_includes_per_band_block(tmp_path: Path) -> None:
     """End-to-end: a replay run emits the per-band heading in its report."""
     import json

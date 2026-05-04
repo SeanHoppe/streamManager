@@ -361,8 +361,8 @@ def _format_per_band_split(
     lines: list[str] = []
     lines.append("### Per-band latency (p50/p95)")
     lines.append("")
-    lines.append("| Path                 | n  | p50      | p95      |")
-    lines.append("|----------------------|----|----------|----------|")
+    lines.append("| Path                 |  n  | p50      | p95      |")
+    lines.append("|----------------------|-----|----------|----------|")
     for label, data in (
         ("ALLOW (routine)", allow),
         ("L2/L3 escalation", l2_l3),
@@ -370,12 +370,12 @@ def _format_per_band_split(
     ):
         n = len(data)
         if n == 0:
-            lines.append(f"| {label:<20} | 0  | n/a      | n/a      |")
+            lines.append(f"| {label:<20} |   0 | n/a      | n/a      |")
             continue
         p50 = _percentile(data, 50)
         p95 = _percentile(data, 95)
         lines.append(
-            f"| {label:<20} | {n:<2} | {p50:>5.2f} s  | {p95:>5.2f} s  |"
+            f"| {label:<20} | {n:>3} | {p50:>5.2f} s  | {p95:>5.2f} s  |"
         )
     lines.append("")
     return lines
@@ -397,20 +397,16 @@ def _format_lifecycle_bridge_final_state(
     Read-only consumption per the do-not-touch contract — we do not
     modify the bridge surface.
     """
-    # Late-import to keep tools/soak_driver.py importable without the
-    # full src layout (e.g. for the helper-only unit tests).
-    try:
-        from stream_manager.lifecycle_bridge import (  # noqa: WPS433
-            EVENT_AGENT_DONE,
-            EVENT_AGENT_SPAWN,
-            EVENT_BG_JOB_END,
-            EVENT_BG_JOB_START,
-        )
-    except Exception:  # pragma: no cover - defensive
-        EVENT_BG_JOB_START = "bg_job_start"
-        EVENT_BG_JOB_END = "bg_job_end"
-        EVENT_AGENT_SPAWN = "agent_spawn"
-        EVENT_AGENT_DONE = "agent_done"
+    # Late-import keeps `tools/soak_driver.py` importable without the
+    # full src layout (e.g. for the helper-only unit tests, which add
+    # `src/` to `sys.path` themselves). The constants are stable, so no
+    # defensive fallback — let the ImportError surface.
+    from stream_manager.lifecycle_bridge import (  # noqa: WPS433
+        EVENT_AGENT_DONE,
+        EVENT_AGENT_SPAWN,
+        EVENT_BG_JOB_END,
+        EVENT_BG_JOB_START,
+    )
 
     seen = seen or set()
     start_types = {EVENT_BG_JOB_START, EVENT_AGENT_SPAWN}

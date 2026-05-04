@@ -21,6 +21,8 @@ import datetime as _dt
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -93,3 +95,46 @@ def test_allow_overwrite_re_resolves_to_same_path(tmp_path: Path) -> None:
     p1 = cassette_record._resolve_cassette_path(tmp_path, allow_overwrite=True)
     p2 = cassette_record._resolve_cassette_path(tmp_path, allow_overwrite=True)
     assert p1 == p2
+
+
+def test_default_collision_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1 / v1.3 review fix (Fix A): two recorder runs landing at the same
+    UTC second must NOT silently clobber each other. The helper must raise
+    ``FileExistsError`` when ``allow_overwrite=False`` and the resolved
+    path already exists.
+
+    Patch the recorder's ``_dt`` reference so HHMMSS lands deterministically,
+    pre-create the file at the resolved path, then call the helper.
+    """
+    fixed_today = _dt.date(2026, 5, 4)
+    fixed_now = _dt.datetime(2026, 5, 4, 12, 34, 56, tzinfo=_dt.timezone.utc)
+
+    class _FakeDate:
+        @staticmethod
+        def today():
+            return fixed_today
+
+    class _FakeDt:
+        timezone = _dt.timezone
+
+        class datetime:  # noqa: N801 - matches stdlib API
+            @staticmethod
+            def now(tz=None):
+                return fixed_now
+
+        date = _FakeDate
+
+    monkeypatch.setattr(cassette_record, "_dt", _FakeDt)
+
+    expected_name = "soak_cassette_2026-05-04T123456Z.jsonl"
+    pre_existing = tmp_path / expected_name
+    pre_existing.write_text("collision-bait\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError) as exc_info:
+        cassette_record._resolve_cassette_path(tmp_path, allow_overwrite=False)
+
+    msg = str(exc_info.value)
+    assert "cassette already exists" in msg
+    assert "--allow-overwrite" in msg
+    # Pre-existing file must NOT have been clobbered.
+    assert pre_existing.read_text(encoding="utf-8") == "collision-bait\n"

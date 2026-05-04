@@ -94,7 +94,15 @@ def _resolve_cassette_path(out_dir: Path, *, allow_overwrite: bool) -> Path:
     if allow_overwrite:
         return out_dir / f"soak_cassette_{today}.jsonl"
     hhmmss = _dt.datetime.now(_dt.timezone.utc).strftime("%H%M%S")
-    return out_dir / f"soak_cassette_{today}T{hhmmss}Z.jsonl"
+    path = out_dir / f"soak_cassette_{today}T{hhmmss}Z.jsonl"
+    # P1 / v1.3 review fix (Fix A): two recorder runs in the same UTC
+    # second silently clobbered. Refuse to overwrite unless the operator
+    # explicitly asked for it.
+    if path.exists():
+        raise FileExistsError(
+            f"cassette already exists: {path}; pass --allow-overwrite to clobber"
+        )
+    return path
 
 
 def main() -> int:
