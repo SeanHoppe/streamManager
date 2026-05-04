@@ -6,11 +6,55 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-05-04
+
+P6 close-gaps maintenance release (PR #75). Adds Path-A soak coverage
+of the Learn Mode hot path so ADR-5 can be re-baselined against v1.3
+code. v1.3.0 (commit `01e749a`) was tagged feature-complete but had
+not exercised the FR-LM-1..6 envelopes under ship-gate soak — this
+release closes that gap.
+
+- **Cassette `learn_dialogue` envelope kind** (`tools/cassette_record.py`,
+  `tools/soak_driver.py`): recorder pumps 10 pre-canned Desktop ↔ user
+  dialogue pairs through the live Sonnet categorizer per cassette
+  refresh; cassette p95 is a relative regression signal only.
+- **Soak driver replay path** routes `learn_dialogue` envelopes into a
+  new `lm_categorize_latencies_s` band; per-band table grows an
+  "LM (categorize)" row.
+- **Soak driver ship-gate path** runs the same dialogue pump after the
+  engine.evaluate publish loop with real Sonnet, surfacing the LM band
+  in the M3 ship-gate report.
+- **Backward compat:** v1.2 cassettes (zero `learn_dialogue` rows)
+  replay unchanged; legacy CI runs may pass `--skip-lm-pump`.
+- **ADR-17** amended (additive): `learn_dialogue` schema documented
+  under §"v1.3 learn_dialogue extension".
+- **ADR-5** re-baselined: new §"v1.3 ship-gate baseline" against
+  `reports/soak-20260504T152005Z.md` (M3, 32.2 min, `--cli-pool-size 2`).
+  Overall p50 3.680 s / p95 10.436 s — **parity** with v1.2 (Δp95
+  +0.04 s). New per-band rows: ALLOW p95 9.60 s, L2/L3 p95 6.08 s,
+  L4 p95 13.89 s, LM p95 15.39 s. ALLOW p95 budget widened from
+  speculative ≤ 6 s to measured ≤ 12 s; new LM (categorize) p95
+  budget ≤ 25 s.
+- **Lifecycle bridge orphan-key check** now positively asserted at
+  ship-gate (P1 hardening firing; v1.2 caveat resolved).
+
+### Notes
+
+- v1.3 verdict path is **at parity** with v1.2 (overall p95 +0.04 s).
+  Learn Mode advisory bias (P5d `bias_for` read) does NOT regress the
+  verdict hot path.
+- Lifecycle bridge orphan-key check now positively asserted at
+  ship-gate; carried v1.2 caveat resolved.
+- ALLOW p95 separated from overall envelope for the first time. The
+  9.60 s measurement supersedes the v1.2 speculative ≤ 6 s; v1.4
+  publish-path instrumentation is queued.
+
 ## [1.3.0] — 2026-05-04
 
-Tagged ship of the v1.3 cycle. See `docs/v1.3-task-plan.md` for the
-full phase list (P0–P6) and `docs/v1.3-soak-lm-extension.md` for the
-Path-A close-gaps work that unblocked the ship-gate. Highlights:
+Tagged ship of the v1.3 cycle (commit `01e749a`, PR #74 merge). See
+`docs/v1.3-task-plan.md` for the full phase list (P0–P6) and the
+ship-gate maintenance release [1.3.1] above for the Path-A close-gaps
+work. Highlights:
 
 - **P0** (PR #54): cycle frame + testing methodology
   (`docs/v1.3-testing.md`) + v1.4 backlog seed.
@@ -44,33 +88,6 @@ Path-A close-gaps work that unblocked the ship-gate. Highlights:
     PR #64 review fixes, drift audit across P5 sub-phases, ADR-19
     canonical/audit split, end-to-end pipeline test, FR-LM-* CI
     coverage map, dashboard bias-hint badge.
-- **P6 close-gaps Path-A** (this branch, `ship/v1.3-soak-lm-extension`):
-  - Cassette `learn_dialogue` envelope kind — recorder pumps 10
-    pre-canned Desktop ↔ user dialogue pairs through the live
-    Sonnet categorizer per cassette refresh.
-  - Soak driver replay path routes `learn_dialogue` envelopes into
-    a new `lm_categorize_latencies_s` band; ship-gate path runs the
-    same dialogue pump after the engine.evaluate publish loop with
-    real Sonnet, surfacing an "LM (categorize)" row in the per-band
-    p50/p95 table.
-  - Backward compat: v1.2 cassettes (zero `learn_dialogue` rows)
-    replay unchanged; legacy CI runs may pass `--skip-lm-pump`.
-  - ADR-17 amended (additive) with `learn_dialogue` schema; ADR-5
-    re-baselined against `reports/soak-20260504T152005Z.md` (M3
-    ship-gate, p50 3.680 s / p95 10.436 s overall + new LM row
-    p50 12.50 s / p95 15.39 s); ADR-5 ALLOW p95 budget widened from
-    speculative ≤ 6 s to measured ≤ 12 s.
-
-### Notes
-
-- v1.3 verdict path is **at parity** with v1.2 (overall p95 +0.04 s).
-  Learn Mode advisory bias (P5d `bias_for` read) does NOT regress the
-  verdict hot path.
-- Lifecycle bridge orphan-key check now positively asserted at
-  ship-gate; carried v1.2 caveat resolved.
-- ALLOW p95 separated from overall envelope for the first time. The
-  9.60 s measurement supersedes the v1.2 speculative ≤ 6 s; v1.4
-  publish-path instrumentation is queued.
 
 ## [1.2.0] — 2026-05-03
 
