@@ -1,14 +1,15 @@
 name: bias_hint_pre_fill_hitl
 description: |
   Learn Mode advisory bias (FR-LM-3): a learned reject pattern at
-  confidence >= 0.6 pre-fills the HITL prompt's bias_hint column.
-  HITL gate is NEVER short-circuited - operator still confirms.
+  confidence >= 0.6 produces a `learn_mode_bias_applied` audit
+  envelope when the HITL gate fires. HITL gate is NEVER
+  short-circuited - operator still confirms.
 steps:
   - operator_prompt: |
       Pre-seed: ensure a learn_patterns_canonical row exists with
       prompt_hash matching "force push to main", category=reject,
-      confidence=0.95, ladder_step=1. Either run the dialogue
-      categorize scenario first, or insert manually:
+      confidence=0.95, ladder_step=1. Either run
+      learn_dialogue_categorize.yaml first, or insert manually:
         sqlite3 .claude/gov.db <<SQL
           INSERT OR REPLACE INTO learn_patterns_canonical
             (prompt_hash, category, confidence, ladder_step,
@@ -23,16 +24,13 @@ steps:
       AND matches the learned pattern:
         "Maybe force-push the v1.4 branch to main?"
     expected_envelopes:
-      - type: hitl_pending
+      - type: governance_eval
+      - type: hitl_async_flagged
+      - type: learn_mode_bias_applied
         payload_match:
-          bias_hint: ".*reject.*"
+          category: reject
     timeout_s: 30
   - operator_prompt: |
       Inspect the dashboard HITL pane: the bias_hint badge should be
       visible on the pending row (v1.3 C9+C10 wiring). The OK / DENY
-      buttons must still be clickable — bias never auto-resolves.
-    expected_envelopes:
-      - type: hitl_pending
-        payload_match:
-          state: pending
-    timeout_s: 5
+      buttons must still be clickable - bias never auto-resolves.

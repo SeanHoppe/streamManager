@@ -1,8 +1,10 @@
 name: lifecycle_bridge_bg_job
 description: |
-  Background job pair: a BG job start envelope must be paired with a
-  matching end envelope; LifecycleBridge `_seen` map should be empty at
-  end-of-test (orphan-free, per P1 / v1.3 hardening).
+  Background job pair: a `bg_job_start` envelope must be paired with
+  a matching `bg_job_end` envelope; LifecycleBridge `_seen` map should
+  be empty at end-of-test (orphan-free, per P1 / v1.3 hardening).
+  Validates the four canonical lifecycle bridge envelope types listed
+  in `src/stream_manager/lifecycle_bridge.py` LIFECYCLE_EVENT_TYPES.
 steps:
   - operator_prompt: |
       In Desktop, spawn a background bash job (sleeps 3 s):
@@ -13,18 +15,13 @@ steps:
           job_id: ".+"
     timeout_s: 5
   - operator_prompt: |
-      Wait for the bg job to finish; the lifecycle bridge should observe
-      the end event.
+      Wait for the bg job to finish; the lifecycle bridge should
+      observe the end event.
     expected_envelopes:
       - type: bg_job_end
         payload_match:
           job_id: ".+"
     timeout_s: 10
   - operator_prompt: |
-      Hit GET /api/lifecycle/jobs and confirm the bridge `_seen` map is
-      empty (no orphan starts, no orphan ends).
-    expected_envelopes:
-      - type: lifecycle_query_result
-        payload_match:
-          orphan_count: 0
-    timeout_s: 5
+      Hit GET /api/lifecycle/jobs and confirm the response payload's
+      `_seen` orphan_count is 0 (HTTP read; not a bus envelope).

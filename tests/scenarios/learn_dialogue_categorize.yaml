@@ -1,34 +1,31 @@
 name: learn_dialogue_categorize
 description: |
-  Learn Mode end-to-end (FR-LM-1..6). Desktop dialogue turn pair
-  (assistant prompt + user reply) flows through the JSONL tailer →
-  desktop_prompt + user_reply messages on the bus → categorizer
-  worker drains and writes a learn_patterns_canonical row.
+  Learn Mode end-to-end (FR-LM-1..6). A Desktop dialogue turn pair
+  (assistant prompt + user reply) flows through the JSONL tailer and
+  publishes `desktop_prompt` + `user_reply` bus envelopes. The
+  categorizer worker drains them and writes a row into the
+  `learn_patterns_canonical` table (no envelope is published per
+  worker tick — the canonical row IS the artifact).
 steps:
   - operator_prompt: |
-      Ensure Learn Mode is enabled (header pill green or env set):
-        SM_LEARN_MODE=1
-      Start the dashboard + categorizer host:
+      Ensure Learn Mode is enabled. Either set the boot env var:
+        export SM_LEARN_MODE=1
+      or click the LEARN MODE pill in the dashboard header to ON.
+      Then start the dashboard host:
         uvicorn dashboard.server:app --port 8765 &
   - operator_prompt: |
       In Desktop, ask:
         "Should we force-push the v1.4 work to main now?"
-      Answer in Desktop chat:
+      Reply in Desktop chat with:
         "no, hold the merge until tests pass"
     expected_envelopes:
       - type: desktop_prompt
-        payload_match:
-          synthetic: false
       - type: user_reply
-        payload_match:
-          synthetic: false
     timeout_s: 10
   - operator_prompt: |
       Wait one categorizer tick (~5 s default poll interval).
-      A learn_patterns_canonical row should appear with
-      category=reject and confidence >= 0.6.
-    expected_envelopes:
-      - type: learn_categorizer_progress
-        payload_match:
-          category: reject
-    timeout_s: 30
+      Confirm a learn_patterns_canonical row appeared with
+      category=reject and confidence >= 0.6:
+        sqlite3 .claude/gov.db \
+          "SELECT category, confidence FROM learn_patterns_canonical \
+           ORDER BY last_observed_at DESC LIMIT 1"

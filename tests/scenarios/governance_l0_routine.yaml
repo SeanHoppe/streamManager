@@ -1,5 +1,10 @@
 name: governance_l0_routine
-description: Routine ALLOW commands short-circuit at L0 (no CLI, no HITL).
+description: |
+  Routine ALLOW commands short-circuit at L0 (no CLI escalation, no
+  HITL). Verifies the inbound governance_eval envelope lands on the
+  bus and the decision row in `decisions` table records action=ALLOW
+  with layer=0 (no governance_call envelope is published — L0
+  short-circuits before the CLI escalation path).
 steps:
   - operator_prompt: |
       In Desktop, run a routine read-only shell command:
@@ -8,17 +13,15 @@ steps:
       - type: governance_eval
         payload_match:
           role: user
-      - type: governance_decision
-        payload_match:
-          action: ALLOW
-          layer: 0
     timeout_s: 10
   - operator_prompt: |
       Run another routine read:
         ls src/stream_manager
     expected_envelopes:
       - type: governance_eval
-      - type: governance_decision
-        payload_match:
-          action: ALLOW
     timeout_s: 10
+  - operator_prompt: |
+      Inspect the `decisions` table to confirm both calls landed
+      action=ALLOW + layer=0:
+        sqlite3 .claude/gov.db \
+          "SELECT action, layer FROM decisions ORDER BY id DESC LIMIT 2"

@@ -81,6 +81,68 @@ def test_run_scenarios_handles_yaml_parse_error(tmp_path):
     assert failed == 1
 
 
+def test_run_scenarios_rejects_non_dict_payload_match(tmp_path):
+    p = tmp_path / "bad-pm.yaml"
+    _write_yaml(
+        p,
+        "name: bad-pm\n"
+        "description: payload_match must be mapping\n"
+        "steps:\n"
+        "  - operator_prompt: 'go'\n"
+        "    expected_envelopes:\n"
+        "      - type: foo\n"
+        "        payload_match: \"not a mapping\"\n"
+        "    timeout_s: 5\n",
+    )
+    failed = scenario_runner.run_scenarios(p, live=False)
+    assert failed >= 1
+
+
+def test_run_scenarios_warns_on_unknown_envelope_type(tmp_path, capsys):
+    """Unknown envelope types emit a soft warning, not a failure.
+
+    Keeps the library forward-compat with future envelope additions.
+    """
+    p = tmp_path / "future-type.yaml"
+    _write_yaml(
+        p,
+        "name: future-type\n"
+        "description: type not in registry\n"
+        "steps:\n"
+        "  - operator_prompt: 'go'\n"
+        "    expected_envelopes:\n"
+        "      - type: not_a_real_envelope_yet\n"
+        "    timeout_s: 5\n",
+    )
+    failed = scenario_runner.run_scenarios(p, live=False)
+    assert failed == 0
+    captured = capsys.readouterr().out
+    assert "WARN" in captured
+    assert "not_a_real_envelope_yet" in captured
+
+
+def test_known_envelope_registry_covers_shipped_scenarios():
+    """Every envelope type referenced by a shipped scenario must be in
+    the known-types registry — otherwise the library emits warnings on
+    every CI run.
+    """
+    import yaml as _yaml
+    used: set[str] = set()
+    for f in (ROOT / "tests" / "scenarios").glob("*.yaml"):
+        with f.open("r", encoding="utf-8") as fh:
+            doc = _yaml.safe_load(fh)
+        for step in doc.get("steps", []):
+            for env in step.get("expected_envelopes", []) or []:
+                t = env.get("type")
+                if isinstance(t, str):
+                    used.add(t)
+    unknown = used - scenario_runner._KNOWN_ENVELOPE_TYPES
+    assert not unknown, (
+        f"shipped scenarios reference {sorted(unknown)} not in "
+        f"_KNOWN_ENVELOPE_TYPES — fix the YAMLs or update the registry"
+    )
+
+
 def test_run_scenarios_rejects_non_string_prompt(tmp_path):
     p = tmp_path / "bad-prompt.yaml"
     _write_yaml(

@@ -325,6 +325,40 @@ def run_probes(path: Path, *, live: bool) -> int:
     return failed
 
 
+# Known envelope types — matches `type=` and `type=` literals in
+# src/stream_manager/. Soft-validated by run_scenarios: a scenario
+# referencing a type NOT in this set emits a warning (not a failure)
+# so future-feature scenarios are still loadable; an unrecognised
+# type is a hint that the scenario predates a planned envelope or
+# refers to a row-only side-effect (e.g. hitl_pending lives in a
+# table, not on the bus). Update this set when new envelope types
+# land.
+_KNOWN_ENVELOPE_TYPES: frozenset[str] = frozenset(
+    {
+        "governance_eval",
+        "governance_call",
+        "governance_negative_regression",
+        "governance_variance_alert",
+        "nfr_model_routing_alert",
+        "agent_identified",
+        "desktop_pause",
+        "desktop_prompt",
+        "user_reply",
+        "learn_mode_bias_applied",
+        "cross_session_promotion",
+        # Lifecycle bridge events (src/stream_manager/lifecycle_bridge.py).
+        "bg_job_start",
+        "bg_job_end",
+        "agent_spawn",
+        "agent_done",
+        # HITL bus events (src/stream_manager/hitl.py).
+        "hitl_async_flagged",
+        "hitl_sync_queued",
+        "hitl_timeout",
+    }
+)
+
+
 def run_scenarios(path: Path, *, live: bool) -> int:
     """v1.4 Method 1 — Scripted Scenario Replay.
 
@@ -400,6 +434,17 @@ def run_scenarios(path: Path, *, live: bool) -> int:
                 )
                 failed += 1
                 break
+            etype = str(env["type"])
+            if etype not in _KNOWN_ENVELOPE_TYPES:
+                # Soft-warn: don't fail. Type may be planned/future or
+                # may live as a table row (e.g. hitl_pending) rather
+                # than a bus envelope.
+                _emit(
+                    f"  WARN step #{idx}.envelope[{j}]: type {etype!r} "
+                    f"not in known envelope registry — verify it lands "
+                    f"on the bus, or update _KNOWN_ENVELOPE_TYPES.",
+                    live=live,
+                )
         else:
             # Schema OK — print + (CI) move on, (live) would wait here.
             _emit(
