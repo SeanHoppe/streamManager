@@ -64,7 +64,7 @@ def bus(tmp_path: Path) -> _msg_bus.MessageBus:
         pass
 
 
-def _insert_pattern(
+def _seed_canonical(
     bus: _msg_bus.MessageBus,
     *,
     prompt: str,
@@ -73,12 +73,20 @@ def _insert_pattern(
     ladder_step: int = 1,
     last_reinforced_ts: float | None = None,
 ) -> None:
+    """Seed a row in ``learn_patterns_canonical``.
+
+    v1.3 C1 (corrective): ``bias_for`` reads the canonical projection
+    (P5e UPSERT table) instead of the append-only ``learn_patterns``
+    audit log. Tests now plant rows here, mirroring ``_seed_canonical``
+    in ``tests/test_decay.py``.
+    """
     now = time.time() if last_reinforced_ts is None else last_reinforced_ts
     bus.execute_write(
-        "INSERT INTO learn_patterns "
+        "INSERT INTO learn_patterns_canonical "
         "(prompt_hash, category, confidence, ladder_step, "
-        " last_reinforced_ts, contradicted_count, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        " last_reinforced_ts, contradicted_count, created_at, "
+        " updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             prompt_hash(prompt),
             category,
@@ -87,8 +95,14 @@ def _insert_pattern(
             float(now),
             0,
             float(now),
+            float(now),
         ),
     )
+
+
+# Backwards-compatible alias for tests that still use the old name.
+# v1.3 C1: redirected to the canonical seed helper.
+_insert_pattern = _seed_canonical
 
 
 def _build_engine(
@@ -127,22 +141,18 @@ def test_bias_for_returns_none_for_empty_prompt(bus):
     assert bias_for("", bus) is None
 
 
-def test_bias_for_picks_most_recently_reinforced(bus):
-    """Multiple rows on the same hash → freshest reinforcement wins."""
+def test_bias_for_returns_canonical_row(bus):
+    """v1.3 C1: ``bias_for`` reads the canonical projection.
+
+    The canonical table has ``UNIQUE(prompt_hash)`` — one effective row
+    per prompt. ``consolidate_patterns`` (P5e) merges new observations
+    into the canonical row and updates ``last_reinforced_ts`` /
+    ``confidence`` / ``ladder_step``. This test plants the post-
+    consolidation state directly and asserts the bias reflects it.
+    """
     prompt = "Want me to ship the v1.3 PR?"
-    older = time.time() - 3600
     newer = time.time()
-    # Insert two matching rows. The older one has higher confidence, but
-    # the newer one is more recently reinforced — design says recency
-    # wins (last_reinforced_ts DESC, then confidence DESC).
-    _insert_pattern(
-        bus,
-        prompt=prompt,
-        category="approve",
-        confidence=0.95,
-        last_reinforced_ts=older,
-    )
-    _insert_pattern(
+    _seed_canonical(
         bus,
         prompt=prompt,
         category="reject",
@@ -153,20 +163,14 @@ def test_bias_for_picks_most_recently_reinforced(bus):
     assert hint is not None
     assert hint.category == "reject"
     assert hint.confidence == pytest.approx(0.80)
+    assert hint.last_reinforced_ts == pytest.approx(newer)
 
 
-def test_bias_for_breaks_ties_on_confidence(bus):
-    """Same last_reinforced_ts → highest confidence wins."""
-    prompt = "Same timestamp tie-break"
+def test_bias_for_reflects_canonical_confidence(bus):
+    """Confidence on the canonical row surfaces verbatim in the hint."""
+    prompt = "Confidence reflection test"
     fixed_ts = time.time()
-    _insert_pattern(
-        bus,
-        prompt=prompt,
-        category="approve",
-        confidence=0.70,
-        last_reinforced_ts=fixed_ts,
-    )
-    _insert_pattern(
+    _seed_canonical(
         bus,
         prompt=prompt,
         category="approve",
