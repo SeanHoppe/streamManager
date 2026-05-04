@@ -56,6 +56,12 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from stream_manager.message_bus import MessageBus
 
+from stream_manager.decay import (
+    DECAY_SWEEP_TICK_INTERVAL,
+    consolidate_patterns,
+    maybe_run_decay_sweep,
+)
+
 log = logging.getLogger(__name__)
 
 # Sonnet is the categorization model per design spec §2.4.
@@ -303,7 +309,6 @@ class LearnCategorizerWorker:
         self._last_id_seen = self._load_last_id_seen()
         # P5e: decay-sweep cadence. Default = run every N ticks per
         # ``decay.DECAY_SWEEP_TICK_INTERVAL``. Tests can override.
-        from stream_manager.decay import DECAY_SWEEP_TICK_INTERVAL
         self._decay_interval = (
             int(decay_sweep_interval)
             if decay_sweep_interval is not None
@@ -449,7 +454,6 @@ class LearnCategorizerWorker:
 
     def _maybe_decay_sweep(self) -> None:
         """Run a decay sweep on the configured cadence. Never raises."""
-        from stream_manager.decay import maybe_run_decay_sweep
         try:
             maybe_run_decay_sweep(
                 self._bus,
@@ -559,7 +563,6 @@ class LearnCategorizerWorker:
         # P5e: merge this observation into the canonical projection.
         # Reinforcement / contradiction semantics live in decay.py.
         try:
-            from stream_manager.decay import consolidate_patterns
             consolidate_patterns(
                 self._bus,
                 h,
