@@ -101,6 +101,41 @@ def test_driver_state_has_allow_latency_bucket() -> None:
     assert state.allow_latencies_s == []
 
 
+def test_driver_state_has_lm_categorize_bucket() -> None:
+    """v1.3 Path-A: `_DriverState` exposes `lm_categorize_latencies_s`."""
+    state = soak_driver._DriverState()
+    assert hasattr(state, "lm_categorize_latencies_s")
+    assert state.lm_categorize_latencies_s == []
+
+
+def test_per_band_split_includes_lm_row_when_supplied() -> None:
+    """v1.3 Path-A: passing `lm_categorize=` adds an LM row to the table."""
+    block = "\n".join(
+        soak_driver._format_per_band_split(
+            allow=[0.1, 0.2],
+            l2_l3=[1.0, 2.0],
+            l4=[5.0, 6.0],
+            lm_categorize=[3.0, 4.0],
+        )
+    )
+    assert "LM (categorize)" in block
+    # Sanity: the LM row n must reflect the 2 sample inputs.
+    assert "|   2 |" in block or "|  2  |" in block or "| 2 " in block
+
+
+def test_per_band_split_omits_lm_row_when_none() -> None:
+    """v1.3 Path-A: passing lm_categorize=None preserves legacy 3-row layout."""
+    block = "\n".join(
+        soak_driver._format_per_band_split(
+            allow=[0.1],
+            l2_l3=[1.0],
+            l4=[5.0],
+            lm_categorize=None,
+        )
+    )
+    assert "LM (categorize)" not in block
+
+
 def test_per_band_split_p50_p95_match_percentile_helper() -> None:
     """Numerical sanity check: p50/p95 match `_percentile` exactly."""
     allow = [0.1, 0.2, 0.3, 0.4, 0.5]

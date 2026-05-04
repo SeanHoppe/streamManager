@@ -6,6 +6,72 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-04
+
+Tagged ship of the v1.3 cycle. See `docs/v1.3-task-plan.md` for the
+full phase list (P0–P6) and `docs/v1.3-soak-lm-extension.md` for the
+Path-A close-gaps work that unblocked the ship-gate. Highlights:
+
+- **P0** (PR #54): cycle frame + testing methodology
+  (`docs/v1.3-testing.md`) + v1.4 backlog seed.
+- **P1** (PR #56): soak driver + recorder hardening — same-day
+  cassette no-clobber, per-band p50/p95 split (ALLOW / L2-L3 / L4),
+  positive `LifecycleBridge._seen` orphan-free assertion at ship-gate.
+- **P2** (PR #57): `list_active_jobs` windowed query — 100-pair tail
+  truncation fixed.
+- **P3** (PR #58): REQUIREMENTS FR-OG drift audit — session picker,
+  lifecycle pane, SSE-only desktop_command transport, WireCLI default
+  + json refusal entries added; spec version pin bumped.
+- **P4** (PR #59–63): code-quality sweep (7 🔵 carry-overs).
+- **P5** marquee — Learn Mode (advisory dialogue bias):
+  - **P5a** (PR #60): `docs/learn-mode-design.md` + REQUIREMENTS
+    FR-LM-1..6.
+  - **P5b** (PR #61): JSONL tail extension — `desktop_prompt` and
+    `user_reply` message types, paired via `parentUuid` chain;
+    SM-self filtering enforces `feedback_no_self_monitor.md`.
+  - **P5c** (PR #62): Sonnet categorizer worker (`learn_categorizer.py`)
+    — out-of-band, dedicated subprocess, off the verdict hot path
+    (ADR-5 NFR-P2 unaffected); new `learn_patterns` table.
+  - **P5d** (PR #63): advisory bias hookup (`bias_for`) — read-only
+    consumer of `learn_patterns`; never overrides safety-first checks
+    or short-circuits HITL gate; INTENT.md §"Safety priorities"
+    always wins.
+  - **P5e** (PR #64): decay/reinforcement/contradiction logic
+    (`decay.py`) + beacon/probe drivers
+    (`tests/beacons/learn_mode_categorizer.jsonl`,
+    `tests/probes/learn_mode_drift.csv`).
+  - **Corrective C0–C10** (PRs #65–73): bias-canonical wiring,
+    PR #64 review fixes, drift audit across P5 sub-phases, ADR-19
+    canonical/audit split, end-to-end pipeline test, FR-LM-* CI
+    coverage map, dashboard bias-hint badge.
+- **P6 close-gaps Path-A** (this branch, `ship/v1.3-soak-lm-extension`):
+  - Cassette `learn_dialogue` envelope kind — recorder pumps 10
+    pre-canned Desktop ↔ user dialogue pairs through the live
+    Sonnet categorizer per cassette refresh.
+  - Soak driver replay path routes `learn_dialogue` envelopes into
+    a new `lm_categorize_latencies_s` band; ship-gate path runs the
+    same dialogue pump after the engine.evaluate publish loop with
+    real Sonnet, surfacing an "LM (categorize)" row in the per-band
+    p50/p95 table.
+  - Backward compat: v1.2 cassettes (zero `learn_dialogue` rows)
+    replay unchanged; legacy CI runs may pass `--skip-lm-pump`.
+  - ADR-17 amended (additive) with `learn_dialogue` schema; ADR-5
+    re-baselined against `reports/soak-20260504T152005Z.md` (M3
+    ship-gate, p50 3.680 s / p95 10.436 s overall + new LM row
+    p50 12.50 s / p95 15.39 s); ADR-5 ALLOW p95 budget widened from
+    speculative ≤ 6 s to measured ≤ 12 s.
+
+### Notes
+
+- v1.3 verdict path is **at parity** with v1.2 (overall p95 +0.04 s).
+  Learn Mode advisory bias (P5d `bias_for` read) does NOT regress the
+  verdict hot path.
+- Lifecycle bridge orphan-key check now positively asserted at
+  ship-gate; carried v1.2 caveat resolved.
+- ALLOW p95 separated from overall envelope for the first time. The
+  9.60 s measurement supersedes the v1.2 speculative ≤ 6 s; v1.4
+  publish-path instrumentation is queued.
+
 ## [1.2.0] — 2026-05-03
 
 Tagged ship of the v1.2 cycle. See `docs/v1.2-task-plan.md` for the
