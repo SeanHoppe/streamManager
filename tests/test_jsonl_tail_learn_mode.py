@@ -57,6 +57,22 @@ def worker(bus: _msg_bus.MessageBus, tmp_path: Path) -> JsonlTailWorker:
     return w
 
 
+@pytest.fixture
+def set_sm_own_session_id(
+    monkeypatch: pytest.MonkeyPatch, worker: JsonlTailWorker
+):
+    """Set SM_OWN_SESSION_ID=sm-owner-42 for tests that need filtering.
+
+    SM_OWN_SESSION_ID is set in production at SM boot. The worker caches
+    the value at ``start()``; tests bypass ``start()`` and operate on
+    ``_process_line`` directly, so we both monkeypatch the env (for any
+    code that still reads it) AND seed the cached attribute.
+    """
+    monkeypatch.setenv("SM_OWN_SESSION_ID", "sm-owner-42")
+    worker._sm_own_session_id = "sm-owner-42"
+    yield
+
+
 def _drive(worker: JsonlTailWorker, fixture_path: Path) -> None:
     """Replay a fixture JSONL through the tailer's per-line entry point."""
     for line in fixture_path.read_text(encoding="utf-8").splitlines():
@@ -90,49 +106,44 @@ def _read_messages(bus: _msg_bus.MessageBus) -> list[dict]:
 def test_assistant_text_turn_emits_desktop_prompt(
     worker: JsonlTailWorker,
     bus: _msg_bus.MessageBus,
-    monkeypatch: pytest.MonkeyPatch,
+    set_sm_own_session_id: None,
 ) -> None:
-    # SM_OWN_SESSION_ID is set in production at SM boot. Set it here too
-    # so SM-originated turns in the fixture are filtered (their dedicated
-    # assertion lives in test_sm_originated_turn_is_filtered_out).
-    monkeypatch.setenv("SM_OWN_SESSION_ID", "sm-owner-42")
     _drive(worker, FIXTURE_PATH)
     msgs = _read_messages(bus)
     desktop = [m for m in msgs if m["type"] == "desktop_prompt"]
     assert len(desktop) == 1
     assert desktop[0]["content"] == "Want me to run the failing tests first?"
     assert desktop[0]["metadata"]["uuid"] == "a1"
+    assert desktop[0]["metadata"]["desktop_session_id"] == "desktop-S1"
 
 
 def test_user_text_turn_emits_user_reply_with_pair_id(
     worker: JsonlTailWorker,
     bus: _msg_bus.MessageBus,
-    monkeypatch: pytest.MonkeyPatch,
+    set_sm_own_session_id: None,
 ) -> None:
-    # SM_OWN_SESSION_ID is set in production at SM boot. Set it here too
-    # so SM-originated turns in the fixture are filtered (their dedicated
-    # assertion lives in test_sm_originated_turn_is_filtered_out).
-    monkeypatch.setenv("SM_OWN_SESSION_ID", "sm-owner-42")
     _drive(worker, FIXTURE_PATH)
     msgs = _read_messages(bus)
 
     desktop = [m for m in msgs if m["type"] == "desktop_prompt"]
     user = [m for m in msgs if m["type"] == "user_reply"]
     assert len(desktop) == 1
-    assert len(user) == 1
+    # Two user_reply envelopes: u1 (paired) and u3 (mixed text+tool_result).
+    assert len(user) == 2
 
+    # Locate the user_reply that pairs with a1's desktop_prompt.
+    paired = next(m for m in user if m["metadata"]["parent_uuid"] == "a1")
     desktop_id = desktop[0]["id"]
-    assert user[0]["content"] == "yes please, just the failing ones"
-    assert user[0]["metadata"]["parent_uuid"] == "a1"
+    assert paired["content"] == "yes please, just the failing ones"
     # The user_reply's pair_id MUST point at the preceding desktop_prompt's
     # envelope id — this is the link Learn Mode's categorizer follows.
-    assert user[0]["metadata"]["pair_id"] == desktop_id
+    assert paired["metadata"]["pair_id"] == desktop_id
 
 
 def test_tool_use_and_tool_result_are_not_dialogue_turns(
     worker: JsonlTailWorker,
     bus: _msg_bus.MessageBus,
-    monkeypatch: pytest.MonkeyPatch,
+    set_sm_own_session_id: None,
 ) -> None:
     """Only chat *text* parts count as dialogue.
 
@@ -140,43 +151,65 @@ def test_tool_use_and_tool_result_are_not_dialogue_turns(
     ``tool_result`` (user) MUST NOT emit desktop_prompt / user_reply
     envelopes — those are tool traffic, not Desktop ↔ user dialogue.
     """
-    # SM_OWN_SESSION_ID is set in production at SM boot. Set it here too
-    # so SM-originated turns in the fixture are filtered (their dedicated
-    # assertion lives in test_sm_originated_turn_is_filtered_out).
-    monkeypatch.setenv("SM_OWN_SESSION_ID", "sm-owner-42")
     _drive(worker, FIXTURE_PATH)
     msgs = _read_messages(bus)
     contents = {m["content"] for m in msgs if m["type"] in ("desktop_prompt", "user_reply")}
-    # Tool traffic (a2 tool_use, u2 tool_result) must not appear.
+    # Tool traffic (a2 tool_use, u2 pure tool_result) must not appear.
     assert all("tool_use" not in c and "tool_result" not in c for c in contents)
-    # And only the two text turns are emitted.
+    # Three text turns are emitted: a1 desktop_prompt, u1 user_reply,
+    # u3 user_reply (mixed text+tool_result; text portion captured).
     text_turns = [m for m in msgs if m["type"] in ("desktop_prompt", "user_reply")]
-    assert len(text_turns) == 2
+    assert len(text_turns) == 3
+
+
+def test_mixed_text_and_tool_result_user_record_captures_text(
+    worker: JsonlTailWorker,
+    bus: _msg_bus.MessageBus,
+    set_sm_own_session_id: None,
+) -> None:
+    """User records with mixed text + tool_result content capture the text.
+
+    Real Claude Code transcripts emit user records that interleave a
+    tool_result with a follow-on text part (e.g. "thanks, ship it" after
+    a Bash tool_result). Learn Mode wants the text portion — it carries
+    the user's actual feedback to the assistant.
+    """
+    _drive(worker, FIXTURE_PATH)
+    msgs = _read_messages(bus)
+    user = [m for m in msgs if m["type"] == "user_reply"]
+    # u3 carries both a tool_result and a text part; the text wins.
+    mixed = [m for m in user if m["metadata"]["uuid"] == "u3"]
+    assert len(mixed) == 1
+    assert mixed[0]["content"] == "thanks, ship it"
 
 
 def test_sm_originated_turn_is_filtered_out(
     worker: JsonlTailWorker,
     bus: _msg_bus.MessageBus,
-    monkeypatch: pytest.MonkeyPatch,
+    set_sm_own_session_id: None,
 ) -> None:
     """Turns whose sessionId == SM_OWN_SESSION_ID MUST NOT be emitted.
 
     Per ``feedback_no_self_monitor.md``: SM must never ingest its own
     HITL prompts/decisions back into the Learn Mode categorizer (creates
     an evaluation feedback loop). The fixture's ``sm-owner-42`` turns
-    represent SM's own JSONL emission and must be excluded.
+    represent SM's own JSONL emission and must be excluded — but the
+    Desktop pair (sessionId=desktop-S1) must still be emitted.
     """
-    monkeypatch.setenv("SM_OWN_SESSION_ID", "sm-owner-42")
     _drive(worker, FIXTURE_PATH)
     msgs = _read_messages(bus)
 
     learn_msgs = [m for m in msgs if m["type"] in ("desktop_prompt", "user_reply")]
+    # Regression guard: the filter must not drop everything.
+    assert len(learn_msgs) > 0
     # No envelope should originate from sm-owner-42.
-    sources = {m["metadata"].get("session_id") for m in learn_msgs}
+    sources = {m["metadata"].get("desktop_session_id") for m in learn_msgs}
     assert "sm-owner-42" not in sources
-    # The Desktop pair (sessionId=desktop-S1) is still emitted.
-    assert len(learn_msgs) == 2
-    assert all(m["metadata"].get("session_id") == "desktop-S1" for m in learn_msgs)
+    # And only the sm-owner-42 turns are filtered — every emitted turn
+    # comes from desktop-S1.
+    assert sources == {"desktop-S1"}
+    # The fixture-emitted Desktop turns: a1 desktop_prompt + u1, u3 user_reply.
+    assert len(learn_msgs) == 3
 
 
 def test_learn_mode_emit_does_not_break_desktop_pause_path(

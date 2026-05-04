@@ -53,21 +53,38 @@ class JsonlTailWorker:
         self._session_id: str = ""
         self._project_slug: str = ""
         self._last_attribution: str | None = None
-        # v1.3 P5b — Learn Mode pairing state. Maps a turn's uuid to the
-        # `desktop_prompt` envelope id that emitted it, so that the next
-        # `user_reply` whose parentUuid points at it can copy that id into
-        # its own metadata.pair_id field. Bounded LRU-style trim keeps
-        # this from growing without limit on a long-lived tail.
-        self._uuid_to_pair: dict[str, str] = {}
-        self._uuid_to_pair_max = 2048
+        # v1.3 P5b — Learn Mode pairing state. Maps a (Desktop session id,
+        # turn uuid) tuple to the `desktop_prompt` envelope id that emitted
+        # it, so that the next `user_reply` whose parentUuid points at it
+        # can copy that id into its own metadata.pair_id field. Keying by
+        # the (session_id_jsonl, uuid) tuple prevents two concurrent
+        # Desktop sessions from colliding on a shared uuid namespace.
+        # Bounded FIFO trim keeps this from growing without limit on a
+        # long-lived tail.
+        self._uuid_to_pair: dict[tuple[str, str], str] = {}
+        self._pair_cache_max = 2048
+        # v1.3 P5b — cached at start(); see start() docstring.
+        self._sm_own_session_id: str = ""
 
     def start(self, session_id: str, project_slug: str) -> None:
+        """Start the tail worker.
+
+        Caches ``SM_OWN_SESSION_ID`` from the environment once at start
+        time (used by ``_is_sm_originated`` to filter SM-self transcripts
+        per ``feedback_no_self_monitor.md``). The operator is responsible
+        for setting this env var before invoking ``start()`` — if it is
+        unset or empty at start time, no SM-self filtering will be
+        applied for the lifetime of this worker.
+        """
         if self._thread is not None and self._thread.is_alive():
             log.warning("JsonlTailWorker already running; ignoring start()")
             return
         self._session_id = session_id
         self._project_slug = project_slug
         self._last_attribution = None
+        self._sm_own_session_id = (
+            os.environ.get("SM_OWN_SESSION_ID") or ""
+        ).strip()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -251,25 +268,28 @@ class JsonlTailWorker:
         """Filter SM-self transcripts per feedback_no_self_monitor.md.
 
         Returns True when the JSONL record's ``sessionId`` matches the
-        environment's ``SM_OWN_SESSION_ID`` (the SM session emission
-        signature established in v1.0 / Task C). When unset or empty,
-        no filtering applies.
+        cached ``SM_OWN_SESSION_ID`` (captured at ``start()``). When the
+        cached value is empty (env var unset at start), no filtering
+        applies.
         """
-        sm_own = (os.environ.get("SM_OWN_SESSION_ID") or "").strip()
+        sm_own = self._sm_own_session_id
         if not sm_own:
             return False
         return session_id_jsonl == sm_own
 
-    def _remember_pair(self, uuid: str, pair_id: str) -> None:
+    def _remember_pair(
+        self, session_id_jsonl: str, uuid: str, pair_id: str
+    ) -> None:
         if not uuid or not pair_id:
             return
-        # Bounded; drop oldest insertions when over budget.
-        if len(self._uuid_to_pair) >= self._uuid_to_pair_max:
+        key = (session_id_jsonl, uuid)
+        # Bounded FIFO; drop oldest insertions when over budget.
+        if len(self._uuid_to_pair) >= self._pair_cache_max:
             # Pop the oldest ~10% in insertion order to avoid thrashing.
-            drop = max(1, self._uuid_to_pair_max // 10)
+            drop = max(1, self._pair_cache_max // 10)
             for k in list(self._uuid_to_pair.keys())[:drop]:
                 self._uuid_to_pair.pop(k, None)
-        self._uuid_to_pair[uuid] = pair_id
+        self._uuid_to_pair[key] = pair_id
 
     def _maybe_emit_learn_mode(
         self, record: dict, session_id_jsonl: str
@@ -293,7 +313,7 @@ class JsonlTailWorker:
                 direction="inbound",
                 content=text,
                 metadata={
-                    "session_id": session_id_jsonl,
+                    "desktop_session_id": session_id_jsonl,
                     "uuid": uuid,
                     "parent_uuid": parent_uuid,
                     "ts": time.time(),
@@ -304,25 +324,32 @@ class JsonlTailWorker:
             except Exception:
                 log.exception("jsonl_tail: bus.publish(desktop_prompt) failed")
                 return
-            # Remember the envelope id keyed by this turn's uuid so the
-            # next user_reply whose parentUuid points at it can carry
-            # the pair_id forward.
-            self._remember_pair(uuid, envelope.id)
+            # Remember the envelope id keyed by (Desktop session, uuid)
+            # so the next user_reply whose parentUuid points at it can
+            # carry the pair_id forward without colliding across
+            # concurrent Desktop sessions.
+            self._remember_pair(session_id_jsonl, uuid, envelope.id)
             return
         # record_type == "user"
-        pair_id = self._uuid_to_pair.get(parent_uuid, "")
+        pair_id = self._uuid_to_pair.get((session_id_jsonl, parent_uuid))
+        metadata: dict = {
+            "desktop_session_id": session_id_jsonl,
+            "uuid": uuid,
+            "parent_uuid": parent_uuid,
+            "ts": time.time(),
+        }
+        # Only attach pair_id when we actually matched a parent prompt;
+        # omitting the key (vs. setting it to "") lets the categorizer
+        # distinguish "no parent" (cold start / eviction / SM-filtered)
+        # via metadata.get("pair_id") returning None.
+        if pair_id:
+            metadata["pair_id"] = pair_id
         envelope = _msg_bus.Message.new(
             session_id=self._session_id,
             type="user_reply",
             direction="inbound",
             content=text,
-            metadata={
-                "session_id": session_id_jsonl,
-                "uuid": uuid,
-                "parent_uuid": parent_uuid,
-                "pair_id": pair_id,
-                "ts": time.time(),
-            },
+            metadata=metadata,
         )
         try:
             self.bus.publish(envelope)
