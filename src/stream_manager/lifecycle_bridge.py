@@ -491,8 +491,15 @@ def list_active_jobs(
             "  FROM messages",
             "  WHERE type = ?",
             "    AND json_extract(metadata, '$.job_id') IS NOT NULL",
+            "    AND json_extract(metadata, '$.event_type') IN (?, ?, ?, ?)",
         ]
-        params: list[object] = [BUS_TYPE]
+        params: list[object] = [
+            BUS_TYPE,
+            EVENT_BG_JOB_START,
+            EVENT_BG_JOB_END,
+            EVENT_AGENT_SPAWN,
+            EVENT_AGENT_DONE,
+        ]
         if session_id:
             sql_parts.append("    AND session_id = ?")
             params.append(session_id)
@@ -524,7 +531,14 @@ def list_active_jobs(
             continue
         et = str(r["event_type"] or "")
         job_id = str(r["job_id"] or "")
-        if et not in LIFECYCLE_EVENT_TYPES or not job_id:
+        # The CTE already constrains event_type ∈ LIFECYCLE_EVENT_TYPES and
+        # the outer SELECT further narrows to *_start* types, so reaching
+        # here with a non-lifecycle event_type would indicate a contract
+        # break. Assert defensively; keep the empty job_id skip.
+        assert et in LIFECYCLE_EVENT_TYPES, (
+            f"unexpected event_type leaked from CTE: {et!r}"
+        )
+        if not job_id:
             continue
         open_rows.append(
             {

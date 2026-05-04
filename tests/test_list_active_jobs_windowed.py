@@ -18,7 +18,15 @@ than to the raw row stream.
 
 from __future__ import annotations
 
-from stream_manager.lifecycle_bridge import LifecycleBridge, list_active_jobs
+import json
+import time
+import uuid
+
+from stream_manager.lifecycle_bridge import (
+    BUS_TYPE,
+    LifecycleBridge,
+    list_active_jobs,
+)
 from stream_manager.message_bus import MessageBus
 
 
@@ -115,4 +123,73 @@ def test_list_active_jobs_limit_applies_to_open_set_not_raw_rows(tmp_path):
 
     out = list_active_jobs(db_path, session_id="s1", limit=5)
     assert {j["job_id"] for j in out} == set(open_ids)
+    bus.close()
+
+
+def test_list_active_jobs_cte_filters_to_lifecycle_event_types(tmp_path):
+    """Non-lifecycle envelopes carrying ``job_id`` must not mask open jobs.
+
+    Review-fix regression: the CTE previously partitioned over ALL bus
+    rows of ``type='lifecycle'`` with non-null ``metadata.job_id``. If a
+    non-lifecycle envelope (``event_type`` not in
+    ``LIFECYCLE_EVENT_TYPES``) ever carried a ``job_id`` matching a real
+    open job, it could win ``rn=1`` and silently mask the open ``*_start``
+    envelope — producing zero rows from ``list_active_jobs`` even though
+    the underlying job is still running.
+    """
+    db_path = str(tmp_path / "gov.db")
+    bus = MessageBus(db_path)
+    bridge = LifecycleBridge(bus=bus)
+
+    # Real open BG job.
+    job_id = "shared-id-001"
+    assert bridge.on_bg_job_start("s1", job_id, name="real open job") is True
+
+    # Inject a NON-lifecycle envelope with the SAME job_id and a NEWER
+    # timestamp. Pre-fix the CTE would pick this row as ``rn=1`` (newest
+    # per job_id) and the outer SELECT's ``event_type IN ('*_start')``
+    # filter would then drop it — yielding 0 rows, masking the real open
+    # job. Inserted directly via ``bus._conn.execute`` because the public
+    # ``LifecycleBridge`` API rejects unknown event_types by design.
+    cur = bus._conn.execute(
+        "SELECT COALESCE(MAX(sequence), 0) FROM messages WHERE session_id=?",
+        ("s1",),
+    )
+    next_seq = (cur.fetchone()[0] or 0) + 1
+    bus._conn.execute(
+        "INSERT INTO messages (id, session_id, sequence, type, direction, "
+        "content, context, metadata, timestamp) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            str(uuid.uuid4()),
+            "s1",
+            next_seq,
+            BUS_TYPE,
+            "inbound",
+            "non-lifecycle envelope sharing job_id",
+            json.dumps({}),
+            json.dumps(
+                {
+                    "event_type": "custom_metric",
+                    "job_id": job_id,
+                    "name": "spurious",
+                    "track_only": True,
+                }
+            ),
+            # Strictly newer than the on_bg_job_start row so it would win
+            # rn=1 if the CTE didn't filter event_type.
+            time.time() + 10.0,
+        ),
+    )
+    bus._conn.commit()
+
+    out = list_active_jobs(db_path, session_id="s1", limit=100)
+    returned_ids = {j["job_id"] for j in out}
+    assert job_id in returned_ids, (
+        "non-lifecycle envelope with shared job_id masked the real open job — "
+        "CTE is not filtering event_type to LIFECYCLE_EVENT_TYPES"
+    )
+    assert len(out) == 1
+    assert out[0]["status"] == "running"
+    assert out[0]["kind"] == "bg_job"
     bus.close()
