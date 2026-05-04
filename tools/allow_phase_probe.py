@@ -49,7 +49,10 @@ from stream_manager.project_context import load as load_project_context  # noqa:
 # matches what the soak driver would record.
 from soak_driver import (  # noqa: E402
     _ALLOW_PHASE_ORDER,
+    _CLI_RESIDUE_SUB_PHASE_ORDER,
     _format_allow_phase_breakout,
+    _format_evaluate_inner_cli_residue_breakout,
+    _format_evaluate_inner_sub_phase_breakout,
     _percentile,
 )
 
@@ -67,6 +70,31 @@ _DEFAULT_PAYLOADS = [
     "ls -la reports/",
 ]
 
+# v1.6 P1: novel payloads that don't precheck-hit and have no graph
+# match — used with --stub-cli to drive the CLI escalation branch via
+# a stubbed CliGovernor runner. NEVER hits the live `claude` CLI.
+_CLI_ESCALATION_PAYLOADS = [
+    "please reformat the indentation in src/foo.py",
+    "consider whether the comment style in module bar should be changed",
+    "draft a short note about the recent refactor in baz module",
+    "evaluate if the variable naming in qux module needs adjustment",
+    "review the docstring wording in the helper function in mod_a",
+]
+
+
+def _stub_cli_envelope() -> str:
+    import json as _json
+    return _json.dumps({
+        "type": "result",
+        "result": _json.dumps({
+            "action": "ALLOW",
+            "confidence": 0.5,
+            "reasoning": "stub",
+        }),
+        "usage": {"input_tokens": 10, "output_tokens": 4},
+        "total_cost_usd": 0.0001,
+    })
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -76,6 +104,17 @@ def main() -> int:
                     help="Throwaway WAL DB for the probe session")
     ap.add_argument("--label", default="probe",
                     help="Label embedded in the report filename + header")
+    ap.add_argument("--stub-cli", action="store_true",
+                    help=(
+                        "v1.6 P1: install a stubbed CliGovernor runner "
+                        "and drive the CLI escalation branch with novel "
+                        "payloads. Does NOT hit the live `claude` CLI. "
+                        "Use to exercise the v1.6 residue keys "
+                        "(cli_setup_ms / cli_dispatch_ms / "
+                        "cli_pool_acquire_ms / cli_pool_send_ms / "
+                        "cli_parse_ms) for sanity-checking before the "
+                        "P2 ship-gate soak."
+                    ))
     args = ap.parse_args()
 
     gov_db = (ROOT / args.gov_db).resolve()
@@ -99,13 +138,42 @@ def main() -> int:
         project_context=snap, bus=bus, session_id=session_id,
     )
 
+    # v1.6 P1: stubbed CLI escalation. We force-construct a CliGovernor
+    # with our stubbed runner and pre-attach it so the engine's
+    # lazy-init path does not stomp on it. The env flag still has to be
+    # set for `is_enabled()` to return True. Spawn-path (no pool) by
+    # design so cli_pool_acquire_ms reports 0.0 by contract.
+    if args.stub_cli:
+        os.environ["BRIDGE_API_GOV"] = "true"
+        from stream_manager.cli_governance import CliGovernor as _CliGov
+
+        class _FakeCP:
+            def __init__(self, stdout: str) -> None:
+                self.stdout = stdout
+                self.stderr = ""
+                self.returncode = 0
+
+        def _stub_runner(cmd, **kwargs):  # noqa: ANN001
+            return _FakeCP(_stub_cli_envelope())
+
+        engine._cli_governor = _CliGov(
+            engine.project_context,
+            runner=_stub_runner,
+            bus=bus,
+            session_id=session_id,
+            pool=None,
+        )
+        payloads = _CLI_ESCALATION_PAYLOADS
+    else:
+        payloads = _DEFAULT_PAYLOADS
+
     phase_ms: dict[str, list[float]] = {}
     overall_ms: list[float] = []
     started_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
     t_start = time.perf_counter()
     try:
         for i in range(args.n):
-            content = _DEFAULT_PAYLOADS[i % len(_DEFAULT_PAYLOADS)]
+            content = payloads[i % len(payloads)]
             msg = Message.new(role="user", content=content)
             t0 = time.perf_counter()
             engine.evaluate(msg)
@@ -148,6 +216,8 @@ def main() -> int:
     lines.append("")
 
     lines.extend(_format_allow_phase_breakout(phase_ms))
+    lines.extend(_format_evaluate_inner_sub_phase_breakout(phase_ms))
+    lines.extend(_format_evaluate_inner_cli_residue_breakout(phase_ms))
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -167,6 +237,23 @@ def main() -> int:
     rank.sort(key=lambda kv: -kv[1])
     for name, val in rank[:3]:
         print(f"  - {name:<24} p95={val:.3f} ms")
+
+    # v1.6 P1: residue summary table — n / p50 / p95 / max for each
+    # of the five new keys. Always printed (rows of zeros for non-CLI
+    # branches) so operators get a consistent shape across runs.
+    print("[allow-phase] v1.6 CLI residue (n / p50 / p95 / max ms):")
+    for k in _CLI_RESIDUE_SUB_PHASE_ORDER:
+        v = phase_ms.get(k, [])
+        if not v:
+            print(f"  - {k:<24} n=0    n/a")
+            continue
+        p50_k = _percentile(v, 50)
+        p95_k = _percentile(v, 95)
+        m_k = max(v)
+        print(
+            f"  - {k:<24} n={len(v):<4} p50={p50_k:.3f}  p95={p95_k:.3f}  "
+            f"max={m_k:.3f}"
+        )
     return 0
 
 

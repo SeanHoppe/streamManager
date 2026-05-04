@@ -425,6 +425,17 @@ _ALLOW_PHASE_ORDER: list[str] = [
     "graph_classify",
     "hydrator_state_read",
     "routing_dispatch",
+    # v1.6 P1: CLI residue sub-phases (extend, do not reorder). They
+    # land after `routing_dispatch` so the v1.5 sub-phase block keeps
+    # its alignment unchanged. Diagnoses ADR-5 v1.5 §"Caveats" — the
+    # ALLOW p95 tail that v1.5 sub-phases summed to 0.13 ms while
+    # `evaluate_inner` p95 = 5599 ms (99.998% residue inside
+    # `_maybe_cli_evaluate` → `CliGovernor.evaluate`).
+    "cli_setup_ms",
+    "cli_dispatch_ms",
+    "cli_pool_acquire_ms",
+    "cli_pool_send_ms",
+    "cli_parse_ms",
     "bias_consult",
     "hitl_classify_trigger",
     "hitl_route",
@@ -443,6 +454,25 @@ _EVALUATE_INNER_SUB_PHASE_ORDER: list[str] = [
     "graph_classify",
     "hydrator_state_read",
     "routing_dispatch",
+]
+
+# v1.6 P1: CLI residue keys rendered by the
+# `### ALLOW _evaluate_inner CLI residue breakout (v1.6)` block.
+# Diagnoses ADR-5 v1.5 §"Caveats" — the v1.5 sub-phases summed to
+# 0.13 ms p95 while `evaluate_inner` p95 = 5599 ms (~99.998% residue),
+# so the ALLOW tail localizes to `_maybe_cli_evaluate` → CLI dispatch.
+# Logical order tracks code path:
+#   cli_setup_ms (lazy CliGovernor + system prompt build)
+#   → cli_dispatch_ms (parent: full CliGovernor.evaluate wall-clock)
+#   → cli_pool_acquire_ms (sibling: wait-for-worker)
+#   → cli_pool_send_ms (sibling: model round-trip)
+#   → cli_parse_ms (sibling: _extract_usage + _parse_envelope)
+_CLI_RESIDUE_SUB_PHASE_ORDER: list[str] = [
+    "cli_setup_ms",
+    "cli_dispatch_ms",
+    "cli_pool_acquire_ms",
+    "cli_pool_send_ms",
+    "cli_parse_ms",
 ]
 
 
@@ -546,6 +576,68 @@ def _format_evaluate_inner_sub_phase_breakout(
     lines.append("| Phase                  |  n  | p50 ms   | p95 ms   | max ms   |")
     lines.append("|------------------------|-----|----------|----------|----------|")
     for phase in _EVALUATE_INNER_SUB_PHASE_ORDER:
+        data = allow_phase_ms.get(phase, [])
+        n = len(data)
+        if n == 0:
+            lines.append(
+                f"| {phase:<22} |   0 | n/a      | n/a      | n/a      |"
+            )
+            continue
+        p50 = _percentile(data, 50)
+        p95 = _percentile(data, 95)
+        m = max(data)
+        lines.append(
+            f"| {phase:<22} | {n:>3} | {p50:>5.2f}    | {p95:>5.2f}    | {m:>6.2f}   |"
+        )
+    lines.append("")
+    return lines
+
+
+def _format_evaluate_inner_cli_residue_breakout(
+    allow_phase_ms: dict[str, list[float]] | None,
+) -> list[str]:
+    """v1.6 P1: render the `### ALLOW _evaluate_inner CLI residue
+    breakout (v1.6)` markdown block.
+
+    Diagnoses ADR-5 v1.5 §"Caveats" — the v1.5 ship-gate
+    (`reports/soak-20260504T201714Z.md`) showed the five v1.5 sub-phases
+    summed to 0.13 ms p95 vs `evaluate_inner` p95 = 5599 ms, so
+    ~99.998% of the ALLOW tail sat inside `_maybe_cli_evaluate` →
+    `CliGovernor.evaluate` → pool acquire / model round-trip / parse.
+    This block attributes that residue to five new sub-phases populated
+    by the v1.6 engine + cli_governance instrumentation.
+
+    Sub-phases will not sum exactly to `cli_dispatch_ms`
+    (`cli_dispatch_ms` includes `_publish_event` and Python overhead).
+    On the pool path, `cli_pool_acquire_ms` and `cli_pool_send_ms` are
+    siblings (wait-for-worker vs model round-trip). On the spawn path,
+    `cli_pool_acquire_ms` is constant 0.0 and `cli_pool_send_ms`
+    covers `subprocess.run`.
+
+    Returns a list of markdown lines; empty list when no v1.6 keys are
+    present (pre-v1.6 engine build) — v1.4 + v1.5 blocks must still
+    render unchanged on the same input.
+    """
+    if not allow_phase_ms:
+        return []
+    # Pre-v1.6 stream: every v1.6 key absent → suppress block entirely.
+    if not any(k in allow_phase_ms for k in _CLI_RESIDUE_SUB_PHASE_ORDER):
+        return []
+    lines: list[str] = []
+    lines.append("### ALLOW _evaluate_inner CLI residue breakout (v1.6)")
+    lines.append("")
+    lines.append(
+        "Per-phase wall-clock for the CLI escalation residue inside "
+        "`_evaluate_inner`. Sourced from "
+        "`engine._last_phase_timings_ms` (v1.6 P1 instrumentation). "
+        "Diagnoses ADR-5 v1.5 §\"Caveats\" — the ALLOW tail that the "
+        "v1.5 sub-phase block left opaque (~99.998% of `evaluate_inner` "
+        "p95 sat inside `_maybe_cli_evaluate`)."
+    )
+    lines.append("")
+    lines.append("| Phase                  |  n  | p50 ms   | p95 ms   | max ms   |")
+    lines.append("|------------------------|-----|----------|----------|----------|")
+    for phase in _CLI_RESIDUE_SUB_PHASE_ORDER:
         data = allow_phase_ms.get(phase, [])
         n = len(data)
         if n == 0:
@@ -780,6 +872,13 @@ def _write_report(
     # §"Caveats").
     lines.extend(
         _format_evaluate_inner_sub_phase_breakout(state.allow_phase_ms)
+    )
+    # v1.6 P1: ALLOW `_evaluate_inner` CLI residue breakout. Renders
+    # directly after the v1.5 block. Suppressed for pre-v1.6 streams so
+    # the v1.4 + v1.5 blocks render unchanged on legacy inputs (per
+    # ADR-5 v1.5 §"Caveats").
+    lines.extend(
+        _format_evaluate_inner_cli_residue_breakout(state.allow_phase_ms)
     )
 
     # P1 / v1.3: LifecycleBridge `_seen` final-state dump. Positively

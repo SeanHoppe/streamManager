@@ -415,6 +415,9 @@ class GovernanceEngine:
                 confidence=og7.confidence,
                 is_ambiguous_block=is_ambiguous_block,
             )
+            # v1.6 P1: FR-OG-7 hit does NOT traverse the CLI — pre-populate
+            # the five residue keys with 0.0 so soak rows stay dense.
+            self._zero_cli_residue_keys(sub_timings)
             self._record_sub_phase_timings(sub_timings)
             return og7
 
@@ -425,6 +428,9 @@ class GovernanceEngine:
             ops = _classify_ops(msg.content)
             blocked_hit = ops & set(profile.blocked_ops)
             if blocked_hit:
+                # v1.6 P1: FR-AR-6 blocked-op short-circuits before CLI —
+                # zero out the residue keys for dense soak rows.
+                self._zero_cli_residue_keys(sub_timings)
                 self._record_sub_phase_timings(sub_timings)
                 return GovDecision(
                     action="BLOCK",
@@ -482,6 +488,12 @@ class GovernanceEngine:
             is_ambiguous_block=is_ambiguous_block,
         )
         sub_timings["routing_dispatch"] = (_pc() - _t) * 1000.0
+        # v1.6 P1: ensure all five CLI residue keys are present on the
+        # final dict regardless of which inner-core branch fired
+        # (precheck-hit, graph-high-confidence-hit, CLI-escalation,
+        # default ALLOW). `setdefault` semantics — branches that DID
+        # call the CLI keep their populated values.
+        self._zero_cli_residue_keys(sub_timings)
         self._record_sub_phase_timings(sub_timings)
         return decision
 
@@ -495,6 +507,23 @@ class GovernanceEngine:
         clears the pending attr.
         """
         self._pending_sub_phase_timings_ms = sub_timings
+
+    @staticmethod
+    def _zero_cli_residue_keys(sub: dict[str, float]) -> None:
+        """v1.6 P1: pre-populate the five CLI residue keys with 0.0 on
+        non-CLI branches (FR-OG-7 hit, FR-AR-6 blocked-op, precheck-hit,
+        graph-high-confidence-hit, default ALLOW with no CLI).
+
+        Soak rows must be dense across all branches so percentile math
+        is honest about the precheck-hit ratio (ADR-5 v1.5 §"Caveats").
+        Uses setdefault so a CLI-traversed branch that already populated
+        a key is never overwritten.
+        """
+        sub.setdefault("cli_setup_ms", 0.0)
+        sub.setdefault("cli_dispatch_ms", 0.0)
+        sub.setdefault("cli_pool_acquire_ms", 0.0)
+        sub.setdefault("cli_pool_send_ms", 0.0)
+        sub.setdefault("cli_parse_ms", 0.0)
 
     def _apply_profile_constraints(
         self,
@@ -968,7 +997,35 @@ class GovernanceEngine:
         )
 
     def _maybe_cli_evaluate(self, content: str, model_id: str | None = None):
+        # v1.6 P1: residue-level wall-clock instrumentation. cli_setup_ms
+        # spans entry → just before CliGovernor.evaluate(...) (covers
+        # lazy CliGovernor() construction and _system_prompt() cache
+        # build on first call). The four CLI-side keys
+        # (cli_dispatch_ms / cli_pool_acquire_ms / cli_pool_send_ms /
+        # cli_parse_ms) are populated by CliGovernor.evaluate when we
+        # thread `sub_timings=sub` through.
+        from time import perf_counter as _pc
+        _t_setup_start = _pc()
+        # `_sub_timings_in_flight` is set by _evaluate_inner before this
+        # call. Defensive: fall back to a throwaway dict for direct
+        # callers (tests that exercise _maybe_cli_evaluate without going
+        # through _evaluate_inner) so the verdict path is unaffected.
+        sub = self._sub_timings_in_flight
+        if sub is None:
+            sub = {}
         if not _cli_enabled():
+            # Per phase-1 prompt: branches that return early WITHOUT
+            # calling the CLI MUST set all five new keys to 0.0 on
+            # `sub`. The few microseconds of `_cli_enabled()` overhead
+            # are intentionally NOT recorded — they would muddy the
+            # precheck-hit-ratio percentile math the soak block relies
+            # on. The non-zero `cli_setup_ms` only fires when the
+            # branch actually traverses the CLI dispatch.
+            sub["cli_setup_ms"] = 0.0
+            sub.setdefault("cli_dispatch_ms", 0.0)
+            sub.setdefault("cli_pool_acquire_ms", 0.0)
+            sub.setdefault("cli_pool_send_ms", 0.0)
+            sub.setdefault("cli_parse_ms", 0.0)
             return None
         if self._cli_governor is None:
             # Phase 7: thread bus + session_id through so CliGovernor can
@@ -987,7 +1044,8 @@ class GovernanceEngine:
         # to the L2/L3 Haiku default for backward compatibility with
         # callers that haven't been updated.
         chosen = model_id if model_id is not None else get_l2_model()
-        return self._cli_governor.evaluate(content, model_id=chosen)
+        sub["cli_setup_ms"] = (_pc() - _t_setup_start) * 1000.0
+        return self._cli_governor.evaluate(content, model_id=chosen, sub_timings=sub)
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:
