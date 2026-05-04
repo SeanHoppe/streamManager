@@ -80,20 +80,30 @@ _KIND_TO_LAYER = {"routine": 0, "l2_l3": 2, "l4": 4, "learn_dialogue": 0}
 
 
 # v1.3 Path-A extension: pre-canned Learn Mode dialogue pairs.
-# Ten pairs covering the actionable category enum plus acknowledge/clarify.
-# Ordering is deterministic (no shuffle) so cassette + ship-gate align
-# on the same inputs.
+# v1.4: extended to (prompt, reply, expected_category) so the same
+# canonical input set drives both the cassette refresh AND the
+# beacon harness (`tests/beacons/learn_mode_cassette_pairs.jsonl`,
+# regenerated via `tools/regenerate_lm_beacons.py`). Single source
+# of truth — eliminates the v1.3 duplication between cassette and
+# beacon fixtures called out in the v1.4 backlog.
+#
+# Ordering is deterministic (no shuffle) so cassette + ship-gate
+# + beacon harness align on the same inputs.
+_LM_DIALOGUE_PAIRS_WITH_CATEGORY: list[tuple[str, str, str]] = [
+    ("Force push to main now?", "yes do it", "approve"),
+    ("Run rm -rf node_modules?", "no, keep them", "reject"),
+    ("Install pkg X to fix Y?", "use pkg Z instead", "redirect"),
+    ("Run pytest in CI?", "what does the suite cover?", "clarify"),
+    ("Branch is rebased and pushed.", "ok thanks", "acknowledge"),
+    ("Deploy to staging?", "approved, ship it", "approve"),
+    ("Drop user_settings table?", "absolutely not", "reject"),
+    ("Use pickle for serialization?", "use json instead", "redirect"),
+    ("Run the migration?", "explain what it does first", "clarify"),
+    ("All checks green.", "looks good", "approve"),
+]
+# Backward-compat alias for callers that only need (prompt, reply).
 _LM_DIALOGUE_PAIRS: list[tuple[str, str]] = [
-    ("Force push to main now?", "yes do it"),
-    ("Run rm -rf node_modules?", "no, keep them"),
-    ("Install pkg X to fix Y?", "use pkg Z instead"),
-    ("Run pytest in CI?", "what does the suite cover?"),
-    ("Branch is rebased and pushed.", "ok thanks"),
-    ("Deploy to staging?", "approved, ship it"),
-    ("Drop user_settings table?", "absolutely not"),
-    ("Use pickle for serialization?", "use json instead"),
-    ("Run the migration?", "explain what it does first"),
-    ("All checks green.", "looks good"),
+    (p, r) for (p, r, _cat) in _LM_DIALOGUE_PAIRS_WITH_CATEGORY
 ]
 
 
