@@ -654,10 +654,64 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
         return False
 
 
+def _decode_bias_hint(raw: object) -> dict | None:
+    """Decode the JSON-encoded ``hitl_pending.bias_hint`` column for
+    dashboard consumption.
+
+    The writer side (`stream_manager.hitl._encode_bias_hint`) stores a
+    minimal Learn Mode advisory shape: category, confidence,
+    ladder_step_suggestion, pattern_id, last_reinforced_ts. The column
+    is the empty string when no hint was attached at queueing time.
+
+    Returns None for empty / malformed payloads so the client can omit
+    the advisory block entirely (v1.3 C10).
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    category = payload.get("category")
+    if not category:
+        return None
+    out: dict[str, object] = {"category": str(category)}
+    if "confidence" in payload:
+        try:
+            out["confidence"] = float(payload["confidence"])
+        except Exception:
+            pass
+    if "ladder_step_suggestion" in payload:
+        try:
+            out["ladder_step_suggestion"] = int(payload["ladder_step_suggestion"])
+        except Exception:
+            pass
+    if "pattern_id" in payload:
+        try:
+            out["pattern_id"] = int(payload["pattern_id"])
+        except Exception:
+            pass
+    if "last_reinforced_ts" in payload:
+        try:
+            out["last_reinforced_ts"] = float(payload["last_reinforced_ts"])
+        except Exception:
+            pass
+    return out
+
+
 @app.get("/api/hitl/pending")
 async def api_hitl_pending(session_id: str | None = None):
     """Return unresolved hitl_pending rows. If session_id is omitted,
-    return unresolved rows across all sessions."""
+    return unresolved rows across all sessions.
+
+    v1.3 C10: the ``bias_hint`` column (JSON-encoded Learn Mode
+    advisory, written by ``HitlQueue.route``) is projected and decoded
+    server-side so the dashboard can pre-fill the operator prompt with
+    the suggested category. Rows without a hint surface ``bias_hint:
+    None``.
+    """
     try:
         conn = _open()
         if not _has_table(conn, "hitl_pending"):
@@ -667,7 +721,7 @@ async def api_hitl_pending(session_id: str | None = None):
             rows = conn.execute(
                 "SELECT hp.id, hp.message_id, hp.proposed_action, "
                 "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
-                "m.session_id, m.content "
+                "hp.bias_hint, m.session_id, m.content "
                 "FROM hitl_pending hp JOIN messages m ON hp.message_id=m.id "
                 "WHERE hp.resolved_at IS NULL AND m.session_id=? "
                 "ORDER BY hp.id ASC",
@@ -677,12 +731,17 @@ async def api_hitl_pending(session_id: str | None = None):
             rows = conn.execute(
                 "SELECT hp.id, hp.message_id, hp.proposed_action, "
                 "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
-                "m.session_id, m.content "
+                "hp.bias_hint, m.session_id, m.content "
                 "FROM hitl_pending hp JOIN messages m ON hp.message_id=m.id "
                 "WHERE hp.resolved_at IS NULL ORDER BY hp.id ASC"
             ).fetchall()
         conn.close()
-        return [dict(r) for r in rows]
+        out: list[dict] = []
+        for r in rows:
+            d = dict(r)
+            d["bias_hint"] = _decode_bias_hint(d.get("bias_hint"))
+            out.append(d)
+        return out
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
 
