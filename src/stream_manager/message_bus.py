@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS hitl_pending (
     trigger_reason TEXT NOT NULL,
     queued_at TEXT NOT NULL,
     resolved_at TEXT,
-    resolution TEXT
+    resolution TEXT,
+    matched_hash TEXT NOT NULL DEFAULT '',
+    bias_hint TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_hitl_pending_unresolved ON hitl_pending(resolved_at);
 
@@ -104,6 +106,66 @@ CREATE TABLE IF NOT EXISTS desktop_commands (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dc_pending ON desktop_commands(session_id, status);
+
+-- v1.3 P5c: Learn Mode categorizer output. One row per categorized
+-- desktop_prompt/user_reply pair. Additive — does not modify any
+-- existing table. The verdict hot path never writes here; this is
+-- populated exclusively by the out-of-band categorizer worker.
+--
+-- Append-only by design; P5e (decay/reinforcement) is responsible for
+-- consolidation. Multiple rows per prompt_hash are expected within and
+-- across process lifetimes — do NOT add UNIQUE(prompt_hash) here.
+CREATE TABLE IF NOT EXISTS learn_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_hash TEXT NOT NULL,
+    category TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    ladder_step INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_ts REAL NOT NULL,
+    contradicted_count INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learn_patterns_hash ON learn_patterns(prompt_hash);
+
+-- v1.3 P5c (Fix A): Durable ledger for the LearnCategorizerWorker.
+-- Persists `last_id_seen` across worker restarts so we don't re-
+-- categorize historical pairs. Generic key/value to allow future
+-- worker state without further schema churn.
+CREATE TABLE IF NOT EXISTS learn_categorizer_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- v1.3 P5e: Canonical (UPSERT) projection of `learn_patterns`.
+-- Additive migration — leaves the append-only `learn_patterns` audit
+-- log untouched. Consolidation/decay pass merges per-prompt_hash rows
+-- into a single canonical record here. Decay sweeps update
+-- `ladder_step` / `last_reinforced_ts` / `contradicted_count` here;
+-- no rewrites of the underlying audit log are required.
+--
+-- Design notes:
+--   * UNIQUE(prompt_hash) is the whole point of this table.
+--   * Append-only `learn_patterns` remains the source of truth for
+--     "what categorizations did we ever observe"; this table answers
+--     "what is the current canonical bias for prompt_hash X".
+--   * Bias readers (P5d `bias_for`) are NOT modified by P5e; they
+--     continue to read `learn_patterns` directly. P5e ships the
+--     decay/consolidate primitives only — wiring `bias_for` to the
+--     canonical projection is deferred to a follow-up if/when the
+--     append-only ordering proves insufficient.
+CREATE TABLE IF NOT EXISTS learn_patterns_canonical (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_hash TEXT NOT NULL UNIQUE,
+    category TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    ladder_step INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_ts REAL NOT NULL,
+    contradicted_count INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learn_patterns_canon_hash
+    ON learn_patterns_canonical(prompt_hash);
 """
 
 
@@ -223,6 +285,16 @@ class MessageBus:
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(
                     "ALTER TABLE hitl_pending ADD COLUMN matched_hash TEXT NOT NULL DEFAULT ''"
+                )
+
+            # v1.3 P5d (Fix B / review) — additive migration for hitl_pending:
+            # JSON-encoded ``bias_hint`` carries the Learn Mode advisory
+            # bias so the dashboard can pre-fill the prompt with the
+            # suggested action. Empty string when no bias matched. The
+            # verdict is never mutated; the operator still confirms.
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(
+                    "ALTER TABLE hitl_pending ADD COLUMN bias_hint TEXT NOT NULL DEFAULT ''"
                 )
 
             # One-time backfill: rows authored before Task L encoded the
@@ -386,19 +458,26 @@ class MessageBus:
         proposed_confidence: float,
         trigger_reason: str,
         matched_hash: str = "",
+        bias_hint: str = "",
     ) -> int:
         """Queue a decision for human approval. Returns hitl_pending.id.
 
         Task L: matched_hash carries the pattern hash for cross_session_flag
         rows so the dispatcher does not need to parse it out of
         proposed_action. Default '' for non-cross-session callers.
+
+        v1.3 P5d (Fix B): ``bias_hint`` is a JSON-encoded
+        ``BiasHint`` payload (or '' when no bias matched). The dashboard
+        reads this column to pre-fill the HITL prompt with the suggested
+        action. Verdict is never mutated; the operator still confirms.
         """
         queued_at = _dt.datetime.now(_dt.UTC).isoformat()
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO hitl_pending (message_id, proposed_action, "
-                "proposed_confidence, trigger_reason, queued_at, matched_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "proposed_confidence, trigger_reason, queued_at, "
+                "matched_hash, bias_hint) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     message_id,
                     proposed_action,
@@ -406,6 +485,7 @@ class MessageBus:
                     trigger_reason,
                     queued_at,
                     matched_hash,
+                    bias_hint,
                 ),
             )
             pending_id = int(cur.lastrowid or 0)
@@ -436,7 +516,8 @@ class MessageBus:
             rows = self._conn.execute(
                 "SELECT hp.id, hp.message_id, hp.proposed_action, "
                 "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
-                "hp.resolved_at, hp.resolution, hp.matched_hash "
+                "hp.resolved_at, hp.resolution, hp.matched_hash, "
+                "hp.bias_hint "
                 "FROM hitl_pending hp "
                 "JOIN messages m ON hp.message_id = m.id "
                 "WHERE m.session_id=? AND hp.resolved_at IS NULL "
@@ -456,6 +537,7 @@ class MessageBus:
                     "resolved_at": r[6],
                     "resolution": r[7],
                     "matched_hash": r[8] or "",
+                    "bias_hint": r[9] or "",
                 }
             )
         return out
@@ -466,7 +548,7 @@ class MessageBus:
             row = self._conn.execute(
                 "SELECT id, message_id, proposed_action, proposed_confidence, "
                 "trigger_reason, queued_at, resolved_at, resolution, "
-                "matched_hash "
+                "matched_hash, bias_hint "
                 "FROM hitl_pending WHERE id=?",
                 (pending_id,),
             ).fetchone()
@@ -482,6 +564,7 @@ class MessageBus:
             "resolved_at": row[6],
             "resolution": row[7],
             "matched_hash": row[8] or "",
+            "bias_hint": row[9] or "",
         }
 
     def annotate_decision(
@@ -797,6 +880,33 @@ class MessageBus:
             )
         with self._lock:
             return list(self._conn.execute(query, params).fetchall())
+
+    def execute_write(
+        self,
+        query: str,
+        params: tuple = (),
+    ) -> None:
+        """Symmetric write companion to ``fetch_rows``.
+
+        Holds the bus lock and runs a non-SELECT statement, matching the
+        codebase's "small write under bus lock" idiom. Connections are
+        opened with ``isolation_level=None`` (autocommit) so no explicit
+        commit is required.
+
+        Guarded write-only: queries whose first keyword is ``select`` or
+        ``with`` raise ``ValueError``. Use ``fetch_rows`` for those.
+
+        Added in v1.3 P5c so callers (e.g. ``LearnCategorizerWorker``)
+        do not have to reach into ``self._conn`` / ``self._lock``.
+        """
+        stripped = query.lstrip().lower()
+        first_word = stripped.split(None, 1)[0] if stripped else ""
+        if first_word in ("select", "with"):
+            raise ValueError(
+                f"execute_write is for non-SELECT statements; got: {first_word}"
+            )
+        with self._lock:
+            self._conn.execute(query, params)
 
     def stats(self) -> dict[str, int]:
         with self._lock:

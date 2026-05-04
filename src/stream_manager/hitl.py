@@ -17,6 +17,7 @@ Both modes share a single feedback loop (`apply_feedback`) that:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -98,6 +99,34 @@ def dispatch_resolution(
         log.exception("dispatch_resolution: flag_pattern_cross_session failed")
 
 
+def _encode_bias_hint(bias_hint: object | None) -> str:
+    """Serialize a Learn Mode ``BiasHint`` for the hitl_pending row.
+
+    Returns '' when the hint is None or cannot be serialized. The
+    schema is the minimal set of fields the dashboard needs to render
+    a pre-fill suggestion: category, confidence, ladder_step,
+    pattern_id, last_reinforced_ts.
+    """
+    if bias_hint is None:
+        return ""
+    try:
+        payload = {
+            "category": str(getattr(bias_hint, "category", "")),
+            "confidence": float(getattr(bias_hint, "confidence", 0.0)),
+            "ladder_step_suggestion": int(
+                getattr(bias_hint, "ladder_step_suggestion", 0)
+            ),
+            "pattern_id": int(getattr(bias_hint, "pattern_id", 0)),
+            "last_reinforced_ts": float(
+                getattr(bias_hint, "last_reinforced_ts", 0.0)
+            ),
+        }
+        return json.dumps(payload)
+    except Exception:
+        log.exception("hitl: bias_hint encode failed")
+        return ""
+
+
 def _truncate_to_tokens(text: str, max_tokens: int = _NOTE_TOKEN_CAP) -> str:
     """Whitespace-tokenize and truncate to <= max_tokens tokens."""
     if not text:
@@ -164,8 +193,17 @@ class HitlQueue:
         message_content: str,
         session_id: str,
         desktop_pause_active: bool,
+        bias_hint: object | None = None,
     ) -> GovDecision:
-        """Hold (sync) or pass-through (async) a decision based on session mode."""
+        """Hold (sync) or pass-through (async) a decision based on session mode.
+
+        v1.3 P5d (Fix B / review): ``bias_hint`` is an optional Learn
+        Mode advisory hint (a ``learn_categorizer.BiasHint``). When
+        present and the HITL gate fires, the hint is JSON-encoded and
+        stored on the pending row's ``bias_hint`` column so the
+        dashboard can pre-fill the operator prompt with the suggested
+        action. The verdict itself is never mutated.
+        """
         from stream_manager.governance import GovDecision  # local import: avoid cycle
 
         mode, floor = ("async", 0.60)
@@ -188,12 +226,16 @@ class HitlQueue:
         if trigger is None:
             return decision
 
+        bias_hint_json = _encode_bias_hint(bias_hint)
+
         if mode == "sync":
             return self._route_sync(
-                decision, message_id, session_id, trigger, GovDecision
+                decision, message_id, session_id, trigger, GovDecision,
+                bias_hint_json=bias_hint_json,
             )
         return self._route_async(
-            decision, message_id, session_id, trigger, GovDecision
+            decision, message_id, session_id, trigger, GovDecision,
+            bias_hint_json=bias_hint_json,
         )
 
     def _route_async(
@@ -203,17 +245,35 @@ class HitlQueue:
         session_id: str,
         trigger: TriggerReason,
         GovDecisionCls: type,
+        bias_hint_json: str = "",
     ) -> GovDecision:
+        # Async mode: still record a hitl_pending row so the dashboard
+        # has a pre-fill anchor (Fix B). Without this row, the dashboard
+        # has no place to render the bias hint in async-mode reviews.
+        if bias_hint_json:
+            try:
+                self.bus.queue_hitl(
+                    message_id=message_id,
+                    proposed_action=decision.action,
+                    proposed_confidence=decision.confidence,
+                    trigger_reason=trigger.value,
+                    bias_hint=bias_hint_json,
+                )
+            except Exception:
+                log.exception("hitl: async queue_hitl with bias failed")
         try:
+            metadata: dict[str, object] = {
+                "trigger_reason": trigger.value,
+                "proposed_action": decision.action,
+                "proposed_confidence": decision.confidence,
+            }
+            if bias_hint_json:
+                metadata["bias_hint"] = bias_hint_json
             self._emit_event(
                 session_id,
                 "hitl_async_flagged",
                 message_id,
-                {
-                    "trigger_reason": trigger.value,
-                    "proposed_action": decision.action,
-                    "proposed_confidence": decision.confidence,
-                },
+                metadata,
             )
         except Exception:
             log.exception("hitl: async flag emit failed")
@@ -226,6 +286,7 @@ class HitlQueue:
         session_id: str,
         trigger: TriggerReason,
         GovDecisionCls: type,
+        bias_hint_json: str = "",
     ) -> GovDecision:
         try:
             pending_id = self.bus.queue_hitl(
@@ -233,6 +294,7 @@ class HitlQueue:
                 proposed_action=decision.action,
                 proposed_confidence=decision.confidence,
                 trigger_reason=trigger.value,
+                bias_hint=bias_hint_json,
             )
         except Exception:
             log.exception("hitl: queue_hitl failed; passing through")

@@ -63,6 +63,13 @@ _ACTIONABLE_SIGNAL = re.compile(
 )
 
 
+# Fix C (review): eval/exec injection regex lifted to module-level so the
+# v1.3 P5d advisory-bias safety-priority check shares a single source of
+# truth with fast_precheck. Both call sites import EVAL_EXEC_INJECTION_RE
+# directly to prevent regex drift.
+EVAL_EXEC_INJECTION_RE: re.Pattern[str] = re.compile(r"\b(eval|exec)\s*\(")
+
+
 _DESTRUCTIVE: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\brm\s+-rf\s+/(?!\w)"), "BLOCK", "destructive root rm"),
     (re.compile(r"\brm\s+-rf\s+~"), "BLOCK", "destructive home rm"),
@@ -74,7 +81,7 @@ _DESTRUCTIVE: list[tuple[re.Pattern[str], str, str]] = [
         "INTERVENE",
         "force-push to protected branch",
     ),
-    (re.compile(r"\b(eval|exec)\s*\("), "INTERVENE", "code-injection risk"),
+    (EVAL_EXEC_INJECTION_RE, "INTERVENE", "code-injection risk"),
     (
         re.compile(r"\b(aws_secret_access_key|api[_-]?key|bearer\s+[A-Za-z0-9_\-\.]{16,})\b", re.IGNORECASE),
         "BLOCK",
