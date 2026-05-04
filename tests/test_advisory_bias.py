@@ -42,6 +42,18 @@ from stream_manager.project_context import ProjectContextSnapshot
 # ── helpers ─────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _enable_learn_mode(monkeypatch):
+    """Default fixture: enable SM_LEARN_MODE for the bias-positive tests.
+
+    Fix A (review): ``bias_for`` now early-returns None when
+    SM_LEARN_MODE is unset. Most tests in this file want bias enabled;
+    individual tests that probe the gated path override this with
+    ``monkeypatch.delenv("SM_LEARN_MODE", raising=False)``.
+    """
+    monkeypatch.setenv("SM_LEARN_MODE", "1")
+
+
 @pytest.fixture
 def bus(tmp_path: Path) -> _msg_bus.MessageBus:
     b = _msg_bus.MessageBus(str(tmp_path / "bias.db"))
@@ -423,3 +435,140 @@ def test_governance_no_bias_emitted_on_block_decision(bus):
     # that whenever it fires, it was NOT for a BLOCK/INTERVENE decision.
     for a in audits:
         assert a["metadata"]["category"] == "reject"
+
+
+# ── review-fix tests ────────────────────────────────────────────────
+
+
+def test_bias_for_returns_none_when_learn_mode_disabled(bus, monkeypatch):
+    """Fix A (review): bias_for honors the SM_LEARN_MODE env gate.
+
+    When SM_LEARN_MODE is unset, the categorizer worker is not running
+    but stale ``learn_patterns`` rows from a prior session may still
+    exist. ``bias_for`` MUST early-return None in that case so the old
+    rows can't silently bias the verdict.
+    """
+    monkeypatch.delenv("SM_LEARN_MODE", raising=False)
+    prompt = "Should be ignored when learn mode is off"
+    _insert_pattern(
+        bus,
+        prompt=prompt,
+        category="approve",
+        confidence=0.99,
+    )
+    assert bias_for(prompt, bus) is None
+    # Also "0" / "false" must disable.
+    monkeypatch.setenv("SM_LEARN_MODE", "0")
+    assert bias_for(prompt, bus) is None
+
+
+def test_bias_floor_env_override(bus, monkeypatch):
+    """Fix G (review): SM_LEARN_BIAS_FLOOR overrides the default 0.6 floor.
+
+    Importing ``learn_categorizer`` pins ``MIN_BIAS_CONFIDENCE`` at
+    module-load time. We assert the override takes effect by reloading
+    the module under a patched env.
+    """
+    monkeypatch.setenv("SM_LEARN_BIAS_FLOOR", "0.4")
+    import importlib
+
+    import stream_manager.learn_categorizer as lc_mod
+    reloaded = importlib.reload(lc_mod)
+    try:
+        assert reloaded.MIN_BIAS_CONFIDENCE == pytest.approx(0.4)
+        prompt = "Below default floor"
+        _insert_pattern(
+            bus,
+            prompt=prompt,
+            category="approve",
+            confidence=0.5,  # below default 0.6, above override 0.4
+        )
+        hint = reloaded.bias_for(prompt, bus)
+        assert hint is not None
+        assert hint.confidence == pytest.approx(0.5)
+    finally:
+        # Restore default floor for other tests in the suite.
+        monkeypatch.delenv("SM_LEARN_BIAS_FLOOR", raising=False)
+        importlib.reload(lc_mod)
+
+
+def test_hitl_row_carries_bias_prefill(bus):
+    """Fix B (review): bias hint pre-fills the hitl_pending row.
+
+    Drives ``evaluate()`` with a matching pattern in sync HITL mode so a
+    pending row is created. Asserts the row's ``bias_hint`` JSON column
+    contains the category, confidence, and pattern_id fields the
+    dashboard needs to pre-fill the operator prompt.
+    """
+    import json
+
+    eng = _build_engine(bus, hitl_mode="async", hitl_floor=0.60)
+    prompt = "Run pytest tests/test_smoke.py to confirm the v1.3 PR is green"
+    _insert_pattern(
+        bus,
+        prompt=prompt,
+        category="approve",
+        confidence=0.95,
+        ladder_step=2,
+    )
+    msg = _make_msg(prompt)
+    eng.evaluate(msg)
+    rows = bus.fetch_rows(
+        "SELECT bias_hint FROM hitl_pending ORDER BY id DESC LIMIT 1"
+    )
+    assert rows, "expected a hitl_pending row to be queued"
+    raw = rows[0][0] or ""
+    assert raw, "bias_hint column must be populated"
+    payload = json.loads(raw)
+    assert payload["category"] == "approve"
+    assert payload["confidence"] == pytest.approx(0.95)
+    assert payload["ladder_step_suggestion"] == 2
+    assert payload["pattern_id"] > 0
+
+
+def test_consult_bias_respects_observe_downgrade(bus):
+    """Fix D (review): OBSERVE downgrade does not unmask BLOCK to bias.
+
+    In OBSERVE mode ``_apply_mode`` rewrites a BLOCK verdict to ALLOW
+    (preserving the original on ``original_action``). Reading
+    ``decision.action`` alone would let bias attach. The fix consults
+    ``decision.original_action or decision.action`` first, so a BLOCK
+    that was downgraded to ALLOW for emission still suppresses bias.
+    """
+    from stream_manager.governance import GovDecision
+    from stream_manager.learn_categorizer import BiasHint
+    eng = _build_engine(bus)
+    eng.mode = Mode.OBSERVE
+    # Hand-craft a decision shape that mirrors what _apply_mode produces:
+    # surfaced ALLOW, original BLOCK. The content is benign so safety-
+    # priority does not short-circuit; only the original_action gate
+    # should reject the bias.
+    decision = GovDecision(
+        action="ALLOW",
+        confidence=0.9,
+        reasoning="observed: graph BLOCK",
+        mode=Mode.OBSERVE,
+        source="graph",
+        original_action="BLOCK",
+    )
+    # Plant a matching pattern; without Fix D this would attach.
+    prompt = "neutral phrasing for downgrade test"
+    _insert_pattern(
+        bus,
+        prompt=prompt,
+        category="approve",
+        confidence=0.95,
+    )
+    bias = eng._consult_learn_mode_bias(prompt, decision)
+    assert bias is None, "bias must NOT attach to a downgraded BLOCK"
+    # And a true ALLOW still permits bias.
+    decision_allow = GovDecision(
+        action="ALLOW",
+        confidence=0.9,
+        reasoning="ok",
+        mode=Mode.OBSERVE,
+        source="graph",
+    )
+    bias2 = eng._consult_learn_mode_bias(prompt, decision_allow)
+    assert isinstance(bias2, BiasHint)
+    assert bias2.category == "approve"

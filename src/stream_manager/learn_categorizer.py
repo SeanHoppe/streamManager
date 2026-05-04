@@ -598,7 +598,10 @@ def is_enabled() -> bool:
 #     are not actionable as ladder hints in v1.3 — bias is returned ONLY
 #     for ``approve`` and ``reject``.
 
-MIN_BIAS_CONFIDENCE = 0.6
+# Fix G (review): configurable confidence floor. Defaults to 0.6 to match the
+# v1.3 design spec (§3.2 "Bias reader"); operators can lower it (e.g. for
+# conservative/learning sessions) or raise it via SM_LEARN_BIAS_FLOOR.
+MIN_BIAS_CONFIDENCE = float(os.environ.get("SM_LEARN_BIAS_FLOOR", "0.6"))
 
 # Categories that produce an actionable ladder hint in v1.3. Other
 # categories (clarify / acknowledge / redirect / unknown) are recorded
@@ -676,16 +679,25 @@ def bias_for(
         Confidence floor; defaults to ``MIN_BIAS_CONFIDENCE`` (0.6).
         Exposed so tests can pin a different threshold.
     """
+    # Fix A (review): respect the env gate. When SM_LEARN_MODE is unset
+    # the categorizer worker isn't running, but stale patterns from a
+    # prior session may still sit in the DB. Returning early prevents
+    # those rows from silently biasing the verdict.
+    if not is_enabled():
+        return None
     if not prompt:
         return None
     h = prompt_hash(prompt)
     try:
         rows = bus.fetch_rows(
+            # Fix E (review): id DESC final tiebreak so behavior is fully
+            # deterministic even when (last_reinforced_ts, confidence)
+            # are equal across rows.
             "SELECT id, category, confidence, ladder_step, "
             "last_reinforced_ts "
             "FROM learn_patterns "
             "WHERE prompt_hash = ? "
-            "ORDER BY last_reinforced_ts DESC, confidence DESC "
+            "ORDER BY last_reinforced_ts DESC, confidence DESC, id DESC "
             "LIMIT 1",
             (h,),
         )

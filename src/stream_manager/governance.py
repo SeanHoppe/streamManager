@@ -26,7 +26,11 @@ from stream_manager.model_router import (
     get_l2_model,
     route,
 )
-from stream_manager.project_context import ProjectContextSnapshot, fast_precheck
+from stream_manager.project_context import (
+    EVAL_EXEC_INJECTION_RE,
+    ProjectContextSnapshot,
+    fast_precheck,
+)
 
 log = logging.getLogger(__name__)
 
@@ -266,12 +270,16 @@ class GovernanceEngine:
                         bus_msg.id, msg.content, bias, trigger
                     )
                 try:
+                    # v1.3 P5d (Fix B): pass bias hint into HITL route so
+                    # it lands on the pending row's bias_hint column and
+                    # the dashboard can pre-fill the operator prompt.
                     decision = self.hitl.route(
                         decision,
                         bus_msg.id,
                         msg.content,
                         self.session_id,
                         self._desktop_pause_active,
+                        bias_hint=bias,
                     )
                 except Exception:
                     log.exception("hitl: route raised; using original decision")
@@ -643,9 +651,11 @@ class GovernanceEngine:
         if _CRED_EXFIL_RE.search(content):
             return True
         # Code-injection patterns: eval(/exec( in untrusted bodies
-        # (priority #3). Mirrors fast_precheck's heuristic; we do not
-        # import the precheck regex to avoid coupling.
-        if "eval(" in content or "exec(" in content:
+        # (priority #3). Fix C (review): share the canonical regex with
+        # ``project_context.fast_precheck`` so the two checks cannot
+        # drift. A previous version used a substring check that would
+        # have missed e.g. `eval (` (whitespace before paren).
+        if EVAL_EXEC_INJECTION_RE.search(content):
             return True
         return False
 
@@ -676,7 +686,14 @@ class GovernanceEngine:
         # OBSERVE — i.e. a path where the operator is genuinely free to
         # confirm or reject via HITL. For BLOCK/INTERVENE we never want
         # to suggest "approve" via the HITL pre-fill.
-        if decision.action in {"BLOCK", "INTERVENE"}:
+        #
+        # Fix D (review): in OBSERVE mode ``_apply_mode`` already rewrote
+        # ``decision.action`` to ALLOW (with the original verdict
+        # preserved on ``original_action``). Reading ``decision.action``
+        # alone would let a BLOCK leak through as ALLOW-shaped and
+        # acquire bias. Resolve to the effective action first.
+        effective_action = decision.original_action or decision.action
+        if effective_action in {"BLOCK", "INTERVENE"}:
             return None
         try:
             return bias_for(content, self.bus)
