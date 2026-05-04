@@ -32,6 +32,7 @@ from stream_manager.lifecycle_bridge import (
     EVENT_BG_JOB_START,
     HookFolderPoller,
     LifecycleBridge,
+    _record_event_type,
     filter_lifecycle,
     list_active_jobs,
 )
@@ -47,10 +48,10 @@ def test_bg_job_start_publishes_lifecycle_row(tmp_path):
 
     assert bridge.on_bg_job_start("s1", "job-1", name="long soak") is True
 
-    rows = bus._conn.execute(
+    rows = bus.fetch_rows(
         "SELECT type, content, metadata FROM messages WHERE session_id=?",
         ("s1",),
-    ).fetchall()
+    )
     assert len(rows) == 1
     row_type, content, meta_json = rows[0]
     meta = json.loads(meta_json)
@@ -67,10 +68,10 @@ def test_dedup_returns_false_on_second_publish(tmp_path):
     bridge = LifecycleBridge(bus=bus)
     assert bridge.on_agent_spawn("s1", "agent-A", name="cavecrew") is True
     assert bridge.on_agent_spawn("s1", "agent-A", name="cavecrew") is False
-    rows = bus._conn.execute(
+    rows = bus.fetch_rows(
         "SELECT COUNT(*) FROM messages WHERE session_id=?", ("s1",)
-    ).fetchone()
-    assert rows[0] == 1
+    )
+    assert rows[0][0] == 1
     bus.close()
 
 
@@ -79,10 +80,10 @@ def test_bg_end_carries_exit_code(tmp_path):
     bridge = LifecycleBridge(bus=bus)
     bridge.on_bg_job_start("s1", "job-2")
     bridge.on_bg_job_end("s1", "job-2", exit_code=0)
-    rows = bus._conn.execute(
+    rows = bus.fetch_rows(
         "SELECT metadata FROM messages WHERE session_id=? ORDER BY sequence",
         ("s1",),
-    ).fetchall()
+    )
     metas = [json.loads(r[0]) for r in rows]
     assert [m["event_type"] for m in metas] == [EVENT_BG_JOB_START, EVENT_BG_JOB_END]
     assert metas[1]["exit_code"] == 0
@@ -95,6 +96,61 @@ def test_invalid_event_type_raises(tmp_path):
     with pytest.raises(ValueError):
         bridge._publish("not_a_real_event", "s1", "j", "", None)
     bus.close()
+
+
+# ── v1.3 P4 item 2: explicit event_subtype wins over heuristic ─────────
+
+
+def test_record_event_type_explicit_subtype_wins():
+    """An explicit ``event_subtype`` field bypasses the
+    tool_name/background heuristic. This is the v1.3 tightening — same-
+    tick start/end pairs no longer rely on inference from
+    ``type == "tool_result"`` + ``background``.
+    """
+    # A record that the heuristic would classify as BG_JOB_START
+    # (Bash + background, no completion hint) but the explicit subtype
+    # forces the END value. The classifier MUST honor the explicit
+    # field, proving the precedence ordering.
+    rec = {
+        "event_subtype": EVENT_BG_JOB_END,
+        "background": True,
+        "message": {
+            "content": [{"type": "tool_use", "name": "Bash"}],
+        },
+    }
+    assert _record_event_type(rec) == EVENT_BG_JOB_END
+
+
+def test_record_event_type_unknown_subtype_falls_back_to_heuristic():
+    """An unrecognized ``event_subtype`` value must NOT short-circuit;
+    the classifier falls back to the tool-name heuristic so a typo
+    upstream doesn't silently drop a real lifecycle event.
+    """
+    rec = {
+        "event_subtype": "not_a_real_subtype",
+        "background": True,
+        "message": {
+            "content": [{"type": "tool_use", "name": "Bash"}],
+        },
+    }
+    assert _record_event_type(rec) == EVENT_BG_JOB_START
+
+
+def test_record_event_type_heuristic_unchanged_when_no_subtype():
+    """Behavioral parity: when ``event_subtype`` is absent the heuristic
+    classification is unchanged from v1.2.
+    """
+    rec_start = {
+        "background": True,
+        "message": {"content": [{"type": "tool_use", "name": "Bash"}]},
+    }
+    assert _record_event_type(rec_start) == EVENT_BG_JOB_START
+    rec_done = {
+        "background": True,
+        "status": "completed",
+        "message": {"content": [{"type": "tool_use", "name": "Bash"}]},
+    }
+    assert _record_event_type(rec_done) == EVENT_BG_JOB_END
 
 
 # ── shim: JSONL polling path ───────────────────────────────────────────
@@ -177,10 +233,10 @@ def test_poller_synthesizes_lifecycle_from_jsonl(tmp_path):
     n2 = poller.tick()
     assert n2 == 2
 
-    rows = bus._conn.execute(
+    rows = bus.fetch_rows(
         "SELECT metadata FROM messages WHERE session_id=? ORDER BY sequence",
         ("s-shim",),
-    ).fetchall()
+    )
     metas = [json.loads(r[0]) for r in rows]
     types = [m["event_type"] for m in metas]
     assert types == [
@@ -253,9 +309,9 @@ def test_filter_lifecycle_helper(tmp_path):
     bus = MessageBus(str(tmp_path / "gov.db"))
     bridge = LifecycleBridge(bus=bus)
     bridge.on_bg_job_start("s1", "j-1", name="x")
-    rows = bus._conn.execute(
+    rows = bus.fetch_rows(
         "SELECT type, metadata FROM messages WHERE session_id=?", ("s1",)
-    ).fetchall()
+    )
     dicts = [{"type": r[0], "metadata": r[1]} for r in rows]
     filtered = filter_lifecycle(dicts)
     assert len(filtered) == 1

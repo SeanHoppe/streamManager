@@ -198,10 +198,10 @@ def test_emit_command_inserts_pending_row(tmp_path, monkeypatch):
     cmd_id = mod.emit_command(bus, "s-target", "pause", {"reason": "hitl"})
     assert isinstance(cmd_id, str) and len(cmd_id) > 0
 
-    rows = bus._conn.execute(
+    rows = bus.fetch_rows(
         "SELECT id, session_id, kind, args_json, signature, sent_at, "
         "acked_at, status, error FROM desktop_commands"
-    ).fetchall()
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r[0] == cmd_id
@@ -232,9 +232,9 @@ def test_emit_command_does_not_touch_messages_table(tmp_path, monkeypatch):
 
     bus.subscribe(spy)
     mod.emit_command(bus, "s-target", "flash", {})
-    msg_count = bus._conn.execute(
+    msg_count = bus.fetch_rows(
         "SELECT COUNT(*) FROM messages"
-    ).fetchone()[0]
+    )[0][0]
     assert msg_count == 0
     assert spy_calls == []
     bus.close()
@@ -323,11 +323,12 @@ def test_dashboard_emit_then_ack_round_trip(tmp_path, monkeypatch):
         # GET /api/commands/pending readback.
         from stream_manager.desktop_commands import validate
         import json as _json
-        row = bus._conn.execute(
+        _rows = bus.fetch_rows(
             "SELECT id, session_id, kind, args_json, signature, sent_at, "
             "status FROM desktop_commands WHERE id=?",
             (cmd_id,),
-        ).fetchone()
+        )
+        row = _rows[0] if _rows else None
         assert row is not None
         assert row[0] == cmd_id
         assert row[1] == "s-target"
@@ -353,10 +354,11 @@ def test_dashboard_emit_then_ack_round_trip(tmp_path, monkeypatch):
         assert resp.json()["status"] == "ok"
 
         # Row updated in DB
-        row = bus._conn.execute(
+        _rows = bus.fetch_rows(
             "SELECT status, acked_at, error FROM desktop_commands WHERE id=?",
             (cmd_id,),
-        ).fetchone()
+        )
+        row = _rows[0]
         assert row[0] == "ok"
         assert row[1] is not None
         assert row[2] is None
@@ -444,16 +446,16 @@ def test_dashboard_ack_unknown_id(tmp_path, monkeypatch):
 def test_desktop_commands_table_present_after_bus_init(tmp_path):
     bus = MessageBus(str(tmp_path / "gov.db"))
     try:
-        rows = bus._conn.execute(
+        rows = bus.fetch_rows(
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name='desktop_commands'"
-        ).fetchall()
+        )
         assert len(rows) == 1
         # Index too.
-        rows = bus._conn.execute(
+        rows = bus.fetch_rows(
             "SELECT name FROM sqlite_master WHERE type='index' "
             "AND name='idx_dc_pending'"
-        ).fetchall()
+        )
         assert len(rows) == 1
     finally:
         bus.close()

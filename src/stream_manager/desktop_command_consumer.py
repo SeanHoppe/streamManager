@@ -73,6 +73,18 @@ _LONGPOLL_REMOVED_MSG = (
     "ADR-14). Use transport='sse' (the new and only default)."
 )
 
+# v1.3 fold: explicit table of removed transports → migration message.
+# A single dict drives the constructor's transport gate so the
+# long-poll branch and the generic-invalid branch don't drift apart.
+# Keys are removed transport values; values are the actionable error
+# message surfaced as ``ValueError``. Behavioral parity with the
+# previous dual-check is preserved: long-poll keeps its bespoke
+# migration hint, anything else still in this table would surface its
+# own.
+_REMOVED_TRANSPORTS: dict[str, str] = {
+    "long-poll": _LONGPOLL_REMOVED_MSG,
+}
+
 
 def _default_executors() -> dict[str, Callable[[dict], None]]:
     """Stub executors for every kind in the allowlist.
@@ -176,11 +188,15 @@ class CommandConsumer:
             raise ValueError("secret must be non-empty bytes")
         if not isinstance(executors, dict):
             raise ValueError("executors must be a dict")
-        # Surface the v1.2 long-poll removal as a clear, actionable
-        # error rather than a generic "invalid transport" so callers
-        # upgrading from v1.1 see the migration path in the message.
-        if transport == "long-poll":
-            raise ValueError(_LONGPOLL_REMOVED_MSG)
+        # Surface removed transports (e.g. v1.2's long-poll removal) as
+        # a clear, actionable error rather than a generic "invalid
+        # transport" so callers upgrading from older versions see the
+        # migration path in the message. Single-table lookup folds the
+        # prior dual ``transport == "long-poll"`` + invalid-set check
+        # into one path; behavioral parity preserved.
+        removed_msg = _REMOVED_TRANSPORTS.get(transport)
+        if removed_msg is not None:
+            raise ValueError(removed_msg)
         if transport not in _VALID_TRANSPORTS:
             raise ValueError(
                 f"transport must be one of {sorted(_VALID_TRANSPORTS)}; got {transport!r}"
@@ -241,7 +257,7 @@ class CommandConsumer:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("ack POST failed for %s: %s", cmd_id, exc)
 
-    def _process_one(self, row: dict) -> None:
+    def process_row(self, row: dict) -> None:
         """Validate, dispatch, and ack a single command row.
 
         All exit paths terminate in exactly one ack POST so producer
@@ -335,7 +351,7 @@ class CommandConsumer:
 
         Outer loop owns reconnect with exponential backoff (cap 10s).
         Inner loop reads SSE frames and dispatches each one through
-        ``_process_one`` (which is idempotent across replays via
+        ``process_row`` (which is idempotent across replays via
         ``self._dispatched``).
         """
         backoff = _SSE_BACKOFF_BASE
@@ -409,4 +425,4 @@ class CommandConsumer:
                     # operator sees it without aborting the loop.
                     log.warning("SSE server error: %s", row.get("error"))
                     continue
-                self._process_one(row)
+                self.process_row(row)

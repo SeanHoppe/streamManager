@@ -178,9 +178,10 @@ async def test_sse_producer_to_consumer_under_250ms(live_server):
     deadline = time.time() + 2.0
     final_status = None
     while time.time() < deadline:
-        row = bus._conn.execute(
+        rows = bus.fetch_rows(
             "SELECT status FROM desktop_commands WHERE id=?", (cmd_id,)
-        ).fetchone()
+        )
+        row = rows[0] if rows else None
         if row is not None and row[0] != "pending":
             final_status = row[0]
             break

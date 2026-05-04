@@ -18,7 +18,7 @@ The HMAC secret is set via monkeypatch on SM_DESKTOP_SECRET so the test
 never touches the real ``.bridge/secret`` file.
 
 Note: v1.2 (Task D) removed the long-poll transport. The SSE
-``run_once``-equivalent shape is exercised by calling ``_process_one``
+``run_once``-equivalent shape is exercised by calling ``process_row``
 directly with a synthesized row, which is the post-parse hand-off point
 shared by both the (now-removed) long-poll fetch path and the surviving
 SSE frame iterator.
@@ -162,7 +162,7 @@ def test_valid_command_executes_and_acks_ok(consumer_module, desktop_commands):
         seen.append(args)
 
     consumer = _build_consumer(consumer_module, {"pause": pause_executor}, client)
-    consumer._process_one(row)
+    consumer.process_row(row)
 
     assert seen == [{"why": "test"}]
     assert rec.acks == [("cmd-ok", {"status": "ok"})]
@@ -182,7 +182,7 @@ def test_bad_signature_rejects_without_executing(
         calls["n"] += 1
 
     consumer = _build_consumer(consumer_module, {"pause": pause_executor}, client)
-    consumer._process_one(row)
+    consumer.process_row(row)
 
     assert calls["n"] == 0
     assert rec.acks == [("cmd-bad", {"status": "rejected", "error": "bad_sig"})]
@@ -201,7 +201,7 @@ def test_unknown_kind_rejects(consumer_module, desktop_commands):
     consumer = _build_consumer(
         consumer_module, {"pause": lambda args: None}, client
     )  # only pause registered
-    consumer._process_one(row)
+    consumer.process_row(row)
 
     assert rec.acks == [
         ("cmd-unk", {"status": "rejected", "error": "unknown_kind"})
@@ -220,7 +220,7 @@ def test_executor_raises_acks_with_truncated_error(
         raise RuntimeError("kaboom")
 
     consumer = _build_consumer(consumer_module, {"pause": boom}, client)
-    consumer._process_one(row)
+    consumer.process_row(row)
 
     assert rec.acks == [
         ("cmd-raise", {"status": "rejected", "error": "kaboom"})
@@ -239,7 +239,7 @@ def test_executor_long_error_is_truncated(consumer_module, desktop_commands):
         raise RuntimeError(long_msg)
 
     consumer = _build_consumer(consumer_module, {"pause": boom}, client)
-    consumer._process_one(row)
+    consumer.process_row(row)
 
     assert len(rec.acks) == 1
     cmd_id, body = rec.acks[0]
@@ -269,9 +269,9 @@ def test_dispatched_dedupe_prevents_double_fire(
 
     consumer = _build_consumer(consumer_module, {"pause": pause_executor}, client)
 
-    consumer._process_one(row)
-    consumer._process_one(row)  # replay
-    consumer._process_one(row)  # replay
+    consumer.process_row(row)
+    consumer.process_row(row)  # replay
+    consumer.process_row(row)  # replay
 
     assert fires["n"] == 1
     # Only the first dispatch acked; subsequent replays short-circuit
@@ -364,3 +364,41 @@ def test_default_transport_is_sse(consumer_module):
     )
     assert consumer.transport == "sse"
     consumer.close()
+
+
+# ── v1.3 P4 item 5: removed-transports lookup parity ──────────────────
+
+
+def test_removed_transports_table_carries_longpoll(consumer_module):
+    """v1.3 folded the dual transport gate (``transport == "long-poll"``
+    + ``not in _VALID_TRANSPORTS``) into a single
+    ``_REMOVED_TRANSPORTS`` lookup. The table must continue to carry
+    the long-poll migration message verbatim so operators upgrading from
+    v1.1 see the same actionable hint.
+    """
+    assert "long-poll" in consumer_module._REMOVED_TRANSPORTS
+    msg = consumer_module._REMOVED_TRANSPORTS["long-poll"]
+    assert msg == consumer_module._LONGPOLL_REMOVED_MSG
+
+
+def test_unknown_transport_uses_generic_message(consumer_module):
+    """A transport that is not in ``_REMOVED_TRANSPORTS`` and not in
+    ``_VALID_TRANSPORTS`` must fall through to the generic 'must be one
+    of …' error — NOT the long-poll migration message. This guards
+    behavioral parity with v1.2 after the table fold.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        consumer_module.CommandConsumer(
+            sm_url=SM_URL,
+            session_id="s",
+            secret=SECRET,
+            executors={},
+            transport="websocket",
+        )
+    msg = str(exc_info.value)
+    assert "must be one of" in msg
+    assert "websocket" in msg
+    # Critically, the long-poll migration hint must NOT leak into the
+    # generic-invalid path.
+    assert "long-poll" not in msg
+    assert "ADR-14" not in msg
