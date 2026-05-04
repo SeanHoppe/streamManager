@@ -454,58 +454,105 @@ def list_active_jobs(
 
     Open == latest envelope for this job_id is a *_start* (no matching
     *_end / *_done observed yet). Newest-start first.
+
+    Implementation note (v1.3 P2): the prior implementation overfetched
+    ``limit * 4`` raw rows in timestamp order and reduced them in
+    Python. With >25 lifecycle event pairs (default ``limit=100``,
+    2 rows per pair) plus any background dedup headroom, the overfetch
+    window silently dropped open jobs at the tail. This rewrite uses a
+    SQL window function (``ROW_NUMBER() OVER (PARTITION BY job_id
+    ORDER BY timestamp DESC)``) to pick the latest envelope per
+    ``job_id`` directly, then filters to those whose latest envelope is
+    a ``*_start`` — so the ``LIMIT`` applies to the deduplicated open
+    set rather than to the raw row stream. SQLite >= 3.25 ships window
+    functions; the repo runs on 3.49+ so this is safe.
     """
     import sqlite3
+
+    open_event_types = (EVENT_BG_JOB_START, EVENT_AGENT_SPAWN)
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
-        sql = (
-            "SELECT id, session_id, type, content, metadata, timestamp "
-            "FROM messages WHERE type=? "
-        )
-        params: list[object] = [BUS_TYPE]
+        # Latest envelope per job_id via a window function. Filter to
+        # ``rn = 1`` AND the latest event_type is a *_start* — those are
+        # the open jobs/agents. Newest-start first, capped at ``limit``.
+        # ``json_extract`` lets us partition by metadata.job_id without
+        # forcing a schema migration on the bus.
+        sql_parts: list[str] = [
+            "WITH lifecycle AS (",
+            "  SELECT id, session_id, content, metadata, timestamp,",
+            "    json_extract(metadata, '$.job_id') AS job_id,",
+            "    json_extract(metadata, '$.event_type') AS event_type,",
+            "    ROW_NUMBER() OVER (",
+            "      PARTITION BY json_extract(metadata, '$.job_id')",
+            "      ORDER BY timestamp DESC, sequence DESC",
+            "    ) AS rn",
+            "  FROM messages",
+            "  WHERE type = ?",
+            "    AND json_extract(metadata, '$.job_id') IS NOT NULL",
+            "    AND json_extract(metadata, '$.event_type') IN (?, ?, ?, ?)",
+        ]
+        params: list[object] = [
+            BUS_TYPE,
+            EVENT_BG_JOB_START,
+            EVENT_BG_JOB_END,
+            EVENT_AGENT_SPAWN,
+            EVENT_AGENT_DONE,
+        ]
         if session_id:
-            sql += "AND session_id=? "
+            sql_parts.append("    AND session_id = ?")
             params.append(session_id)
-        sql += "ORDER BY timestamp ASC LIMIT ?"
-        params.append(int(limit) * 4)  # x4 to allow dedup headroom
-        rows = conn.execute(sql, params).fetchall()
+        sql_parts.extend(
+            [
+                ")",
+                "SELECT id, session_id, content, metadata, timestamp,",
+                "       job_id, event_type",
+                "FROM lifecycle",
+                "WHERE rn = 1",
+                "  AND event_type IN ({})".format(
+                    ",".join("?" * len(open_event_types))
+                ),
+                "ORDER BY timestamp DESC",
+                "LIMIT ?",
+            ]
+        )
+        params.extend(open_event_types)
+        params.append(int(limit))
+        rows = conn.execute("\n".join(sql_parts), params).fetchall()
     finally:
         conn.close()
-    state: dict[str, dict] = {}
+
+    open_rows: list[dict] = []
     for r in rows:
         try:
             meta = json.loads(r["metadata"] or "{}")
         except Exception:
             continue
-        et = str(meta.get("event_type") or "")
-        job_id = str(meta.get("job_id") or "")
-        if et not in LIFECYCLE_EVENT_TYPES or not job_id:
+        et = str(r["event_type"] or "")
+        job_id = str(r["job_id"] or "")
+        # The CTE already constrains event_type ∈ LIFECYCLE_EVENT_TYPES and
+        # the outer SELECT further narrows to *_start* types, so reaching
+        # here with a non-lifecycle event_type would indicate a contract
+        # break. Assert defensively; keep the empty job_id skip.
+        assert et in LIFECYCLE_EVENT_TYPES, (
+            f"unexpected event_type leaked from CTE: {et!r}"
+        )
+        if not job_id:
             continue
-        rec = state.setdefault(
-            job_id,
+        open_rows.append(
             {
                 "job_id": job_id,
                 "session_id": r["session_id"],
                 "name": meta.get("name") or r["content"] or "",
                 "kind": "agent" if et.startswith("agent") else "bg_job",
-                "started_at": None,
+                "started_at": float(r["timestamp"]),
                 "ended_at": None,
                 "exit_code": meta.get("exit_code"),
                 "status": "running",
-            },
+            }
         )
-        if et in (EVENT_BG_JOB_START, EVENT_AGENT_SPAWN):
-            rec["started_at"] = float(r["timestamp"])
-        else:
-            rec["ended_at"] = float(r["timestamp"])
-            rec["status"] = "done"
-            if "exit_code" in meta:
-                rec["exit_code"] = meta.get("exit_code")
-    open_rows = [r for r in state.values() if r["status"] == "running"]
-    open_rows.sort(key=lambda d: d.get("started_at") or 0, reverse=True)
-    return open_rows[: int(limit)]
+    return open_rows
 
 
 def filter_lifecycle(messages: Iterable[dict]) -> list[dict]:
