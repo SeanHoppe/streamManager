@@ -196,6 +196,10 @@ class _DriverState:
     allow_latencies_s: list[float] = field(default_factory=list)
     escalation_latencies_s: list[float] = field(default_factory=list)
     alignment_latencies_s: list[float] = field(default_factory=list)
+    # v1.3 Path-A: Learn Mode categorizer wall-clock latencies. Tracked
+    # separately because the categorizer runs Sonnet (not the verdict
+    # model) and its budget lives in its own ADR-5 row.
+    lm_categorize_latencies_s: list[float] = field(default_factory=list)
     publish_errors: list[str] = field(default_factory=list)
     samples: list[_MinuteSample] = field(default_factory=list)
     events_emitted: int = 0
@@ -351,23 +355,31 @@ def _format_per_band_split(
     allow: list[float],
     l2_l3: list[float],
     l4: list[float],
+    lm_categorize: list[float] | None = None,
 ) -> list[str]:
     """Render the per-band p50/p95 markdown block.
 
     P1 / v1.3: ADR-5 budgets are per-band but the v1.2 driver collapsed
     ALLOW (n=50), L2/L3 (n=5), and L4 (n=5) into a single overall p95.
     Format mirrors ADR-5 §"v1.2 ship-gate baseline" §"Per-trigger split".
+
+    v1.3 Path-A: optional ``lm_categorize`` row appended when the Learn
+    Mode dialogue pump ran (recorder + ship-gate path). Replays of v1.2
+    cassettes pass an empty list and the row reports n=0.
     """
     lines: list[str] = []
     lines.append("### Per-band latency (p50/p95)")
     lines.append("")
     lines.append("| Path                 |  n  | p50      | p95      |")
     lines.append("|----------------------|-----|----------|----------|")
-    for label, data in (
+    bands: list[tuple[str, list[float]]] = [
         ("ALLOW (routine)", allow),
         ("L2/L3 escalation", l2_l3),
         ("L4 alignment", l4),
-    ):
+    ]
+    if lm_categorize is not None:
+        bands.append(("LM (categorize)", lm_categorize))
+    for label, data in bands:
         n = len(data)
         if n == 0:
             lines.append(f"| {label:<20} |   0 | n/a      | n/a      |")
@@ -379,6 +391,15 @@ def _format_per_band_split(
         )
     lines.append("")
     return lines
+
+
+# v1.3 Path-A: pre-canned Learn Mode dialogue pairs shared with the
+# recorder. Imported lazily inside the pump function so unit tests can
+# import this module without dragging in the recorder's CLI deps.
+def _load_lm_dialogue_pairs() -> list[tuple[str, str]]:
+    sys.path.insert(0, str(ROOT / "tools"))
+    from cassette_record import _LM_DIALOGUE_PAIRS  # noqa: WPS433
+    return list(_LM_DIALOGUE_PAIRS)
 
 
 def _format_lifecycle_bridge_final_state(
@@ -572,11 +593,20 @@ def _write_report(
     # P1 / v1.3: per-band p50/p95 split (ALLOW n=50 + L2/L3 n=5 + L4 n=5).
     # ADR-5 budgets are per-band; the overall row above is preserved for
     # back-compat but the ship-gate now consults this table directly.
+    # v1.3 Path-A: LM (categorize) row appended when the dialogue pump
+    # ran; passes None when ship-gate ran with --skip-lm-pump so the row
+    # is omitted from legacy reports.
+    lm_data: list[float] | None = (
+        state.lm_categorize_latencies_s
+        if state.lm_categorize_latencies_s
+        else None
+    )
     lines.extend(
         _format_per_band_split(
             allow=state.allow_latencies_s,
             l2_l3=state.escalation_latencies_s,
             l4=state.alignment_latencies_s,
+            lm_categorize=lm_data,
         )
     )
 
@@ -704,6 +734,103 @@ def _write_deferral_report(reason: str) -> Path:
     return path
 
 
+def _run_lm_dialogue_pump(
+    bus: MessageBus,
+    session_id: str,
+    state: _DriverState,
+    *,
+    model: str | None,
+    runner=None,
+) -> int:
+    """v1.3 Path-A: drive Learn Mode dialogue pairs through the live
+    categorizer at ship-gate. Mirrors ``cassette_record._record_lm_dialogue``
+    but writes nothing to a cassette file — the soak report is the artifact.
+
+    Per pair: publish ``desktop_prompt`` + ``user_reply``, call
+    ``categorize_pair`` directly (no worker thread for deterministic timing),
+    push the wall-clock onto ``state.lm_categorize_latencies_s``, and
+    consolidate into the canonical projection table so the live
+    ``learn_patterns_canonical`` shows the M3 inputs.
+
+    Returns the number of pairs successfully categorized. Failures are
+    counted as zero-confidence ``unknown`` rows (matches live worker).
+    """
+    from stream_manager.learn_categorizer import (  # noqa: WPS433
+        DEFAULT_MODEL as _LM_DEFAULT,
+        categorize_pair,
+        prompt_hash,
+    )
+    from stream_manager.decay import consolidate_patterns  # noqa: WPS433
+
+    pairs = _load_lm_dialogue_pairs()
+    chosen_model = model or _LM_DEFAULT
+    n_ok = 0
+    for offset, (prompt_text, reply_text) in enumerate(pairs):
+        prompt_uuid = f"shipgate-prompt-{offset}"
+        reply_uuid = f"shipgate-reply-{offset}"
+        try:
+            prompt_env = _BusMsgT.new(
+                session_id=session_id,
+                type="desktop_prompt",
+                direction="inbound",
+                content=prompt_text,
+                metadata={
+                    "desktop_session_id": session_id,
+                    "uuid": prompt_uuid,
+                    "parent_uuid": "",
+                    "ts": time.time(),
+                    "synthetic": True,
+                },
+            )
+            bus.publish(prompt_env)
+            reply_env = _BusMsgT.new(
+                session_id=session_id,
+                type="user_reply",
+                direction="inbound",
+                content=reply_text,
+                metadata={
+                    "desktop_session_id": session_id,
+                    "uuid": reply_uuid,
+                    "parent_uuid": prompt_uuid,
+                    "pair_id": prompt_env.id,
+                    "ts": time.time(),
+                    "synthetic": True,
+                },
+            )
+            bus.publish(reply_env)
+        except Exception as exc:
+            print(f"[soak] LM pump publish offset={offset} failed: {exc!r}",
+                  file=sys.stderr)
+            continue
+
+        t0 = time.perf_counter()
+        try:
+            result = categorize_pair(
+                prompt_text, reply_text, model=chosen_model, runner=runner,
+            )
+        except Exception as exc:
+            print(f"[soak] LM pump categorize offset={offset} failed: {exc!r}",
+                  file=sys.stderr)
+            result = None
+        elapsed = time.perf_counter() - t0
+        state.lm_categorize_latencies_s.append(elapsed)
+
+        if result is None:
+            category, confidence = "unknown", 0.0
+        else:
+            category = result.category
+            confidence = max(0.0, min(1.0, float(result.confidence)))
+            n_ok += 1
+        try:
+            consolidate_patterns(
+                bus, prompt_hash(prompt_text), category, confidence,
+                now_ts=time.time(),
+            )
+        except Exception:
+            pass
+    return n_ok
+
+
 def _load_cassette(path: Path) -> list[dict]:
     """Load a cassette JSONL file. Each line is a recorded envelope.
 
@@ -812,6 +939,14 @@ def _run_replay(args) -> int:
                 state.escalation_latencies_s.append(elapsed)
             elif kind == "l4":
                 state.alignment_latencies_s.append(elapsed)
+            elif kind == "learn_dialogue":
+                # v1.3 Path-A: replay of a recorded Learn Mode pair.
+                # Latency reflects the categorizer Sonnet round-trip,
+                # not the verdict path; tracked in its own band.
+                cat_lat_ms = float(
+                    row.get("recorded_categorize_latency_ms", latency_ms)
+                )
+                state.lm_categorize_latencies_s.append(cat_lat_ms / 1000.0)
             else:
                 # routine = ALLOW band (P1 / v1.3 per-band split).
                 state.allow_latencies_s.append(elapsed)
@@ -870,11 +1005,14 @@ def _run_replay(args) -> int:
     # P1 / v1.3: per-band p50/p95 (ALLOW + L2/L3 + L4) and LifecycleBridge
     # final-state dump. Replay tier does not exercise lifecycle events,
     # so the dump reports the empty-set baseline (zero orphans).
+    # v1.3 Path-A: LM (categorize) row added when the cassette contains
+    # learn_dialogue envelopes; else passes empty list and row reads n=0.
     lines.extend(
         _format_per_band_split(
             allow=state.allow_latencies_s,
             l2_l3=state.escalation_latencies_s,
             l4=state.alignment_latencies_s,
+            lm_categorize=state.lm_categorize_latencies_s,
         )
     )
     lines.extend(_format_lifecycle_bridge_final_state(set()))
@@ -922,6 +1060,22 @@ def main() -> int:
              "driver does NOT spawn a real `claude` subprocess; instead it "
              "replays canned envelopes from the cassette, sleeping "
              "`recorded_latency_ms` per envelope. See ADR-17.",
+    )
+    ap.add_argument(
+        "--skip-lm-pump",
+        action="store_true",
+        help="v1.3 Path-A: skip the Learn Mode dialogue pump after the main "
+             "publish loop. Default behaviour drives 10 pre-canned dialogue "
+             "pairs through the live Sonnet categorizer so the soak report "
+             "contains an LM (categorize) per-band row. Set this flag for "
+             "legacy CI runs without Sonnet quota.",
+    )
+    ap.add_argument(
+        "--lm-model",
+        default=None,
+        help="v1.3 Path-A: model id for the Learn Mode categorizer. "
+             "Defaults to learn_categorizer.DEFAULT_MODEL (Sonnet) per "
+             "design spec §2.4.",
     )
     args = ap.parse_args()
 
@@ -1115,6 +1269,16 @@ def main() -> int:
 
             # Sleep a short tick; do not over-sleep so deadline-honor stays tight.
             time.sleep(0.5)
+
+        # v1.3 Path-A: Learn Mode dialogue pump. Runs after the verdict
+        # publish loop (so engine.evaluate latencies are clean) but
+        # before drain (so categorizer events flush via SSE too).
+        if not args.skip_lm_pump:
+            print("[soak] LM dialogue pump starting (Sonnet categorizer)…")
+            n_ok = _run_lm_dialogue_pump(
+                bus, session_id, state, model=args.lm_model,
+            )
+            print(f"[soak] LM dialogue pump: {n_ok} pairs categorized")
 
         # 5. Drain window so SSE consumer flushes any in-flight events.
         print(f"[soak] publish loop done; draining {args.drain_seconds:.0f}s")

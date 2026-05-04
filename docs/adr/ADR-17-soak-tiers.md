@@ -80,6 +80,39 @@ ADR-5 absolute latency numbers come from Tier 3 only.
   governance-engine changes. Adding optional fields is safe; renaming or
   removing required fields is a breaking change requiring a new ADR.
 
+## v1.3 `learn_dialogue` extension (Path-A)
+
+**Status:** Additive amendment; ratified 2026-05-04 with `ship/v1.3-soak-lm-extension`.
+
+The cassette `kind` enum gains a fourth value, `learn_dialogue`, used by
+the recorder to capture Learn Mode (FR-LM-1..6) categorizer round-trips
+alongside the existing 60 `engine.evaluate` envelopes. The new envelope
+preserves all required v1.2 fields (`kind`, `content`, `recorded_latency_ms`,
+`decision`) so v1.2-era replay code and validation paths see no schema
+break, and adds four optional fields:
+
+```
+desktop_prompt:                  verbatim assistant turn text
+user_reply:                      verbatim operator reply text
+recorded_categorize_latency_ms:  Sonnet wall-clock per pair
+category_result.{category,
+                 confidence,
+                 reasoning}:     CategoryResult fields
+```
+
+Replay (`tools/soak_driver.py::_run_replay`) routes `kind == "learn_dialogue"`
+into a new `state.lm_categorize_latencies_s` bucket, surfaced as the
+fourth row ("LM (categorize)") in the per-band p50/p95 table. Backward
+compat: v1.2 cassettes (zero `learn_dialogue` rows) replay unchanged
+and the LM row reads `n=0`.
+
+Ship-gate (`tools/soak_driver.py::main`) runs the same dialogue pump
+after the engine.evaluate publish loop with real Sonnet, populating the
+LM row in the M3 ship-gate report. Operators may pass `--skip-lm-pump`
+on legacy CI runs without Sonnet quota.
+
+See `docs/v1.3-soak-lm-extension.md` for the full design + DOD.
+
 ## DOD checklist
 
 - `tools/soak_driver.py --cli-replay <path>` runs without `claude` on PATH.

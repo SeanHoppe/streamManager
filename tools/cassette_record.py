@@ -51,9 +51,19 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from stream_manager.governance import GovernanceEngine  # noqa: E402
+from stream_manager.message_bus import Message as _BusMsgT  # noqa: E402
 from stream_manager.message_bus import MessageBus  # noqa: E402
 from stream_manager.messages import Message  # noqa: E402
 from stream_manager.project_context import load as load_project_context  # noqa: E402
+
+# v1.3 Path-A extension: real Sonnet categorizer call from the recorder.
+# `categorize_pair` is the same subprocess call the live worker uses.
+from stream_manager.learn_categorizer import (  # noqa: E402
+    DEFAULT_MODEL as _LM_DEFAULT_MODEL,
+    categorize_pair as _lm_categorize_pair,
+    prompt_hash as _lm_prompt_hash,
+)
+from stream_manager.decay import consolidate_patterns as _lm_consolidate  # noqa: E402
 
 # Re-use the deterministic load mix from the soak driver so the cassette
 # matches the ship-gate soak shape one-for-one.
@@ -66,7 +76,25 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 # Map cassette `kind` → governance routing layer. Mirrors the kind classes
 # emitted by `_build_payload_sequence` and the layer integer that
 # `engine.evaluate` persists via `bus.record_decision(layer=...)`.
-_KIND_TO_LAYER = {"routine": 0, "l2_l3": 2, "l4": 4}
+_KIND_TO_LAYER = {"routine": 0, "l2_l3": 2, "l4": 4, "learn_dialogue": 0}
+
+
+# v1.3 Path-A extension: pre-canned Learn Mode dialogue pairs.
+# Ten pairs covering the actionable category enum plus acknowledge/clarify.
+# Ordering is deterministic (no shuffle) so cassette + ship-gate align
+# on the same inputs.
+_LM_DIALOGUE_PAIRS: list[tuple[str, str]] = [
+    ("Force push to main now?", "yes do it"),
+    ("Run rm -rf node_modules?", "no, keep them"),
+    ("Install pkg X to fix Y?", "use pkg Z instead"),
+    ("Run pytest in CI?", "what does the suite cover?"),
+    ("Branch is rebased and pushed.", "ok thanks"),
+    ("Deploy to staging?", "approved, ship it"),
+    ("Drop user_settings table?", "absolutely not"),
+    ("Use pickle for serialization?", "use json instead"),
+    ("Run the migration?", "explain what it does first"),
+    ("All checks green.", "looks good"),
+]
 
 
 def _check_cli_on_path() -> bool:
@@ -103,6 +131,143 @@ def _resolve_cassette_path(out_dir: Path, *, allow_overwrite: bool) -> Path:
             f"cassette already exists: {path}; pass --allow-overwrite to clobber"
         )
     return path
+
+
+def _record_lm_dialogue(
+    bus: "MessageBus",
+    session_id: str,
+    *,
+    start_idx: int,
+    model: str = _LM_DEFAULT_MODEL,
+    runner=None,
+) -> list[dict]:
+    """v1.3 Path-A: drive Learn Mode dialogue pairs through the live
+    categorizer and produce ``learn_dialogue`` cassette envelopes.
+
+    For each pair in ``_LM_DIALOGUE_PAIRS``:
+
+      1. Publish a ``desktop_prompt`` envelope and capture its id.
+      2. Publish a ``user_reply`` envelope with ``metadata.pair_id``
+         pointing at the prompt id (mirrors ``jsonl_tail._maybe_emit_learn_mode``).
+      3. Call ``categorize_pair`` directly (no worker thread) so the
+         recorded latency is the categorizer hot-path wall-clock only.
+      4. Write a ``learn_pattern`` row through ``consolidate_patterns``
+         so the cassette + ship-gate runs leave the canonical projection
+         in the same shape the live worker would.
+      5. Return one cassette row per pair.
+
+    A failed categorize_pair (None result) produces an ``unknown`` row
+    with confidence 0.0, matching the live worker's poison-skip path.
+    The recorder never crashes on a single bad pair.
+    """
+    rows: list[dict] = []
+    for offset, (prompt_text, reply_text) in enumerate(_LM_DIALOGUE_PAIRS):
+        idx = start_idx + offset
+        # Synthesize a dialogue chain. Real Desktop turns carry uuid +
+        # parent_uuid; the recorder fakes both since there's no JSONL.
+        prompt_uuid = f"cassette-prompt-{idx}"
+        reply_uuid = f"cassette-reply-{idx}"
+        try:
+            prompt_env = _BusMsgT.new(
+                session_id=session_id,
+                type="desktop_prompt",
+                direction="inbound",
+                content=prompt_text,
+                metadata={
+                    "desktop_session_id": session_id,
+                    "uuid": prompt_uuid,
+                    "parent_uuid": "",
+                    "ts": time.time(),
+                    "synthetic": True,
+                },
+            )
+            bus.publish(prompt_env)
+            reply_env = _BusMsgT.new(
+                session_id=session_id,
+                type="user_reply",
+                direction="inbound",
+                content=reply_text,
+                metadata={
+                    "desktop_session_id": session_id,
+                    "uuid": reply_uuid,
+                    "parent_uuid": prompt_uuid,
+                    "pair_id": prompt_env.id,
+                    "ts": time.time(),
+                    "synthetic": True,
+                },
+            )
+            bus.publish(reply_env)
+        except Exception as exc:
+            print(
+                f"[cassette] LM idx={idx} bus publish failed: {exc!r}",
+                file=sys.stderr,
+            )
+            continue
+
+        t0 = time.perf_counter()
+        try:
+            result = _lm_categorize_pair(
+                prompt_text,
+                reply_text,
+                model=model,
+                runner=runner,
+            )
+        except Exception as exc:
+            print(
+                f"[cassette] LM idx={idx} categorize failed: {exc!r}",
+                file=sys.stderr,
+            )
+            result = None
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        if result is None:
+            category = "unknown"
+            confidence = 0.0
+            reasoning = "categorizer returned None"
+        else:
+            category = result.category
+            confidence = max(0.0, min(1.0, float(result.confidence)))
+            reasoning = result.reasoning or ""
+
+        # Mirror the live worker side-effect so canonical projection is
+        # populated at recorder time too.
+        try:
+            _lm_consolidate(
+                bus,
+                _lm_prompt_hash(prompt_text),
+                category,
+                confidence,
+                now_ts=time.time(),
+            )
+        except Exception:
+            # Non-fatal — the cassette row is the artifact of record.
+            pass
+
+        rows.append(
+            {
+                "idx": idx,
+                "kind": "learn_dialogue",
+                "content": prompt_text,
+                "recorded_latency_ms": round(elapsed_ms, 3),
+                "decision": {
+                    "action": "ALLOW",
+                    "confidence": round(confidence, 4),
+                    "reasoning": f"category={category}",
+                    "matched_hash": "",
+                    "model_used": model,
+                    "layer": 0,
+                },
+                "desktop_prompt": prompt_text,
+                "user_reply": reply_text,
+                "recorded_categorize_latency_ms": round(elapsed_ms, 3),
+                "category_result": {
+                    "category": category,
+                    "confidence": round(confidence, 4),
+                    "reasoning": reasoning[:500],
+                },
+            }
+        )
+    return rows
 
 
 def main() -> int:
@@ -147,6 +312,23 @@ def main() -> int:
         "--model",
         default=HAIKU_MODEL,
         help=f"CLI model id; defaults to {HAIKU_MODEL} for cheap refresh.",
+    )
+    ap.add_argument(
+        "--lm-model",
+        default=_LM_DEFAULT_MODEL,
+        help=(
+            "v1.3 Path-A: model id for the Learn Mode categorizer. "
+            f"Defaults to {_LM_DEFAULT_MODEL} per design spec §2.4."
+        ),
+    )
+    ap.add_argument(
+        "--skip-lm-pump",
+        action="store_true",
+        help=(
+            "v1.3 Path-A: skip the Learn Mode dialogue pump. Produces a "
+            "v1.2-shape cassette (no learn_dialogue envelopes). Useful "
+            "for cheap CI runs that only validate engine.evaluate plumbing."
+        ),
     )
     args = ap.parse_args()
 
@@ -242,6 +424,22 @@ def main() -> int:
                 fp.write(json.dumps(envelope) + "\n")
                 fp.flush()
                 written += 1
+            # v1.3 Path-A: append Learn Mode dialogue envelopes.
+            if not args.skip_lm_pump:
+                lm_rows = _record_lm_dialogue(
+                    bus,
+                    session_id,
+                    start_idx=len(payloads),
+                    model=args.lm_model,
+                )
+                for row in lm_rows:
+                    fp.write(json.dumps(row) + "\n")
+                    fp.flush()
+                    written += 1
+                print(
+                    f"[cassette] LM dialogue: {len(lm_rows)} pairs recorded "
+                    f"(model={args.lm_model})"
+                )
     finally:
         try:
             if cli_pool_obj is not None:
