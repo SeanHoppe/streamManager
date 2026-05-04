@@ -79,10 +79,27 @@ def _categorize(prompt: str, reply: str, *, live: bool, expected: str) -> tuple[
     return (result.category, result.confidence)
 
 
+_MOCK_PREFIX = "[MOCK] "
+_MOCK_BANNER = (
+    "*** MOCK MODE: assertions exercise harness wiring only, NOT "
+    "categorizer quality. Pass --live to invoke the real model. ***"
+)
+
+
+def _emit(line: str, *, live: bool) -> None:
+    """Print a line, prefixing mock-mode lines with [MOCK]."""
+    if live:
+        print(line)
+    else:
+        print(f"{_MOCK_PREFIX}{line}")
+
+
 def run_beacons(path: Path, *, live: bool, mock_pass: bool) -> int:
     """Drive a beacons JSONL file. Returns failure count."""
     failed = 0
     total = 0
+    if not live:
+        print(_MOCK_BANNER)
     with path.open("r", encoding="utf-8") as fh:
         for raw in fh:
             line = raw.strip()
@@ -100,23 +117,28 @@ def run_beacons(path: Path, *, live: bool, mock_pass: bool) -> int:
             # In mock mode (default), force the runner to return the
             # expected category — exercises the harness wiring + the
             # parser, not the model.
-            cat_used = expected_cat if not live else expected_cat
-            out = _categorize(prompt, reply, live=live, expected=cat_used)
+            out = _categorize(prompt, reply, live=live, expected=expected_cat)
             if out is None:
-                print(f"FAIL {beacon_id}: categorizer returned None")
+                _emit(f"FAIL {beacon_id}: categorizer returned None", live=live)
                 failed += 1
                 continue
             cat, conf = out
             if cat != expected_cat:
-                print(f"FAIL {beacon_id}: got category={cat!r}, expected={expected_cat!r}")
+                _emit(
+                    f"FAIL {beacon_id}: got category={cat!r}, expected={expected_cat!r}",
+                    live=live,
+                )
                 failed += 1
                 continue
             if conf < min_conf:
-                print(f"FAIL {beacon_id}: got confidence={conf:.2f} < min={min_conf:.2f}")
+                _emit(
+                    f"FAIL {beacon_id}: got confidence={conf:.2f} < min={min_conf:.2f}",
+                    live=live,
+                )
                 failed += 1
                 continue
-            print(f"PASS {beacon_id}: {cat} ({conf:.2f})")
-    print(f"\nbeacons: {total - failed}/{total} passed")
+            _emit(f"PASS {beacon_id}: {cat} ({conf:.2f})", live=live)
+    _emit(f"\nbeacons: {total - failed}/{total} passed", live=live)
     return failed
 
 
@@ -147,9 +169,16 @@ def run_probes(path: Path, *, live: bool) -> int:
 
     failed = 0
     total = 0
+    if not live:
+        print(_MOCK_BANNER)
     seen_categories: dict[str, str] = {}  # prompt_hash → last seen category
     all_true_cats: dict[str, set[str]] = {}  # prompt_hash → all true_categories observed
     contradiction_expected: set[str] = set()  # prompt_hashes where we expect a snap-demote
+    # Track the original (pre-contradiction) category per prompt_hash so we
+    # can pre-reinforce it 3× before the flip lands. That drives peak
+    # ladder_step above CONTRADICTION_DEMOTE_STEPS so the snap-demote is
+    # observable on the canonical row.
+    pre_reinforced: set[str] = set()
 
     with tempfile.TemporaryDirectory() as td:
         os.environ["SM_LEARN_MODE"] = "1"
@@ -169,24 +198,27 @@ def run_probes(path: Path, *, live: bool) -> int:
                     # 1. Categorizer assertion: returns true_cat, not a distractor.
                     out = _categorize(prompt, reply, live=live, expected=true_cat)
                     if out is None:
-                        print(
+                        _emit(
                             f"FAIL probe row {total}: categorizer returned None for "
-                            f"{prompt!r}"
+                            f"{prompt!r}",
+                            live=live,
                         )
                         failed += 1
                         continue
                     cat, conf = out
                     if cat in distractors:
-                        print(
+                        _emit(
                             f"FAIL probe row {total}: got distractor category "
-                            f"{cat!r} for prompt={prompt!r}"
+                            f"{cat!r} for prompt={prompt!r}",
+                            live=live,
                         )
                         failed += 1
                         continue
                     if cat != true_cat:
-                        print(
+                        _emit(
                             f"FAIL probe row {total}: got {cat!r}, "
-                            f"expected {true_cat!r}"
+                            f"expected {true_cat!r}",
+                            live=live,
                         )
                         failed += 1
                         continue
@@ -196,6 +228,15 @@ def run_probes(path: Path, *, live: bool) -> int:
                     prev = seen_categories.get(h)
                     if prev is not None and prev != true_cat:
                         contradiction_expected.add(h)
+                        # Pre-reinforce the ORIGINAL category 3× so peak
+                        # ladder_step exceeds CONTRADICTION_DEMOTE_STEPS.
+                        # Without this the canonical row sits at step=0
+                        # and the snap-demote (also flooring at 0) is
+                        # invisible. Done once per (prompt_hash, flip).
+                        if h not in pre_reinforced:
+                            for _ in range(3):
+                                consolidate_patterns(bus, h, prev, conf)
+                            pre_reinforced.add(h)
                     seen_categories[h] = true_cat
                     all_true_cats.setdefault(h, set()).add(true_cat)
 
@@ -224,10 +265,11 @@ def run_probes(path: Path, *, live: bool) -> int:
                     and conf >= MIN_BIAS_CONFIDENCE
                     and step > 0
                 ):
-                    print(
+                    _emit(
                         f"FAIL false promotion: prompt_hash={h} sat at "
                         f"approve conf={conf:.2f} step={step} despite "
-                        f"prior reject ground-truth"
+                        f"prior reject ground-truth",
+                        live=live,
                     )
                     failed += 1
 
@@ -242,24 +284,26 @@ def run_probes(path: Path, *, live: bool) -> int:
                     continue
                 cc, ladder = int(rows[0][0]), int(rows[0][1])
                 if cc <= 0:
-                    print(
+                    _emit(
                         f"FAIL contradiction snap-demote did not fire for "
-                        f"prompt_hash={h} (contradicted_count={cc})"
+                        f"prompt_hash={h} (contradicted_count={cc})",
+                        live=live,
                     )
                     failed += 1
-                # ladder_step should be reduced from its peak; given the
-                # canonical row was created at step=0 the only way to
-                # observe the demote is to confirm contradicted_count
-                # incremented, which we did above. Logging detail:
-                print(
+                # ladder_step should be reduced from its peak; pre-
+                # reinforcement above pushed peak above
+                # CONTRADICTION_DEMOTE_STEPS so the demote is observable
+                # in the ladder column too.
+                _emit(
                     f"contradiction observed: {h[:8]} cc={cc} "
-                    f"ladder_step={ladder} (snap by {CONTRADICTION_DEMOTE_STEPS})"
+                    f"ladder_step={ladder} (snap by {CONTRADICTION_DEMOTE_STEPS})",
+                    live=live,
                 )
         finally:
             bus.close()
             os.environ.pop("SM_LEARN_MODE", None)
 
-    print(f"\nprobes: {total - failed}/{total} rows passed")
+    _emit(f"\nprobes: {total - failed}/{total} rows passed", live=live)
     return failed
 
 

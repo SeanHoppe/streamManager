@@ -141,9 +141,11 @@ def consolidate_patterns(
       flipped here; that decision belongs to the categorizer's audit
       log dominance, not to a single dialogue turn.
     * Non-actionable observed category (clarify/acknowledge/unknown/
-      redirect): recorded as a touch — ``last_reinforced_ts`` updated
-      so the row is not aged out by mere absence — but no ladder
-      change.
+      redirect) on top of a non-actionable existing row: NO-OP. We do
+      NOT refresh ``last_reinforced_ts`` because the row carries no
+      bias-relevant signal — letting it age out is the correct default.
+      A non-actionable observation against an actionable existing row
+      is treated as a contradiction (same code path as below).
     """
     if not prompt_hash_val:
         return
@@ -167,17 +169,16 @@ def consolidate_patterns(
 
     # Existing canonical row.
     if cat not in _ACTIONABLE and existing.category not in _ACTIONABLE:
-        # Both sides non-actionable; just refresh the touch timestamp.
-        bus.execute_write(
-            "UPDATE learn_patterns_canonical SET "
-            "last_reinforced_ts=?, updated_at=? WHERE id=?",
-            (now, now, existing.id),
-        )
+        # Both sides non-actionable: NO-OP. Refreshing
+        # last_reinforced_ts here would shield stale clarify/acknowledge
+        # rows from the decay sweep with no bias-relevant signal to
+        # justify the keep-alive. Aging out is the correct default.
         return
 
     if cat == existing.category:
         # Reinforcement. Bump ladder, refresh ts, average confidence.
         new_step = _clamp_step(existing.ladder_step + 1)
+        # Recency-weighted: latest obs gets 0.5 weight; first obs decays 2^-N after N reinforcements. EMA with alpha=0.5.
         new_conf = (existing.confidence + conf) / 2.0
         bus.execute_write(
             "UPDATE learn_patterns_canonical SET "
