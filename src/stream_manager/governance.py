@@ -16,6 +16,7 @@ from stream_manager.cli_governance import CliGovernor
 from stream_manager.cli_governance import is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
 from stream_manager.hitl import HitlQueue
+from stream_manager.learn_categorizer import BiasHint, bias_for
 from stream_manager.maturity_reader import MaturityReader
 from stream_manager.messages import Message
 from stream_manager.model_router import (
@@ -227,6 +228,19 @@ class GovernanceEngine:
             self.bus.publish(bus_msg)
         decision = self._evaluate_inner(msg)
 
+        # v1.3 P5d: consult Learn Mode advisory bias. The bias is read
+        # ONLY here, AFTER the existing ladder placement (precheck →
+        # graph → CLI) has produced its decision. The hint never
+        # mutates the decision — it pre-fills the HITL prompt and emits
+        # a silent audit row. Safety-first invariants from INTENT.md
+        # (§"Safety priorities") have already short-circuited inside
+        # _evaluate_inner_core via fast_precheck before we ever get
+        # here, so a high-confidence "approve" pattern cannot promote
+        # a `rm -rf /` past BLOCK. The bias-application site below
+        # additionally refuses to attach the hint when the message
+        # content matches any of those classes, as belt-and-suspenders.
+        bias = self._consult_learn_mode_bias(msg.content, decision)
+
         # FR-HITL §4.9: route through the HITL queue if one is wired AND
         # we have a bus message to anchor the pending row to. The
         # classify_trigger pre-check is cheap and avoids a route() call
@@ -242,6 +256,15 @@ class GovernanceEngine:
                 log.exception("hitl: classify_trigger raised; skipping route")
                 trigger = None
             if trigger is not None:
+                # v1.3 P5d: bias fires ONLY when the HITL gate is going
+                # to engage anyway. Even at confidence=1.0 the bias
+                # never short-circuits the gate — the operator still
+                # confirms. The audit envelope records that bias was
+                # offered.
+                if bias is not None:
+                    self._emit_learn_mode_bias_applied(
+                        bus_msg.id, msg.content, bias, trigger
+                    )
                 try:
                     decision = self.hitl.route(
                         decision,
@@ -589,6 +612,118 @@ class GovernanceEngine:
             )
 
         return None
+
+    # ── v1.3 P5d: Learn Mode advisory bias ───────────────────────────
+    #
+    # Bias is consulted ADDITIVELY after _evaluate_inner. It never
+    # mutates the decision; it only pre-fills the HITL prompt and
+    # records a silent audit row. INTENT.md safety priorities ALWAYS
+    # WIN — destructive shell, force-push to protected branches,
+    # eval/exec injection, and credential exfiltration are short-
+    # circuited by fast_precheck inside _evaluate_inner_core BEFORE
+    # bias is consulted. The check below is belt-and-suspenders: even
+    # if a future refactor reordered the ladder, bias would still
+    # refuse to attach to a message whose content matches any safety-
+    # priority regex.
+
+    def _is_safety_priority_content(self, content: str) -> bool:
+        """True if the message hits any INTENT.md §"Safety priorities" class.
+
+        Matches the same regexes used elsewhere in this module so we
+        share a single source of truth. The check is read-only; a True
+        answer means bias must NOT be offered for this message,
+        regardless of pattern strength.
+        """
+        if not content:
+            return False
+        if _DESTRUCTIVE_SHELL_RE.search(content):
+            return True
+        if _FORCE_PUSH_RE.search(content):
+            return True
+        if _CRED_EXFIL_RE.search(content):
+            return True
+        # Code-injection patterns: eval(/exec( in untrusted bodies
+        # (priority #3). Mirrors fast_precheck's heuristic; we do not
+        # import the precheck regex to avoid coupling.
+        if "eval(" in content or "exec(" in content:
+            return True
+        return False
+
+    def _consult_learn_mode_bias(
+        self, content: str, decision: GovDecision
+    ) -> BiasHint | None:
+        """Return the Learn Mode bias hint for ``content``, or None.
+
+        Returns None when:
+          * No bus is wired (bias requires the ``learn_patterns`` table).
+          * The decision already reached a non-ALLOW outcome — the
+            existing ladder placement is more authoritative than a
+            historical pattern, and we never want to weaken a BLOCK.
+          * The message content matches any INTENT.md safety priority
+            (belt-and-suspenders; precheck already short-circuited).
+          * No matching pattern exists or confidence is below
+            ``MIN_BIAS_CONFIDENCE``.
+        """
+        if self.bus is None:
+            return None
+        # Defense in depth: never bias a safety-priority decision. The
+        # standard ladder has already produced a BLOCK/INTERVENE for
+        # these via fast_precheck; we additionally refuse to surface a
+        # hint regardless of how confident the pattern is.
+        if self._is_safety_priority_content(content):
+            return None
+        # Bias is only meaningful when the verdict is ALLOW-shaped or
+        # OBSERVE — i.e. a path where the operator is genuinely free to
+        # confirm or reject via HITL. For BLOCK/INTERVENE we never want
+        # to suggest "approve" via the HITL pre-fill.
+        if decision.action in {"BLOCK", "INTERVENE"}:
+            return None
+        try:
+            return bias_for(content, self.bus)
+        except Exception:
+            log.exception("learn_mode bias_for raised; skipping bias")
+            return None
+
+    def _emit_learn_mode_bias_applied(
+        self,
+        bus_msg_id: str,
+        content: str,
+        bias: BiasHint,
+        trigger: object,
+    ) -> None:
+        """Emit the silent ``learn_mode_bias_applied`` audit envelope.
+
+        Per FR-LM-5 (design §2.6): no toast, no undo. The dashboard
+        decisions feed renders this row as a silent audit entry. The
+        envelope carries the bias hint metadata so operators can trace
+        what was offered without the categorizer running synchronously
+        on the hot path.
+        """
+        if self.bus is None or not self.session_id:
+            return
+        try:
+            self.bus.publish(
+                _msg_bus.Message.new(
+                    session_id=self.session_id,
+                    type="learn_mode_bias_applied",
+                    direction="internal",
+                    content=(
+                        f"Learn Mode bias offered (category="
+                        f"{bias.category}, confidence={bias.confidence:.2f})"
+                    ),
+                    metadata={
+                        "anchor_msg_id": bus_msg_id,
+                        "category": bias.category,
+                        "confidence": bias.confidence,
+                        "ladder_step_suggestion": bias.ladder_step_suggestion,
+                        "pattern_id": bias.pattern_id,
+                        "last_reinforced_ts": bias.last_reinforced_ts,
+                        "hitl_trigger": getattr(trigger, "value", str(trigger)),
+                    },
+                )
+            )
+        except Exception:
+            log.exception("learn_mode_bias_applied: publish failed")
 
     def _evaluate_inner_core(self, msg: Message) -> GovDecision:
         pre = fast_precheck(msg.content, self.project_context)
