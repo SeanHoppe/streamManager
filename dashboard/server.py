@@ -1062,6 +1062,96 @@ def _iso_now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
 
 
+# ── v1.4: Learn Mode runtime toggle (slide button) ───────────────────
+#
+# Dashboard surface for flipping the Learn Mode categorizer worker
+# on/off at runtime without bouncing the host. Persists to
+# ``learn_categorizer_state(key='runtime_enabled')`` via the bus
+# helper so the toggle survives a restart. The worker reads the flag
+# at the top of every ``tick()`` (default poll interval 5 s), so
+# round-trip toggle latency is bounded by that interval.
+#
+# Boot-time gate (``SM_LEARN_MODE`` env var) is unchanged — a fresh
+# host process still requires explicit opt-in before the worker
+# spawns. The runtime toggle only flips the active state of an
+# already-running worker.
+
+@app.get("/api/learn-mode/state")
+async def api_learn_mode_state():
+    """Return the runtime + boot-time Learn Mode enable flags.
+
+    ``runtime_enabled``: persisted to the bus; the value the worker
+    consults on each tick.
+
+    ``env_enabled``: the boot-time ``SM_LEARN_MODE`` env-var read.
+    Surfaced so the dashboard can warn the operator that the worker
+    will not auto-start on host restart unless the env var is also
+    set.
+    """
+    from stream_manager.learn_categorizer import (  # noqa: WPS433
+        get_runtime_enabled,
+        is_enabled as _env_enabled,
+    )
+    bus = _get_bus()
+    if bus is None:
+        # No bus wired (e.g. a unit-test client without WAL init);
+        # fall back to env-only and report runtime as None.
+        return {
+            "runtime_enabled": None,
+            "env_enabled": _env_enabled(),
+            "bus_available": False,
+        }
+    try:
+        runtime = bool(get_runtime_enabled(bus))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "runtime_enabled": runtime,
+        "env_enabled": _env_enabled(),
+        "bus_available": True,
+    }
+
+
+@app.post("/api/learn-mode/state")
+async def api_learn_mode_state_update(request: Request):
+    """Flip the runtime Learn Mode enable flag.
+
+    Body: ``{"enabled": true|false}``. Returns the same shape as the
+    GET endpoint after the write.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(
+            status_code=400, detail="enabled must be a JSON boolean"
+        )
+    from stream_manager.learn_categorizer import (  # noqa: WPS433
+        get_runtime_enabled,
+        is_enabled as _env_enabled,
+        set_runtime_enabled,
+    )
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="bus not initialized; cannot persist runtime toggle",
+        )
+    try:
+        set_runtime_enabled(bus, enabled)
+        runtime = bool(get_runtime_enabled(bus))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "runtime_enabled": runtime,
+        "env_enabled": _env_enabled(),
+        "bus_available": True,
+        "ok": True,
+    }
+
+
 # ── FR-OG-7 (Phase 5): /api/maturity endpoint ─────────────────────────
 #
 # A separate, lazily-initialized MaturityReader is held at module scope

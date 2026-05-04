@@ -411,8 +411,23 @@ class LearnCategorizerWorker:
         a decay sweep over ``learn_patterns_canonical``. The sweep
         is cheap (one UPDATE per aged row) and never touches the
         verdict hot path.
+
+        v1.4: consults the runtime explicit-disable flag at the top
+        of each tick. When the operator has flipped the toggle off via
+        the dashboard, the loop returns 0 immediately — no DB drain,
+        no Sonnet call, no decay sweep. The worker thread stays alive
+        so a re-enable is picked up on the next interval. When no
+        runtime row has been written (v1.3 default), behaviour is
+        unchanged: the worker proceeds to drain.
         """
         self._tick_count += 1
+        try:
+            if get_runtime_explicit_disable(self._bus):
+                return 0
+        except Exception:
+            # Defensive: a transient DB issue while reading the
+            # toggle row should not silently disable the worker.
+            log.exception("learn_categorizer: runtime-flag read raised")
         pairs = self._fetch_new_pairs()
         if not pairs:
             self._maybe_decay_sweep()
@@ -609,14 +624,91 @@ class LearnCategorizerWorker:
 
 
 def is_enabled() -> bool:
-    """Optional environment gate.
+    """Optional environment gate (boot-time).
 
     The categorizer worker is opt-in via ``SM_LEARN_MODE=1`` so existing
     deployments don't suddenly start spawning Sonnet subprocesses on
     every Desktop dialogue turn. The host that owns the EngineRegistry
     lifecycle should check this flag before calling ``start()``.
+
+    Runtime toggling (v1.4): once the worker has been booted at least
+    once with ``SM_LEARN_MODE=1`` set, operators can flip the active
+    state at runtime via the dashboard slide-toggle. See
+    ``get_runtime_enabled`` / ``set_runtime_enabled`` for the runtime
+    gate consulted by the worker's ``tick()`` body. The boot gate
+    here remains the env var so a fresh process never starts the worker
+    without explicit opt-in.
     """
     return os.environ.get("SM_LEARN_MODE", "").lower() in ("1", "true", "yes")
+
+
+# v1.4 — Runtime toggle. Persisted to ``learn_categorizer_state`` with
+# the dedicated key below so the toggle survives a host restart. Read
+# by the worker on every ``tick()`` so a runtime-disable takes effect
+# within one polling interval (default 5 s) without bouncing the worker
+# thread. The worker is NOT torn down on disable — it stays in its
+# polling loop and short-circuits each tick — so re-enable is also
+# instant on the next interval.
+RUNTIME_ENABLED_KEY = "runtime_enabled"
+
+
+def get_runtime_enabled(bus: "MessageBus") -> bool:
+    """Effective runtime enable state, env fallback when no row exists.
+
+    Returns ``True`` when the row is present with value ``"1"``,
+    ``False`` when present with any other value, or — when no row
+    exists — falls back to the boot-time env gate ``is_enabled()``.
+
+    NOTE: this is the *operator-facing* read used by the dashboard
+    endpoint. The worker hot-path uses ``get_runtime_explicit_disable``
+    instead so a deployment that never writes a runtime toggle keeps
+    the pre-v1.4 behaviour (worker runs once started; env is the boot
+    gate, not a per-tick gate).
+
+    Failures bubble up; callers that must not crash on a transient DB
+    issue should wrap this in their own try/except.
+    """
+    rows = bus.fetch_rows(
+        "SELECT value FROM learn_categorizer_state WHERE key=?",
+        (RUNTIME_ENABLED_KEY,),
+    )
+    if not rows:
+        return is_enabled()
+    return str(rows[0][0]).strip() == "1"
+
+
+def get_runtime_explicit_disable(bus: "MessageBus") -> bool:
+    """Worker hot-path read.
+
+    Returns ``True`` only when the runtime row exists AND is set to
+    ``"0"``. In every other case (no row, or row=="1") returns False.
+    The worker's ``tick()`` short-circuits when this returns True;
+    otherwise it proceeds to drain pairs as before. This preserves
+    backward compat with the v1.3 worker tests that exercise ``tick()``
+    directly without first writing a runtime row.
+    """
+    rows = bus.fetch_rows(
+        "SELECT value FROM learn_categorizer_state WHERE key=?",
+        (RUNTIME_ENABLED_KEY,),
+    )
+    if not rows:
+        return False
+    return str(rows[0][0]).strip() == "0"
+
+
+def set_runtime_enabled(bus: "MessageBus", enabled: bool) -> None:
+    """Persist the runtime enable flag.
+
+    Writes through ``MessageBus.execute_write`` so we share the same
+    write path the worker uses for its ``last_id_seen`` ledger. The
+    worker observes the new value on its next tick — typically within
+    ``DEFAULT_POLL_INTERVAL_S`` seconds.
+    """
+    bus.execute_write(
+        "INSERT OR REPLACE INTO learn_categorizer_state(key, value) "
+        "VALUES (?, ?)",
+        (RUNTIME_ENABLED_KEY, "1" if enabled else "0"),
+    )
 
 
 # ── v1.3 P5d: advisory bias hookup ──────────────────────────────────
