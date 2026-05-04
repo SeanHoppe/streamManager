@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS hitl_pending (
     trigger_reason TEXT NOT NULL,
     queued_at TEXT NOT NULL,
     resolved_at TEXT,
-    resolution TEXT
+    resolution TEXT,
+    matched_hash TEXT NOT NULL DEFAULT '',
+    bias_hint TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_hitl_pending_unresolved ON hitl_pending(resolved_at);
 
@@ -254,6 +256,16 @@ class MessageBus:
                     "ALTER TABLE hitl_pending ADD COLUMN matched_hash TEXT NOT NULL DEFAULT ''"
                 )
 
+            # v1.3 P5d (Fix B / review) — additive migration for hitl_pending:
+            # JSON-encoded ``bias_hint`` carries the Learn Mode advisory
+            # bias so the dashboard can pre-fill the prompt with the
+            # suggested action. Empty string when no bias matched. The
+            # verdict is never mutated; the operator still confirms.
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(
+                    "ALTER TABLE hitl_pending ADD COLUMN bias_hint TEXT NOT NULL DEFAULT ''"
+                )
+
             # One-time backfill: rows authored before Task L encoded the
             # pattern hash inside proposed_action as `flag_cross_session:<h>`.
             # Migrate them to (matched_hash=<h>, proposed_action='flag').
@@ -415,19 +427,26 @@ class MessageBus:
         proposed_confidence: float,
         trigger_reason: str,
         matched_hash: str = "",
+        bias_hint: str = "",
     ) -> int:
         """Queue a decision for human approval. Returns hitl_pending.id.
 
         Task L: matched_hash carries the pattern hash for cross_session_flag
         rows so the dispatcher does not need to parse it out of
         proposed_action. Default '' for non-cross-session callers.
+
+        v1.3 P5d (Fix B): ``bias_hint`` is a JSON-encoded
+        ``BiasHint`` payload (or '' when no bias matched). The dashboard
+        reads this column to pre-fill the HITL prompt with the suggested
+        action. Verdict is never mutated; the operator still confirms.
         """
         queued_at = _dt.datetime.now(_dt.UTC).isoformat()
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO hitl_pending (message_id, proposed_action, "
-                "proposed_confidence, trigger_reason, queued_at, matched_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "proposed_confidence, trigger_reason, queued_at, "
+                "matched_hash, bias_hint) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     message_id,
                     proposed_action,
@@ -435,6 +454,7 @@ class MessageBus:
                     trigger_reason,
                     queued_at,
                     matched_hash,
+                    bias_hint,
                 ),
             )
             pending_id = int(cur.lastrowid or 0)
@@ -465,7 +485,8 @@ class MessageBus:
             rows = self._conn.execute(
                 "SELECT hp.id, hp.message_id, hp.proposed_action, "
                 "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
-                "hp.resolved_at, hp.resolution, hp.matched_hash "
+                "hp.resolved_at, hp.resolution, hp.matched_hash, "
+                "hp.bias_hint "
                 "FROM hitl_pending hp "
                 "JOIN messages m ON hp.message_id = m.id "
                 "WHERE m.session_id=? AND hp.resolved_at IS NULL "
@@ -485,6 +506,7 @@ class MessageBus:
                     "resolved_at": r[6],
                     "resolution": r[7],
                     "matched_hash": r[8] or "",
+                    "bias_hint": r[9] or "",
                 }
             )
         return out
@@ -495,7 +517,7 @@ class MessageBus:
             row = self._conn.execute(
                 "SELECT id, message_id, proposed_action, proposed_confidence, "
                 "trigger_reason, queued_at, resolved_at, resolution, "
-                "matched_hash "
+                "matched_hash, bias_hint "
                 "FROM hitl_pending WHERE id=?",
                 (pending_id,),
             ).fetchone()
@@ -511,6 +533,7 @@ class MessageBus:
             "resolved_at": row[6],
             "resolution": row[7],
             "matched_hash": row[8] or "",
+            "bias_hint": row[9] or "",
         }
 
     def annotate_decision(

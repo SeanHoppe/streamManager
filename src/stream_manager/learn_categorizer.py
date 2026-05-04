@@ -567,3 +567,162 @@ def is_enabled() -> bool:
     lifecycle should check this flag before calling ``start()``.
     """
     return os.environ.get("SM_LEARN_MODE", "").lower() in ("1", "true", "yes")
+
+
+# ── v1.3 P5d: advisory bias hookup ──────────────────────────────────
+#
+# Read-only consumer of ``learn_patterns``. The verdict path consults
+# ``bias_for(prompt)`` at decision time to optionally pre-fill the HITL
+# prompt with a suggested action. The bias is ADVISORY only:
+#
+#   * It NEVER auto-allows a request.
+#   * It NEVER short-circuits the HITL gate — even at confidence=1.0,
+#     the operator still sees and confirms the HITL prompt.
+#   * INTENT.md §"Safety priorities" ALWAYS WIN. Destructive shell,
+#     force-push to protected branches, eval/exec injection, and
+#     credential exfiltration are short-circuited by the verdict path
+#     BEFORE bias is consulted (and the bias-application site re-checks
+#     the safety regexes belt-and-suspenders).
+#
+# Design (locked by ``docs/learn-mode-design.md`` §3.2 "Bias reader"):
+#
+#   * Lookup key: exact ``prompt_hash(prompt)`` match. Similarity-based
+#     fuzzy matching is deferred to v1.4+.
+#   * Ordering when multiple rows match: ``last_reinforced_ts DESC``,
+#     then ``confidence DESC``. Decay (P5e) reinforces by bumping
+#     ``last_reinforced_ts``, so freshest reinforcement wins; ties
+#     break on confidence.
+#   * ``MIN_BIAS_CONFIDENCE`` floor: rows with ``confidence`` below
+#     this threshold do not produce a hint.
+#   * Categories ``unknown`` / ``clarify`` / ``acknowledge`` / ``redirect``
+#     are not actionable as ladder hints in v1.3 — bias is returned ONLY
+#     for ``approve`` and ``reject``.
+
+# Fix G (review): configurable confidence floor. Defaults to 0.6 to match the
+# v1.3 design spec (§3.2 "Bias reader"); operators can lower it (e.g. for
+# conservative/learning sessions) or raise it via SM_LEARN_BIAS_FLOOR.
+MIN_BIAS_CONFIDENCE = float(os.environ.get("SM_LEARN_BIAS_FLOOR", "0.6"))
+
+# Categories that produce an actionable ladder hint in v1.3. Other
+# categories (clarify / acknowledge / redirect / unknown) are recorded
+# by the categorizer but do not bias the verdict.
+_BIAS_ACTIONABLE_CATEGORIES = frozenset({"approve", "reject"})
+
+
+@dataclass(frozen=True)
+class BiasHint:
+    """Advisory bias offered to the verdict path at decision time.
+
+    The hint pre-fills the HITL prompt with a suggested action. The
+    operator still confirms — bias never auto-allows, never short-
+    circuits the gate.
+
+    Attributes
+    ----------
+    category : str
+        Categorizer-assigned category. v1.3 actionable values are
+        ``"approve"`` and ``"reject"``.
+    confidence : float
+        Confidence in the category, 0.0-1.0. Always >= ``MIN_BIAS_CONFIDENCE``
+        when this hint is returned.
+    ladder_step_suggestion : int
+        Suggested ladder rung (L1-L4) the pattern has earned via the
+        decay/reinforcement scheduler. v1.3 uses the raw ``ladder_step``
+        column from ``learn_patterns``; P5e populates it.
+    pattern_id : int
+        ``learn_patterns.id`` of the row that produced this hint. Used
+        in the audit envelope so operators can trace back to the
+        originating row.
+    last_reinforced_ts : float
+        Epoch seconds of the most recent reinforcement. Surfaced in the
+        audit envelope to aid debugging stale-pattern issues.
+    """
+
+    category: str
+    confidence: float
+    ladder_step_suggestion: int
+    pattern_id: int
+    last_reinforced_ts: float
+
+
+def bias_for(
+    prompt: str,
+    bus: "MessageBus",
+    *,
+    min_confidence: float = MIN_BIAS_CONFIDENCE,
+) -> "BiasHint | None":
+    """Look up an advisory bias hint for ``prompt`` in ``learn_patterns``.
+
+    Returns the highest-priority matching row as a ``BiasHint``, or
+    ``None`` when no actionable row exists. ``None`` outcomes:
+
+      * No row matches the exact ``prompt_hash(prompt)``.
+      * Best matching row has ``confidence < min_confidence``.
+      * Best matching row's category is not in
+        ``_BIAS_ACTIONABLE_CATEGORIES`` (``unknown``/``clarify``/
+        ``acknowledge``/``redirect`` are silent — no hint).
+      * Empty / falsy ``prompt``.
+      * Bus read fails (logged; non-fatal).
+
+    The lookup is read-only and goes through the public
+    ``MessageBus.fetch_rows`` helper. The bus lock is held only for the
+    SELECT — same envelope as every other governance read path.
+
+    Parameters
+    ----------
+    prompt : str
+        The message content the verdict path is about to evaluate. Same
+        text passed to ``prompt_hash`` for stable lookup.
+    bus : MessageBus
+        Bus owning the ``learn_patterns`` table.
+    min_confidence : float, optional
+        Confidence floor; defaults to ``MIN_BIAS_CONFIDENCE`` (0.6).
+        Exposed so tests can pin a different threshold.
+    """
+    # Fix A (review): respect the env gate. When SM_LEARN_MODE is unset
+    # the categorizer worker isn't running, but stale patterns from a
+    # prior session may still sit in the DB. Returning early prevents
+    # those rows from silently biasing the verdict.
+    if not is_enabled():
+        return None
+    if not prompt:
+        return None
+    h = prompt_hash(prompt)
+    try:
+        rows = bus.fetch_rows(
+            # Fix E (review): id DESC final tiebreak so behavior is fully
+            # deterministic even when (last_reinforced_ts, confidence)
+            # are equal across rows.
+            "SELECT id, category, confidence, ladder_step, "
+            "last_reinforced_ts "
+            "FROM learn_patterns "
+            "WHERE prompt_hash = ? "
+            "ORDER BY last_reinforced_ts DESC, confidence DESC, id DESC "
+            "LIMIT 1",
+            (h,),
+        )
+    except Exception:
+        log.exception("learn_categorizer.bias_for: fetch_rows failed")
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    try:
+        pattern_id = int(row[0])
+        category = str(row[1] or "")
+        confidence = float(row[2] or 0.0)
+        ladder_step = int(row[3] or 0)
+        last_reinforced_ts = float(row[4] or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if category not in _BIAS_ACTIONABLE_CATEGORIES:
+        return None
+    if confidence < min_confidence:
+        return None
+    return BiasHint(
+        category=category,
+        confidence=confidence,
+        ladder_step_suggestion=ladder_step,
+        pattern_id=pattern_id,
+        last_reinforced_ts=last_reinforced_ts,
+    )
