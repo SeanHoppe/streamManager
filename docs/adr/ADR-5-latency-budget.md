@@ -1,6 +1,6 @@
 # ADR-5: Governance latency budget (revised for v1.0)
 
-- **Status**: Accepted (v1.0); re-baselined v1.1 (2026-05-03); re-baselined v1.2 (2026-05-03, see §"v1.2 ship-gate baseline"); re-baselined v1.3 (2026-05-04, see §"v1.3 ship-gate baseline"); re-baselined v1.4 (2026-05-04, see §"v1.4 ship-gate baseline")
+- **Status**: Accepted (v1.0); re-baselined v1.1 (2026-05-03); re-baselined v1.2 (2026-05-03, see §"v1.2 ship-gate baseline"); re-baselined v1.3 (2026-05-04, see §"v1.3 ship-gate baseline"); re-baselined v1.4 (2026-05-04, see §"v1.4 ship-gate baseline"); re-baselined v1.5 (2026-05-04, see §"v1.5 ship-gate baseline")
 - **Date**: 2026-05-02
 - **Supersedes**: original ADR-5 budget (200 ms p50 / 2 s p95, SDK-era)
 
@@ -383,6 +383,89 @@ ACCEPTED as v1.4 budget. v1.5 latency work measures against this section.
 - **LM (categorize) p95 = 19.26 s.** Approaches the ≤ 25 s budget. n=10 Sonnet round-trip; variance is dominated by upstream queueing. Trend across v1.3.1 (15.39 s) → v1.4 (19.26 s) is +3.87 s — within sample noise but worth a re-measure if the next ship-gate also lands above 18 s.
 - **All other v1.3 caveats resolved or unchanged.** Lifecycle bridge orphan-free positively asserted again. ALLOW p95 budget widening from v1.3 stands; the phase breakout makes a future tightening defensible once `_evaluate_inner` sub-phases ship.
 
+## v1.5 ship-gate baseline
+
+- **Source**: `reports/soak-20260504T201714Z.md`
+- **Date**: 2026-05-04
+- **Driver**: `tools/soak_driver.py --cli-pool-size 2` (Tier 3 per ADR-17) **with v1.5 `_evaluate_inner` sub-phase instrumentation enabled**
+- **Runtime**: 1931.2 s (32.2 min) — same shape as v1.4 (60 envelopes + LM dialogue pump)
+- **Events**: 60 emitted / 158 received via SSE
+- **Verdict**: PASS (100% SSE, RSS drift **−1.20 MB** (shrink), no uncaught exceptions, lifecycle bridge 0 orphans)
+
+### Latency targets (overall, n=60)
+
+| Metric  | v1.5 measured |
+|---------|---------------|
+| p50     | 2.779 s       |
+| p95     | 5.820 s       |
+| max     | 15.105 s      |
+| mean    | 2.678 s       |
+
+### Per-band split
+
+| Path                 | n  | p50      | p95      |
+|----------------------|----|----------|----------|
+| ALLOW (routine)      | 50 |  2.78 s  |  5.60 s  |
+| L2/L3 escalation     |  5 |  0.00 s  |  4.40 s  |
+| L4 alignment         |  5 |  3.53 s  | 12.90 s  |
+| LM (categorize)      | 10 | 10.69 s  | 15.39 s  |
+
+### ALLOW _evaluate_inner sub-phase breakout (NEW v1.5)
+
+First ship-gate with the v1.5 sub-phase instrumentation inside `_evaluate_inner` enabled. Sourced from the `### ALLOW _evaluate_inner sub-phase breakout (v1.5)` block in the report. **Diagnoses the v1.4 §"Caveats" `_evaluate_inner` opacity item.**
+
+| Phase                  |  n  | p50 ms   | p95 ms   | max ms   |
+|------------------------|-----|----------|----------|----------|
+| og7_check              |  50 |  0.00    |  0.00    |   0.00   |
+| fast_precheck          |  50 |  0.05    |  0.08    |   0.16   |
+| graph_classify         |  50 |  0.03    |  0.04    |   0.18   |
+| hydrator_state_read    |  50 |  0.00    |  0.00    |   0.00   |
+| routing_dispatch       |  50 |  0.01    |  0.01    |   0.01   |
+
+For reference, the v1.4 publish-path block on the same run reports `evaluate_inner` p95 = **5599.07 ms**.
+
+**Finding.** The v1.4 §"Caveats" hypothesis — that the ALLOW p95 tail "is now the load-bearing tail" inside `_evaluate_inner` and would be attributable to one of `og7_check` / `fast_precheck` / `graph_classify` / `hydrator_state_read` / `routing_dispatch` — is **falsified by the data**. The five v1.5 sub-phases sum to **0.13 ms p95** against a 5599 ms `evaluate_inner` p95: ~99.998% of the `_evaluate_inner` wall-clock is in code paths NOT covered by the v1.5 instrumentation. The five named sub-phases are bookkeeping-fast (synchronous in-process lookups, idle-bus state reads, dict routing). The remaining residue inside `_evaluate_inner` — most plausibly the synchronous escalation path into the `cli_pool` worker (Sonnet round-trip via `claude -p` subprocess) and any model-side blocking call reachable from the L0/L1 routing branch — is the actual ALLOW p95 driver. **The v1.4 opacity is partially resolved (five components ruled out) and partially deferred (the un-instrumented residue is the next instrumentation target).**
+
+### Delta vs v1.4 ship-gate (`reports/soak-20260504T182027Z.md`)
+
+| Metric           | v1.4     | v1.5     | Δ          | Class       |
+|------------------|----------|----------|------------|-------------|
+| Overall p50      | 3.387 s  | 2.779 s  | **−0.61 s** | improvement |
+| Overall p95      | 8.178 s  | 5.820 s  | **−2.36 s** | improvement |
+| Overall max      | 11.276 s | 15.105 s | +3.83 s    | parity (n=1 outlier; L4 band) |
+| Overall mean     | 3.120 s  | 2.678 s  | −0.44 s    | improvement |
+| ALLOW p95        | 7.57 s   | 5.60 s   | **−1.97 s** | improvement |
+| L2/L3 p95        | 4.13 s   | 4.40 s   | +0.27 s    | parity (n=5 noise) |
+| L4 alignment p95 | 10.82 s  | 12.90 s  | +2.08 s    | parity (n=5 noise; under ≤14 s budget) |
+| LM (cat) p95     | 19.26 s  | 15.39 s  | **−3.87 s** | improvement (retreats below v1.4 watch threshold) |
+| RSS drift        | −5.88 MB | −1.20 MB | parity     | both shrink, well under 50 MB budget |
+
+v1.5 has not changed the verdict path — the engine code edits are additive (five new `_last_phase_timings_ms` keys, a new soak driver report block, no reordering of existing phases). The ~−2.4 s overall p95 improvement and ~−2.0 s ALLOW p95 improvement are consistent with measurement noise from a different time-of-day soak window plus upstream Anthropic rate-limit variance. Treat the improvement as fortuitous, not earned.
+
+### Budget
+
+The v1.4 budget table is **carried forward unchanged** for v1.5. The sub-phase breakout falsifies a v1.4-prediction but does not yet localise the ALLOW p95 tail to a specific component, so no tightening is justified. v1.6 latency work measures against the table below:
+
+| Path                 | v1.5 budget (= v1.4 carried forward)                  |
+|----------------------|-------------------------------------------------------|
+| ALLOW p95            | ≤ 12 s                                                |
+| L2/L3 escalation p95 | ≤ 8 s                                                 |
+| L4 alignment p95     | ≤ 14 s                                                |
+| LM (categorize) p95  | ≤ 25 s                                                |
+| Overall p95          | ≤ 12 s                                                |
+| Hard timeout         | 25 s (unchanged)                                      |
+
+### Status
+
+ACCEPTED as v1.5 budget. v1.6 latency work measures against this section.
+
+### Caveats
+
+- **v1.4 `_evaluate_inner` opacity caveat — partially resolved.** The five v1.5 sub-phases (`og7_check`, `fast_precheck`, `graph_classify`, `hydrator_state_read`, `routing_dispatch`) collectively account for 0.13 ms p95 of the 5599 ms `evaluate_inner` p95. **None of these five dominates the ALLOW p95 tail** — they are in fact ruled out as candidates. The actual tail driver lives in the un-instrumented residue inside `_evaluate_inner`, most plausibly the synchronous `cli_pool` round-trip on the escalation branch. v1.6 should extend instrumentation around the residue (CLI dispatch entry, model round-trip wait, response handling) to close the gap.
+- **`hydrator_state_read` n=50 (fired on every ALLOW), p95 = 0.00 ms.** The lazy-hydrator state read is effectively free under the soak workload. The v1.4 prediction that this might be a tail driver is also falsified.
+- **LM (categorize) p95 = 15.39 s — trend retreated.** The v1.4 watch item ("re-measure if the next ship-gate also lands above 18 s") is **closed**. v1.3.1 = 15.39 s → v1.4 = 19.26 s → v1.5 = 15.39 s; the v1.4 elevation did not persist. The +3.87 s v1.4 excursion is now classified as Sonnet upstream queueing variance within n=10 sample noise, not a sustained regression. No v1.6 follow-up needed.
+- **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.4 are within sample noise; the overall and ALLOW p95 are the higher-confidence comparisons.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
@@ -401,6 +484,9 @@ ACCEPTED as v1.4 budget. v1.5 latency work measures against this section.
 - `reports/soak-20260504T182027Z.md` — v1.4 32-min ship-gate soak with
   the new `engine._last_phase_timings_ms` instrumentation enabled (the
   v1.4 baseline source per §"v1.4 ship-gate baseline")
+- `reports/soak-20260504T201714Z.md` — v1.5 32-min ship-gate soak with
+  the v1.5 `_evaluate_inner` sub-phase instrumentation enabled (the
+  v1.5 baseline source per §"v1.5 ship-gate baseline")
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17

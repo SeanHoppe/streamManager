@@ -6,6 +6,51 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-04
+
+Tagged ship of the v1.5 cycle. See `docs/v1.6-backlog.md` for the seed
+list and `docs/adr/ADR-5-latency-budget.md` §"v1.5 ship-gate baseline"
+for the P2 numbers.
+
+Highlights:
+
+- **`_evaluate_inner` sub-phase instrumentation** (PR #82, P1) — five
+  new keys on `engine._last_phase_timings_ms`: `og7_check`,
+  `fast_precheck`, `graph_classify`, `hydrator_state_read`,
+  `routing_dispatch`. Soak driver report grows an `### ALLOW
+  _evaluate_inner sub-phase breakout (v1.5)` block alongside the v1.4
+  publish-path block. Verdict path unchanged (additive `perf_counter`
+  deltas only, no reordering).
+- **v1.5 ship-gate** (this PR, P2) — 32.2-min Tier 3 soak with
+  `--cli-pool-size 2` and the new sub-phase instrumentation enabled.
+  Verdict PASS with overall p95 5.820 s and ALLOW p95 5.60 s.
+- **Sub-phase finding.** The v1.4 hypothesis that the ALLOW p95 tail
+  lives in one of the five named sub-phases is **falsified by the
+  data**. The five sub-phases sum to 0.13 ms p95 against a 5599 ms
+  `evaluate_inner` p95 — ~99.998% of the tail is in code paths NOT
+  covered by v1.5 instrumentation. The actual tail driver lives in the
+  un-instrumented residue inside `_evaluate_inner`, most plausibly the
+  synchronous `cli_pool` round-trip on the escalation branch. v1.6
+  should extend instrumentation around the residue.
+- **LM (categorize) p95 trend disposition.** v1.3.1 = 15.39 s →
+  v1.4 = 19.26 s → v1.5 = 15.39 s. The v1.4 elevation did not persist;
+  the v1.4 §"Caveats" watch item ("re-measure if the next ship-gate
+  also lands above 18 s") is **closed**. No v1.6 follow-up needed.
+- **ADR-5 §"v1.5 ship-gate baseline"** added; budget table carried
+  forward unchanged from v1.4. Status line bumped.
+
+### Notes
+
+- v1.5 verdict path is **at parity** with v1.4 (no production-code
+  change to `evaluate_inner` body beyond five additional `perf_counter`
+  deltas). The −2.36 s overall p95 and −1.97 s ALLOW p95 deltas vs v1.4
+  are classified as time-of-day / upstream-rate-limit measurement
+  variance, not earned improvements.
+- Lifecycle bridge orphan-free positively asserted at ship-gate again.
+- `hydrator_state_read` fires on every ALLOW (n=50) at p95 = 0.00 ms;
+  the lazy-hydrator state read is effectively free under the soak
+  workload.
+
 ## [1.4.0] — 2026-05-04
 
 Tagged ship of the v1.4 cycle. See `docs/v1.4-backlog.md` for the
