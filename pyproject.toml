@@ -46,6 +46,9 @@ packages = ["src/stream_manager"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "slow: integration tests that shell out / run end-to-end and take >1s; exclude with `-m 'not slow'` for fast tier",
+]
 
 [tool.ruff]
 line-length = 100

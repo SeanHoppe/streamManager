@@ -189,6 +189,11 @@ class _MinuteSample:
 @dataclass
 class _DriverState:
     publish_latencies_s: list[float] = field(default_factory=list)
+    # P1 / v1.3: separate ALLOW (routine, n=50) latencies so the soak
+    # report can emit a per-band p50/p95 table matching ADR-5
+    # §"v1.2 ship-gate baseline" — previously ALLOW latencies were
+    # only visible inside the overall row.
+    allow_latencies_s: list[float] = field(default_factory=list)
     escalation_latencies_s: list[float] = field(default_factory=list)
     alignment_latencies_s: list[float] = field(default_factory=list)
     publish_errors: list[str] = field(default_factory=list)
@@ -342,6 +347,100 @@ def _percentile(data: list[float], pct: int) -> float:
     return s[lo] + (s[hi] - s[lo]) * (k - lo)
 
 
+def _format_per_band_split(
+    allow: list[float],
+    l2_l3: list[float],
+    l4: list[float],
+) -> list[str]:
+    """Render the per-band p50/p95 markdown block.
+
+    P1 / v1.3: ADR-5 budgets are per-band but the v1.2 driver collapsed
+    ALLOW (n=50), L2/L3 (n=5), and L4 (n=5) into a single overall p95.
+    Format mirrors ADR-5 §"v1.2 ship-gate baseline" §"Per-trigger split".
+    """
+    lines: list[str] = []
+    lines.append("### Per-band latency (p50/p95)")
+    lines.append("")
+    lines.append("| Path                 |  n  | p50      | p95      |")
+    lines.append("|----------------------|-----|----------|----------|")
+    for label, data in (
+        ("ALLOW (routine)", allow),
+        ("L2/L3 escalation", l2_l3),
+        ("L4 alignment", l4),
+    ):
+        n = len(data)
+        if n == 0:
+            lines.append(f"| {label:<20} |   0 | n/a      | n/a      |")
+            continue
+        p50 = _percentile(data, 50)
+        p95 = _percentile(data, 95)
+        lines.append(
+            f"| {label:<20} | {n:>3} | {p50:>5.2f} s  | {p95:>5.2f} s  |"
+        )
+    lines.append("")
+    return lines
+
+
+def _format_lifecycle_bridge_final_state(
+    seen: set[tuple[str, str]] | None,
+) -> list[str]:
+    """Render the LifecycleBridge `_seen` final-state markdown block.
+
+    P1 / v1.3: Task C orphan-key invariant was not positively asserted
+    at ship-gate. This helper produces a `### Lifecycle bridge final
+    state` heading plus orphan counts. ``_seen`` is the LifecycleBridge
+    private map; the bridge evicts matching start/end pairs on each
+    completion, so any leftover ``_BG_JOB_START``/``_AGENT_SPAWN`` keys
+    indicate orphan starts (no matching end seen). Reciprocally, any
+    leftover end keys without a paired start indicate an orphan end.
+
+    Read-only consumption per the do-not-touch contract — we do not
+    modify the bridge surface.
+    """
+    # Late-import keeps `tools/soak_driver.py` importable without the
+    # full src layout (e.g. for the helper-only unit tests, which add
+    # `src/` to `sys.path` themselves). The constants are stable, so no
+    # defensive fallback — let the ImportError surface.
+    from stream_manager.lifecycle_bridge import (  # noqa: WPS433
+        EVENT_AGENT_DONE,
+        EVENT_AGENT_SPAWN,
+        EVENT_BG_JOB_END,
+        EVENT_BG_JOB_START,
+    )
+
+    seen = seen or set()
+    start_types = {EVENT_BG_JOB_START, EVENT_AGENT_SPAWN}
+    end_types = {EVENT_BG_JOB_END, EVENT_AGENT_DONE}
+
+    orphan_starts = sorted(
+        f"{etype}:{job_id}" for (etype, job_id) in seen if etype in start_types
+    )
+    orphan_ends = sorted(
+        f"{etype}:{job_id}" for (etype, job_id) in seen if etype in end_types
+    )
+
+    lines: list[str] = []
+    lines.append("### Lifecycle bridge final state")
+    lines.append("")
+    lines.append(f"- total `_seen` entries: {len(seen)}")
+    if not orphan_starts:
+        lines.append("- no orphan start keys (count=0)")
+    else:
+        lines.append(
+            f"- ORPHAN start keys (count={len(orphan_starts)}): "
+            + ", ".join(orphan_starts)
+        )
+    if not orphan_ends:
+        lines.append("- no orphan end keys (count=0)")
+    else:
+        lines.append(
+            f"- ORPHAN end keys (count={len(orphan_ends)}): "
+            + ", ".join(orphan_ends)
+        )
+    lines.append("")
+    return lines
+
+
 def _write_report(
     report_path: Path,
     state: _DriverState,
@@ -362,6 +461,7 @@ def _write_report(
     fd_start: int | None,
     fd_end: int | None,
     cli_present: bool,
+    bridge_seen: set[tuple[str, str]] | None = None,
 ) -> dict[str, object]:
     emitted = state.events_emitted
     received = sse_received
@@ -468,6 +568,22 @@ def _write_report(
                 f"p50={_percentile(a, 50):.2f}s p95={_percentile(a, 95):.2f}s"
             )
         lines.append("")
+
+    # P1 / v1.3: per-band p50/p95 split (ALLOW n=50 + L2/L3 n=5 + L4 n=5).
+    # ADR-5 budgets are per-band; the overall row above is preserved for
+    # back-compat but the ship-gate now consults this table directly.
+    lines.extend(
+        _format_per_band_split(
+            allow=state.allow_latencies_s,
+            l2_l3=state.escalation_latencies_s,
+            l4=state.alignment_latencies_s,
+        )
+    )
+
+    # P1 / v1.3: LifecycleBridge `_seen` final-state dump. Positively
+    # asserts the Task C orphan-key invariant at ship-gate. Read-only
+    # consumption of the bridge surface — no modification.
+    lines.extend(_format_lifecycle_bridge_final_state(bridge_seen))
 
     lines.append("## Process metrics (per-minute samples on dashboard server PID)")
     lines.append("")
@@ -696,6 +812,9 @@ def _run_replay(args) -> int:
                 state.escalation_latencies_s.append(elapsed)
             elif kind == "l4":
                 state.alignment_latencies_s.append(elapsed)
+            else:
+                # routine = ALLOW band (P1 / v1.3 per-band split).
+                state.allow_latencies_s.append(elapsed)
             state.decision_actions[dec["action"]] = (
                 state.decision_actions.get(dec["action"], 0) + 1
             )
@@ -747,6 +866,19 @@ def _run_replay(args) -> int:
         for action, n in sorted(state.decision_actions.items(), key=lambda kv: -kv[1]):
             lines.append(f"- {action}: {n} ({n/total*100:.1f}%)")
     lines.append("")
+
+    # P1 / v1.3: per-band p50/p95 (ALLOW + L2/L3 + L4) and LifecycleBridge
+    # final-state dump. Replay tier does not exercise lifecycle events,
+    # so the dump reports the empty-set baseline (zero orphans).
+    lines.extend(
+        _format_per_band_split(
+            allow=state.allow_latencies_s,
+            l2_l3=state.escalation_latencies_s,
+            l4=state.alignment_latencies_s,
+        )
+    )
+    lines.extend(_format_lifecycle_bridge_final_state(set()))
+
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
     print(f"[soak] replay wrote {report_path}")
@@ -969,6 +1101,9 @@ def main() -> int:
                         state.escalation_latencies_s.append(elapsed)
                     elif kind == "l4":
                         state.alignment_latencies_s.append(elapsed)
+                    else:
+                        # routine = ALLOW band (P1 / v1.3 per-band split).
+                        state.allow_latencies_s.append(elapsed)
                     state.events_emitted += 1
                 except Exception as exc:
                     state.publish_errors.append(
