@@ -1,0 +1,29 @@
+name: wirecli_handshake
+description: |
+  WireCLI is the sole CLI transport (v1.2 Task E; json transport removed).
+  Verifies the WireCLI worker handshake completes cleanly and a single
+  governance_call routes through it without raising
+  WireProtocolError / WireSchemaVersionError / WireTransportError.
+steps:
+  - operator_prompt: |
+      Start a soak with cli pool size 2 (the v1.1 baseline):
+        BRIDGE_API_GOV=1 python tools/soak_driver.py \
+          --cli-pool-size 2 --total-seconds 60 \
+          --port 8765 --gov-db tmp/wirecli_handshake.db
+  - operator_prompt: |
+      Wait for warm-pool to come up; observe two CliWorker PID files
+      under .bridge/cli-pool.pids/.
+    expected_envelopes:
+      - type: cli_worker_ready
+        payload_match:
+          transport: wirecli
+    timeout_s: 30
+  - operator_prompt: |
+      Send a single L4 alignment trigger (covered in another scenario).
+      Confirm the WireCLI worker round-trips the request without
+      schema/protocol error.
+    expected_envelopes:
+      - type: cli_governance
+        payload_match:
+          transport: wirecli
+    timeout_s: 30

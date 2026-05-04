@@ -1,0 +1,24 @@
+name: governance_l0_routine
+description: Routine ALLOW commands short-circuit at L0 (no CLI, no HITL).
+steps:
+  - operator_prompt: |
+      In Desktop, run a routine read-only shell command:
+        git status
+    expected_envelopes:
+      - type: governance_eval
+        payload_match:
+          role: user
+      - type: governance_decision
+        payload_match:
+          action: ALLOW
+          layer: 0
+    timeout_s: 10
+  - operator_prompt: |
+      Run another routine read:
+        ls src/stream_manager
+    expected_envelopes:
+      - type: governance_eval
+      - type: governance_decision
+        payload_match:
+          action: ALLOW
+    timeout_s: 10

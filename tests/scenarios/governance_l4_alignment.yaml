@@ -1,0 +1,19 @@
+name: governance_l4_alignment
+description: |
+  L4 alignment trigger: prompts that require checking against
+  REQUIREMENTS / INTENT / TODOs route through L4 (cross-doc reasoning)
+  and produce a SUGGEST/GUIDE decision with model_used set.
+steps:
+  - operator_prompt: |
+      In Desktop ask:
+        "Should we change the FR-OG-7 maturity ring scoring formula
+         from weighted-mean to median?"
+    expected_envelopes:
+      - type: governance_eval
+      - type: cli_governance
+        payload_match:
+          layer: 4
+      - type: governance_decision
+        payload_match:
+          layer: 4
+    timeout_s: 30

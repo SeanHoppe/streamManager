@@ -1,0 +1,25 @@
+name: sse_desktop_command_roundtrip
+description: |
+  Desktop command transport (v1.2 Task D): SSE-only. Verifies a
+  command published from the dashboard reaches the consumer end-to-end
+  via /api/commands/stream within the SSE drain window.
+steps:
+  - operator_prompt: |
+      Start a desktop_command consumer:
+        python tools/sm_consumer.py --transport sse
+  - operator_prompt: |
+      In another shell, post a synthetic desktop_command to the bus:
+        python tools/sm_cli.py command publish --type test_ping
+    expected_envelopes:
+      - type: desktop_command
+        payload_match:
+          command_type: test_ping
+    timeout_s: 5
+  - operator_prompt: |
+      Confirm the consumer log shows the test_ping was received via SSE.
+    expected_envelopes:
+      - type: desktop_command_ack
+        payload_match:
+          transport: sse
+          command_type: test_ping
+    timeout_s: 5

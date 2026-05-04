@@ -1,0 +1,34 @@
+name: learn_dialogue_categorize
+description: |
+  Learn Mode end-to-end (FR-LM-1..6). Desktop dialogue turn pair
+  (assistant prompt + user reply) flows through the JSONL tailer →
+  desktop_prompt + user_reply messages on the bus → categorizer
+  worker drains and writes a learn_patterns_canonical row.
+steps:
+  - operator_prompt: |
+      Ensure Learn Mode is enabled (header pill green or env set):
+        SM_LEARN_MODE=1
+      Start the dashboard + categorizer host:
+        uvicorn dashboard.server:app --port 8765 &
+  - operator_prompt: |
+      In Desktop, ask:
+        "Should we force-push the v1.4 work to main now?"
+      Answer in Desktop chat:
+        "no, hold the merge until tests pass"
+    expected_envelopes:
+      - type: desktop_prompt
+        payload_match:
+          synthetic: false
+      - type: user_reply
+        payload_match:
+          synthetic: false
+    timeout_s: 10
+  - operator_prompt: |
+      Wait one categorizer tick (~5 s default poll interval).
+      A learn_patterns_canonical row should appear with
+      category=reject and confidence >= 0.6.
+    expected_envelopes:
+      - type: learn_categorizer_progress
+        payload_match:
+          category: reject
+    timeout_s: 30
