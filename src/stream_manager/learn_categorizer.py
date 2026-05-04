@@ -107,12 +107,17 @@ def _normalize_prompt(text: str) -> str:
 def prompt_hash(text: str) -> str:
     """Stable 16-hex-char hash of the normalized desktop_prompt text."""
     norm = _normalize_prompt(text)
+    # Truncated to 16 hex chars (64 bits); birthday collision at ~2^32 patterns. Acceptable for v1.3 cardinality.
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
 
 
 def _strip_fence(s: str) -> str:
     s = s.strip()
-    m = re.match(r"^```(?:json)?\s*\n", s)
+    # The optional newline lets us strip both
+    #   ```json\n{...}\n```
+    # and the single-line variant
+    #   ```json{...}```
+    m = re.match(r"^```(?:json)?\s*", s)
     if m:
         s = s[m.end():]
         if s.endswith("```"):
@@ -198,6 +203,14 @@ def categorize_pair(
     tests can simulate Sonnet latency/output without spawning processes.
     """
     run = runner or subprocess.run
+    prompt_len = len(desktop_prompt_text or "")
+    reply_len = len(user_reply_text or "")
+    if prompt_len > 4000 or reply_len > 2000:
+        log.warning(
+            "learn_categorizer: input truncated (prompt=%d→4000, reply=%d→2000)",
+            prompt_len,
+            reply_len,
+        )
     user_prompt = (
         "Desktop prompt:\n"
         f"{desktop_prompt_text[:4000]}\n\n"
@@ -259,6 +272,11 @@ class LearnCategorizerWorker:
     test.
     """
 
+    # Maximum consecutive failures on a single pair before we give up
+    # and advance the ledger past it. Keeps a poison record from
+    # permanently stalling the worker (Fix B).
+    _POISON_RETRY_BUDGET = 3
+
     def __init__(
         self,
         bus: "MessageBus",
@@ -275,17 +293,39 @@ class LearnCategorizerWorker:
         self._timeout = float(timeout)
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
-        self._last_id_seen = 0
+        # Per-rowid retry ledger for poison-record detection (Fix B).
+        self._retry_counts: dict[int, int] = {}
         self._lock = threading.Lock()
+        self._stopping = False
+        # Hot-path read of the in-memory ledger; the durable mirror in
+        # learn_categorizer_state is loaded lazily on start() (Fix A).
+        self._last_id_seen = self._load_last_id_seen()
 
     # ── lifecycle ───────────────────────────────────────────────────
 
     def start(self) -> None:
-        """Begin the polling loop on a daemon thread. Idempotent."""
+        """Begin the polling loop on a daemon thread. Idempotent.
+
+        Fix D: gates on ``is_enabled()``. When ``SM_LEARN_MODE`` is
+        unset the worker logs once and returns without spawning a
+        thread. Caller-side checks remain valid as belt-and-suspenders.
+        """
+        if not is_enabled():
+            log.info(
+                "learn_categorizer: SM_LEARN_MODE not set; worker not starting"
+            )
+            return
         with self._lock:
+            if self._stopping:
+                # A stop() is in flight; do not race a new thread on top
+                # of an unjoined predecessor (Fix C).
+                return
             if self._thread is not None and self._thread.is_alive():
                 return
             self._stop_evt.clear()
+            # Refresh ledger from durable mirror in case a previous
+            # process advanced it after our __init__ snapshot.
+            self._last_id_seen = self._load_last_id_seen()
             t = threading.Thread(
                 target=self._run,
                 name="learn-categorizer",
@@ -295,16 +335,28 @@ class LearnCategorizerWorker:
             t.start()
 
     def stop(self, join_timeout: float = 2.0) -> None:
-        """Signal the worker to exit and join. Idempotent."""
+        """Signal the worker to exit and join. Idempotent.
+
+        Fix C: sets a ``_stopping`` flag under the lock so a concurrent
+        ``start()`` cannot spawn a second thread on top of the
+        not-yet-joined predecessor. Joins outside the lock to avoid
+        blocking concurrent ``running`` checks.
+        """
         with self._lock:
-            self._stop_evt.set()
-            t = self._thread
-            self._thread = None
+            if self._stopping:
+                t = self._thread
+            else:
+                self._stopping = True
+                self._stop_evt.set()
+                t = self._thread
         if t is not None:
             try:
                 t.join(timeout=join_timeout)
             except Exception:
                 log.exception("learn_categorizer: join failed")
+        with self._lock:
+            self._thread = None
+            self._stopping = False
 
     @property
     def running(self) -> bool:
@@ -330,6 +382,13 @@ class LearnCategorizerWorker:
         Public so tests can drive the worker synchronously (without
         relying on the polling thread). The thread loop simply calls
         ``tick`` on every interval.
+
+        Fix B semantics: an exception during ``_categorize_and_record``
+        does NOT advance the ledger for that pair — we stop draining
+        for this tick and retry on the next one. After
+        ``_POISON_RETRY_BUDGET`` consecutive failures on the same row
+        we log a warning and skip past it so a poison record cannot
+        permanently stall progress.
         """
         pairs = self._fetch_new_pairs()
         if not pairs:
@@ -338,13 +397,74 @@ class LearnCategorizerWorker:
         for last_id, prompt_text, reply_text in pairs:
             try:
                 self._categorize_and_record(prompt_text, reply_text)
-                n += 1
             except Exception:
-                log.exception("learn_categorizer: pair categorization failed")
-            # Always advance the ledger — a permanent CLI failure on a
-            # given pair must not block the worker from making progress.
-            self._last_id_seen = max(self._last_id_seen, last_id)
+                count = self._retry_counts.get(last_id, 0) + 1
+                self._retry_counts[last_id] = count
+                if count >= self._POISON_RETRY_BUDGET:
+                    log.warning(
+                        "learn_categorizer: poison-skip rowid=%d after %d "
+                        "failures; advancing ledger",
+                        last_id,
+                        count,
+                    )
+                    self._retry_counts.pop(last_id, None)
+                    self._advance_ledger(last_id)
+                    # Do NOT count as success.
+                    continue
+                log.exception(
+                    "learn_categorizer: pair categorization failed (rowid=%d, attempt=%d)",
+                    last_id,
+                    count,
+                )
+                # Bail out of this tick without advancing — the same
+                # pair is retried on the next poll interval.
+                return n
+            else:
+                n += 1
+                self._retry_counts.pop(last_id, None)
+                self._advance_ledger(last_id)
         return n
+
+    # ── ledger persistence (Fix A) ──────────────────────────────────
+
+    def _load_last_id_seen(self) -> int:
+        """Load durable ``last_id_seen`` from ``learn_categorizer_state``.
+
+        Returns 0 if no row exists or the value is malformed. The
+        in-memory ``self._last_id_seen`` mirrors this for hot-path
+        reads; ``_advance_ledger`` keeps the two in sync.
+        """
+        try:
+            rows = self._bus.fetch_rows(
+                "SELECT value FROM learn_categorizer_state WHERE key=?",
+                ("last_id_seen",),
+            )
+        except Exception:
+            log.exception("learn_categorizer: failed to load ledger; defaulting to 0")
+            return 0
+        if not rows:
+            return 0
+        try:
+            return int(rows[0][0])
+        except (TypeError, ValueError):
+            return 0
+
+    def _advance_ledger(self, new_id: int) -> None:
+        """Advance ``_last_id_seen`` and persist to the durable mirror."""
+        if new_id <= self._last_id_seen:
+            return
+        self._last_id_seen = new_id
+        try:
+            self._bus.execute_write(
+                "INSERT OR REPLACE INTO learn_categorizer_state(key, value) "
+                "VALUES ('last_id_seen', ?)",
+                (str(new_id),),
+            )
+        except Exception:
+            # Persistence failure is non-fatal: the in-memory ledger
+            # still advances for this process. Worst case is one
+            # restart re-categorizes the most recent pair.
+            log.exception("learn_categorizer: failed to persist ledger")
 
     # ── DB helpers ──────────────────────────────────────────────────
 
@@ -413,31 +533,29 @@ class LearnCategorizerWorker:
     ) -> None:
         """INSERT one row into ``learn_patterns``.
 
-        We reach into the bus connection through the public
-        ``_conn``/``_lock`` pair the rest of the codebase already uses
-        (e.g. ``MessageBus.publish``). The categorizer never participates
-        in HITL or governance state, so a dedicated DML helper on the
-        bus would be over-engineered; a single INSERT under the bus
-        lock matches the codebase's "small write under bus lock" idiom.
+        Append-only by design; P5e (decay/reinforcement) is responsible
+        for consolidation. Multiple rows per ``prompt_hash`` are
+        expected within and across process lifetimes — the table
+        deliberately has no UNIQUE constraint on ``prompt_hash``.
+
+        Uses the symmetric ``bus.execute_write`` helper (Fix H) so we
+        do not reach into private bus state.
         """
-        bus = self._bus
-        # Use the bus lock so writes serialize cleanly with publish().
-        with bus._lock:  # noqa: SLF001 — internal lock per codebase idiom
-            bus._conn.execute(
-                "INSERT INTO learn_patterns "
-                "(prompt_hash, category, confidence, ladder_step, "
-                " last_reinforced_ts, contradicted_count, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    prompt_hash_val,
-                    category,
-                    float(confidence),
-                    0,
-                    float(now_ts),
-                    0,
-                    float(now_ts),
-                ),
-            )
+        self._bus.execute_write(
+            "INSERT INTO learn_patterns "
+            "(prompt_hash, category, confidence, ladder_step, "
+            " last_reinforced_ts, contradicted_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                prompt_hash_val,
+                category,
+                float(confidence),
+                0,
+                float(now_ts),
+                0,
+                float(now_ts),
+            ),
+        )
 
 
 def is_enabled() -> bool:

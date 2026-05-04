@@ -19,6 +19,7 @@ Asserts:
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from stream_manager import message_bus as _msg_bus
 from stream_manager.learn_categorizer import (
     DEFAULT_MODEL,
     LearnCategorizerWorker,
+    _strip_fence,
     categorize_pair,
     prompt_hash,
 )
@@ -251,6 +253,7 @@ def test_worker_records_unknown_on_runner_failure(bus: _msg_bus.MessageBus) -> N
 
 def test_worker_does_not_block_verdict_hot_path(
     bus: _msg_bus.MessageBus,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The categorizer worker MUST run out-of-band.
 
@@ -264,6 +267,7 @@ def test_worker_does_not_block_verdict_hot_path(
     fresh subprocess, not a ``CliPool`` borrow, and the worker runs on
     its own daemon thread.
     """
+    monkeypatch.setenv("SM_LEARN_MODE", "1")
     _publish_pair(bus)
 
     # 2s of simulated Sonnet latency in the worker.
@@ -319,7 +323,10 @@ def test_worker_does_not_block_verdict_hot_path(
     assert rows[0]["category"] == "approve"
 
 
-def test_worker_start_stop_idempotent(bus: _msg_bus.MessageBus) -> None:
+def test_worker_start_stop_idempotent(
+    bus: _msg_bus.MessageBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SM_LEARN_MODE", "1")
     runner = _RecordingRunner()
     worker = LearnCategorizerWorker(bus, runner=runner, poll_interval_s=0.05)
     worker.start()
@@ -328,3 +335,126 @@ def test_worker_start_stop_idempotent(bus: _msg_bus.MessageBus) -> None:
     worker.stop()
     worker.stop()  # second stop is a no-op
     assert worker.running is False
+
+
+# ── review-fix coverage ─────────────────────────────────────────────
+
+
+def test_worker_persists_ledger_across_restart(bus: _msg_bus.MessageBus) -> None:
+    """Fix A: durable ledger means a fresh worker on the same DB does not
+    re-categorize previously-seen pairs.
+    """
+    _publish_pair(
+        bus,
+        prompt_text="ship it?",
+        reply_text="yes",
+    )
+    _publish_pair(
+        bus,
+        session_id="S2",
+        prompt_text="rebase first?",
+        reply_text="no",
+    )
+    runner1 = _RecordingRunner()
+    worker1 = LearnCategorizerWorker(bus, runner=runner1)
+    assert worker1.tick() == 2
+    assert len(_read_learn_patterns(bus)) == 2
+    assert len(runner1.calls) == 2
+
+    # Spin up a fresh worker on the SAME bus DB. The durable ledger
+    # must prevent re-categorization of the historical pairs.
+    runner2 = _RecordingRunner()
+    worker2 = LearnCategorizerWorker(bus, runner=runner2)
+    assert worker2.tick() == 0
+    assert len(_read_learn_patterns(bus)) == 2
+    assert len(runner2.calls) == 0
+
+
+def test_worker_skips_poison_record_after_3_retries(
+    bus: _msg_bus.MessageBus,
+) -> None:
+    """Fix B: an always-failing pair must not stall the worker forever.
+
+    After ``_POISON_RETRY_BUDGET`` consecutive failures the worker
+    advances its ledger past the poison row so subsequent pairs make
+    progress.
+    """
+    _publish_pair(bus, prompt_text="poison", reply_text="x")
+
+    class _AlwaysFail:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, *_args, **_kwargs):
+            self.calls += 1
+            raise RuntimeError("simulated CLI explosion")
+
+    runner = _AlwaysFail()
+    worker = LearnCategorizerWorker(bus, runner=runner)
+
+    # Tick 1: fail (count=1) — bail without advancing.
+    assert worker.tick() == 0
+    assert worker._last_id_seen == 0
+    # Tick 2: fail (count=2) — still bail.
+    assert worker.tick() == 0
+    assert worker._last_id_seen == 0
+    # Tick 3: fail (count=3) — poison-skip + advance ledger.
+    assert worker.tick() == 0
+    assert worker._last_id_seen > 0
+
+    # Now publish a healthy pair behind the poison row. With a
+    # well-behaved runner replaced in, tick should drain it.
+    _publish_pair(
+        bus, session_id="S2", prompt_text="healthy?", reply_text="ok"
+    )
+    worker._runner = _RecordingRunner()
+    assert worker.tick() == 1
+
+
+def test_strip_fence_handles_single_line() -> None:
+    """Fix G: ``\\n`` after the fence must be optional so single-line
+    fenced JSON parses correctly.
+    """
+    out = _strip_fence('```json{"category":"approve"}```')
+    assert out == '{"category":"approve"}'
+    # Multi-line variant still works.
+    out2 = _strip_fence('```json\n{"category":"reject"}\n```')
+    assert out2.strip().startswith('{"category"')
+    assert out2.strip().endswith("}")
+
+
+def test_execute_write_rejects_select(bus: _msg_bus.MessageBus) -> None:
+    """Fix H: symmetric to fetch_rows — execute_write must reject SELECT
+    / WITH so writers and readers do not silently use the wrong helper.
+    """
+    with pytest.raises(ValueError):
+        bus.execute_write("SELECT 1")
+    with pytest.raises(ValueError):
+        bus.execute_write("with x as (select 1) select * from x")
+    # Valid INSERT goes through.
+    bus.execute_write(
+        "INSERT INTO learn_categorizer_state(key, value) VALUES (?, ?)",
+        ("smoke_test", "ok"),
+    )
+
+
+def test_categorize_pair_logs_truncation(caplog: pytest.LogCaptureFixture) -> None:
+    """Fix F: oversize prompt or reply must emit a warning containing
+    the original lengths.
+    """
+    long_prompt = "p" * 4500
+    long_reply = "r" * 2500
+    runner = _RecordingRunner()
+    with caplog.at_level(logging.WARNING, logger="stream_manager.learn_categorizer"):
+        out = categorize_pair(long_prompt, long_reply, runner=runner)
+    assert out is not None
+    assert any(
+        "input truncated" in rec.getMessage() for rec in caplog.records
+    )
+    # No warning when sizes are within budget.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="stream_manager.learn_categorizer"):
+        categorize_pair("short", "short", runner=runner)
+    assert not any(
+        "input truncated" in rec.getMessage() for rec in caplog.records
+    )
