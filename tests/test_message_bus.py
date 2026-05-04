@@ -270,3 +270,41 @@ def test_governance_decisions_readable_via_wal_reader(tmp_path):
     assert dec is not None
     assert dec["action"] in {"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"}
     bus.close()
+
+
+# ---------------------------------------------------------------------------
+# fetch_rows — read-only guard (v1.3 P4 review)
+# ---------------------------------------------------------------------------
+
+def test_fetch_rows_allows_select(tmp_path):
+    bus = _bus(tmp_path)
+    rows = bus.fetch_rows("SELECT COUNT(*) FROM messages")
+    assert rows == [(0,)]
+    # Mixed-case + leading whitespace still allowed.
+    rows = bus.fetch_rows("   sElEcT COUNT(*) FROM messages")
+    assert rows == [(0,)]
+    bus.close()
+
+
+def test_fetch_rows_allows_with_cte(tmp_path):
+    bus = _bus(tmp_path)
+    rows = bus.fetch_rows(
+        "WITH x AS (SELECT 1 AS n) SELECT n FROM x"
+    )
+    assert rows == [(1,)]
+    bus.close()
+
+
+def test_fetch_rows_rejects_non_select(tmp_path):
+    bus = _bus(tmp_path)
+    for bad in (
+        "DELETE FROM messages",
+        "UPDATE messages SET type='x'",
+        "INSERT INTO messages VALUES (1)",
+        "DROP TABLE messages",
+        "PRAGMA table_info(messages)",
+        "",
+    ):
+        with pytest.raises(ValueError, match="fetch_rows is read-only"):
+            bus.fetch_rows(bad)
+    bus.close()

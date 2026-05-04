@@ -775,16 +775,26 @@ class MessageBus:
         query: str,
         params: tuple = (),
     ) -> list[tuple]:
-        """Read-only helper for tests / introspection.
+        """TEST/INTROSPECTION ONLY — do not call from hot paths.
 
-        Run a SELECT (or any read-only statement) under the bus lock and
+        Holds the bus lock across ``fetchall()``; long queries will block
+        all writers. Run a SELECT (or WITH/CTE) under the bus lock and
         return ``fetchall()`` as a list of tuples. This exists so callers
         do not have to reach into ``self._conn`` directly. The helper is
         intentionally narrow: no row factory, no DDL, no commit semantics
         — pass the query and bound parameters and consume the rows.
 
+        Guarded read-only: queries that do not start with SELECT or WITH
+        raise ``ValueError``.
+
         Added in v1.3 to migrate tests off ``bus._conn.execute(...)``.
         """
+        stripped = query.lstrip().lower()
+        if not (stripped.startswith("select") or stripped.startswith("with")):
+            first_word = stripped.split(None, 1)[0] if stripped else ""
+            raise ValueError(
+                f"fetch_rows is read-only; expected SELECT/WITH, got: {first_word}"
+            )
         with self._lock:
             return list(self._conn.execute(query, params).fetchall())
 
