@@ -104,6 +104,35 @@ CREATE TABLE IF NOT EXISTS desktop_commands (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dc_pending ON desktop_commands(session_id, status);
+
+-- v1.3 P5c: Learn Mode categorizer output. One row per categorized
+-- desktop_prompt/user_reply pair. Additive — does not modify any
+-- existing table. The verdict hot path never writes here; this is
+-- populated exclusively by the out-of-band categorizer worker.
+--
+-- Append-only by design; P5e (decay/reinforcement) is responsible for
+-- consolidation. Multiple rows per prompt_hash are expected within and
+-- across process lifetimes — do NOT add UNIQUE(prompt_hash) here.
+CREATE TABLE IF NOT EXISTS learn_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_hash TEXT NOT NULL,
+    category TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    ladder_step INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_ts REAL NOT NULL,
+    contradicted_count INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learn_patterns_hash ON learn_patterns(prompt_hash);
+
+-- v1.3 P5c (Fix A): Durable ledger for the LearnCategorizerWorker.
+-- Persists `last_id_seen` across worker restarts so we don't re-
+-- categorize historical pairs. Generic key/value to allow future
+-- worker state without further schema churn.
+CREATE TABLE IF NOT EXISTS learn_categorizer_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -797,6 +826,33 @@ class MessageBus:
             )
         with self._lock:
             return list(self._conn.execute(query, params).fetchall())
+
+    def execute_write(
+        self,
+        query: str,
+        params: tuple = (),
+    ) -> None:
+        """Symmetric write companion to ``fetch_rows``.
+
+        Holds the bus lock and runs a non-SELECT statement, matching the
+        codebase's "small write under bus lock" idiom. Connections are
+        opened with ``isolation_level=None`` (autocommit) so no explicit
+        commit is required.
+
+        Guarded write-only: queries whose first keyword is ``select`` or
+        ``with`` raise ``ValueError``. Use ``fetch_rows`` for those.
+
+        Added in v1.3 P5c so callers (e.g. ``LearnCategorizerWorker``)
+        do not have to reach into ``self._conn`` / ``self._lock``.
+        """
+        stripped = query.lstrip().lower()
+        first_word = stripped.split(None, 1)[0] if stripped else ""
+        if first_word in ("select", "with"):
+            raise ValueError(
+                f"execute_write is for non-SELECT statements; got: {first_word}"
+            )
+        with self._lock:
+            self._conn.execute(query, params)
 
     def stats(self) -> dict[str, int]:
         with self._lock:
