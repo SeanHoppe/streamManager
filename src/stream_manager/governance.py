@@ -217,6 +217,12 @@ class GovernanceEngine:
     # for L2+ (CLI subprocess) and by `inbound_publish` / `record_decision`
     # for L0 ALLOW.
     _last_phase_timings_ms: dict[str, float] | None = None
+    # v1.5: transient handoff slot for sub-phase timings collected inside
+    # `_evaluate_inner` and `_evaluate_inner_core`. The outer evaluate()
+    # merges these into _last_phase_timings_ms and clears the slot. Live
+    # for one call only; never read from outside the engine.
+    _sub_timings_in_flight: dict[str, float] | None = None
+    _pending_sub_phase_timings_ms: dict[str, float] | None = None
 
     def signal_desktop_pause(self) -> None:
         """Mark the next evaluate() as following a Desktop end_turn pause.
@@ -253,6 +259,17 @@ class GovernanceEngine:
         _t = _pc()
         decision = self._evaluate_inner(msg)
         timings["evaluate_inner"] = (_pc() - _t) * 1000.0
+        # v1.5: fold sub-phase timings collected inside _evaluate_inner /
+        # _evaluate_inner_core. Additive only — never overwrites an
+        # existing key on `timings`. If a sub-phase didn't fire on this
+        # path (e.g. og7_check return → graph_classify didn't run), the
+        # key is still recorded with 0.0 by the inner instrumentation
+        # so the soak block stays consistent across runs.
+        pending_sub = getattr(self, "_pending_sub_phase_timings_ms", None)
+        if isinstance(pending_sub, dict):
+            for _sub_k, _sub_v in pending_sub.items():
+                timings.setdefault(_sub_k, _sub_v)
+        self._pending_sub_phase_timings_ms = None
 
         # v1.3 P5d: consult Learn Mode advisory bias. The bias is read
         # ONLY here, AFTER the existing ladder placement (precheck →
@@ -364,6 +381,15 @@ class GovernanceEngine:
         return decision
 
     def _evaluate_inner(self, msg: Message) -> GovDecision:
+        # v1.5: sub-phase wall-clock breakout inside `_evaluate_inner`.
+        # Diagnoses ADR-5 v1.4 §"Caveats" — 100% of the ALLOW p95 tail
+        # now sits inside this function and is opaque to the v1.4 phase
+        # block. Sub-phases are additive; verdict path is byte-identical.
+        # The outer `evaluate_inner` aggregate timing in evaluate() stays;
+        # these new keys land alongside it on the same dict.
+        from time import perf_counter as _pc
+        sub_timings: dict[str, float] = {}
+
         profile: AgentProfile | None = None
         if self.registry is not None and self.session_id:
             profile = self.registry.active_profile(self.session_id)
@@ -375,7 +401,9 @@ class GovernanceEngine:
         # precheck rules. The gate condition lives inside _check_fr_og7:
         # when self.maturity is None, the method returns None immediately
         # and normal evaluation continues unchanged.
+        _t = _pc()
         og7 = self._check_fr_og7(msg, active_profile_slug)
+        sub_timings["og7_check"] = (_pc() - _t) * 1000.0
         if og7 is not None:
             # Route the override decision into a layer for cost accounting
             # and convergence monitoring, just like the normal codepath.
@@ -387,6 +415,7 @@ class GovernanceEngine:
                 confidence=og7.confidence,
                 is_ambiguous_block=is_ambiguous_block,
             )
+            self._record_sub_phase_timings(sub_timings)
             return og7
 
         # FR-AR-6: blocked_ops are unconditional — short-circuit before any
@@ -396,6 +425,7 @@ class GovernanceEngine:
             ops = _classify_ops(msg.content)
             blocked_hit = ops & set(profile.blocked_ops)
             if blocked_hit:
+                self._record_sub_phase_timings(sub_timings)
                 return GovDecision(
                     action="BLOCK",
                     confidence=1.0,
@@ -407,8 +437,36 @@ class GovernanceEngine:
                     source=f"agent_profile:{profile.slug}",
                 )
 
-        decision = self._evaluate_inner_core(msg)
+        # v1.5: hydrator-fed state read. The graph patterns dict is
+        # populated by `_install_lazy_hydrator` (Task I, v1.1) before
+        # _evaluate_inner_core consults it via `graph.match`. We capture
+        # a read-only timing on the hydrated flag + patterns count; we
+        # do NOT mutate the hydrator surface.
+        _t = _pc()
+        _hydrated_flag = bool(getattr(self, "hydrated", False))
+        _patterns_count = len(self.graph.patterns)
+        sub_timings["hydrator_state_read"] = (_pc() - _t) * 1000.0
+        # Reference values to avoid lint complaints about unused locals;
+        # values themselves are not part of the verdict path.
+        _ = (_hydrated_flag, _patterns_count)
 
+        # _evaluate_inner_core internally runs fast_precheck → graph.match →
+        # CLI. We instrument those sub-phases via attribute writes on a
+        # transient `self._sub_timings_in_flight` dict that the core
+        # reads/writes during the call. This keeps the verdict path
+        # byte-identical (same return values, same ordering).
+        self._sub_timings_in_flight = sub_timings
+        try:
+            decision = self._evaluate_inner_core(msg)
+        finally:
+            # Detach immediately so any unrelated code-path that calls
+            # evaluate_inner_core never sees a stale reference.
+            self._sub_timings_in_flight = None
+
+        # routing_dispatch spans profile constraints + final route() call
+        # — i.e. everything from _evaluate_inner_core return to the
+        # _evaluate_inner return.
+        _t = _pc()
         if profile is not None:
             decision = self._apply_profile_constraints(decision, profile, msg.content)
 
@@ -423,7 +481,20 @@ class GovernanceEngine:
             confidence=decision.confidence,
             is_ambiguous_block=is_ambiguous_block,
         )
+        sub_timings["routing_dispatch"] = (_pc() - _t) * 1000.0
+        self._record_sub_phase_timings(sub_timings)
         return decision
+
+    def _record_sub_phase_timings(self, sub_timings: dict[str, float]) -> None:
+        """v1.5: stash sub-phase timings on a transient attribute so the
+        outer evaluate() can fold them into _last_phase_timings_ms.
+
+        Additive: never removes or renames existing keys. The outer
+        evaluate() reads `_pending_sub_phase_timings_ms` after
+        `_evaluate_inner` returns, merges into the timings dict, then
+        clears the pending attr.
+        """
+        self._pending_sub_phase_timings_ms = sub_timings
 
     def _apply_profile_constraints(
         self,
@@ -780,8 +851,26 @@ class GovernanceEngine:
             log.exception("learn_mode_bias_applied: publish failed")
 
     def _evaluate_inner_core(self, msg: Message) -> GovDecision:
+        # v1.5: sub-phase timing capture. The transient slot
+        # `_sub_timings_in_flight` is set by _evaluate_inner before this
+        # call and cleared after; if it is None (defensive — direct
+        # caller invokes core without _evaluate_inner), we record into a
+        # local throwaway dict so the verdict path is unaffected.
+        from time import perf_counter as _pc
+        sub = self._sub_timings_in_flight
+        if sub is None:
+            sub = {}
+
+        _t = _pc()
         pre = fast_precheck(msg.content, self.project_context)
+        sub["fast_precheck"] = (_pc() - _t) * 1000.0
         if pre is not None:
+            # graph_classify did not run on this branch — record 0.0 so
+            # the soak block has a row rather than a missing key. The
+            # n=0 case is for engines that never hit ALLOW; here we
+            # always record a value so p50/p95 reflect the precheck-hit
+            # ratio honestly.
+            sub.setdefault("graph_classify", 0.0)
             decision = self._apply_mode(
                 GovDecision(
                     action=pre.action,
@@ -804,7 +893,9 @@ class GovernanceEngine:
                     self._intervention_log.append(time.time())
             return decision
 
+        _t = _pc()
         match = self.graph.match(msg.content)
+        sub["graph_classify"] = (_pc() - _t) * 1000.0
         if match is not None and match.success_rate >= 0.55:
             return GovDecision(
                 action="ALLOW",

@@ -415,12 +415,34 @@ def _load_lm_dialogue_pairs() -> list[tuple[str, str]]:
 _ALLOW_PHASE_ORDER: list[str] = [
     "inbound_publish",
     "evaluate_inner",
+    # v1.5: sub-phases of `evaluate_inner` (extend, do not reorder).
+    # Logical order matches code path inside _evaluate_inner /
+    # _evaluate_inner_core. They land between evaluate_inner and
+    # bias_consult so the v1.4 publish-path block keeps its column
+    # alignment unchanged.
+    "og7_check",
+    "fast_precheck",
+    "graph_classify",
+    "hydrator_state_read",
+    "routing_dispatch",
     "bias_consult",
     "hitl_classify_trigger",
     "hitl_route",
     "record_decision",
     "alert_publish",
     "total",
+]
+
+# v1.5: sub-phase keys rendered by the `### ALLOW _evaluate_inner
+# sub-phase breakout (v1.5)` block. Diagnoses ADR-5 v1.4 §"Caveats" —
+# 100% of the v1.4 ALLOW p95 tail sat inside `_evaluate_inner` and was
+# opaque to the v1.4 phase block.
+_EVALUATE_INNER_SUB_PHASE_ORDER: list[str] = [
+    "og7_check",
+    "fast_precheck",
+    "graph_classify",
+    "hydrator_state_read",
+    "routing_dispatch",
 ]
 
 
@@ -472,6 +494,64 @@ def _format_allow_phase_breakout(
         data = allow_phase_ms.get(phase, [])
         n = len(data)
         if n == 0:
+            continue
+        p50 = _percentile(data, 50)
+        p95 = _percentile(data, 95)
+        m = max(data)
+        lines.append(
+            f"| {phase:<22} | {n:>3} | {p50:>5.2f}    | {p95:>5.2f}    | {m:>6.2f}   |"
+        )
+    lines.append("")
+    return lines
+
+
+def _format_evaluate_inner_sub_phase_breakout(
+    allow_phase_ms: dict[str, list[float]] | None,
+) -> list[str]:
+    """v1.5: render the `### ALLOW _evaluate_inner sub-phase breakout
+    (v1.5)` markdown block.
+
+    Diagnoses ADR-5 v1.4 §"Caveats" — the v1.4 ship-gate
+    (reports/soak-20260504T182027Z.md) showed `inbound_publish` p95 =
+    0.43 ms and `record_decision` p95 = 0.11 ms while ALLOW p95 = 7.572
+    s, so 100% of the ALLOW tail sits inside `_evaluate_inner`. This
+    block attributes that opaque interior to five sub-phases populated
+    by the v1.5 engine instrumentation (`engine._last_phase_timings_ms`).
+
+    Sub-phases will not sum exactly to `evaluate_inner` (interleaved
+    Python overhead + the parts of `_evaluate_inner` not wrapped, e.g.
+    profile resolution / blocked_ops); the gap is reported in the
+    accompanying ship-gate report rather than enforced numerically.
+
+    Returns a list of markdown lines; empty list when no ALLOW samples
+    were collected (legacy report path or pre-instrumented engine).
+    """
+    if not allow_phase_ms:
+        return []
+    # If none of the v1.5 sub-phase keys are present (pre-v1.5 engine
+    # build), suppress the block entirely so the report stays clean.
+    if not any(k in allow_phase_ms for k in _EVALUATE_INNER_SUB_PHASE_ORDER):
+        return []
+    lines: list[str] = []
+    lines.append("### ALLOW _evaluate_inner sub-phase breakout (v1.5)")
+    lines.append("")
+    lines.append(
+        "Per-phase wall-clock for the interior of `_evaluate_inner` on "
+        "routine ALLOW envelopes. Sourced from "
+        "`engine._last_phase_timings_ms` (v1.5 instrumentation). "
+        "Diagnoses ADR-5 v1.4 §\"Caveats\" — the ALLOW tail that the "
+        "v1.4 publish-path block left opaque."
+    )
+    lines.append("")
+    lines.append("| Phase                  |  n  | p50 ms   | p95 ms   | max ms   |")
+    lines.append("|------------------------|-----|----------|----------|----------|")
+    for phase in _EVALUATE_INNER_SUB_PHASE_ORDER:
+        data = allow_phase_ms.get(phase, [])
+        n = len(data)
+        if n == 0:
+            lines.append(
+                f"| {phase:<22} |   0 | n/a      | n/a      | n/a      |"
+            )
             continue
         p50 = _percentile(data, 50)
         p95 = _percentile(data, 95)
@@ -694,6 +774,13 @@ def _write_report(
     # Renders inline after the per-band table so a single glance
     # surfaces both the band totals AND the ALLOW phase attribution.
     lines.extend(_format_allow_phase_breakout(state.allow_phase_ms))
+    # v1.5: ALLOW `_evaluate_inner` sub-phase breakout. Renders
+    # immediately after the v1.4 publish-path block so the v1.4 numbers
+    # stay byte-identical for back-compat baseline diffs (per ADR-5 v1.4
+    # §"Caveats").
+    lines.extend(
+        _format_evaluate_inner_sub_phase_breakout(state.allow_phase_ms)
+    )
 
     # P1 / v1.3: LifecycleBridge `_seen` final-state dump. Positively
     # asserts the Task C orphan-key invariant at ship-gate. Read-only
