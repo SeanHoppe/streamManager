@@ -200,6 +200,14 @@ class _DriverState:
     # separately because the categorizer runs Sonnet (not the verdict
     # model) and its budget lives in its own ADR-5 row.
     lm_categorize_latencies_s: list[float] = field(default_factory=list)
+    # v1.4: per-phase wall-clock breakouts for the ALLOW band only.
+    # Populated from `engine._last_phase_timings_ms` after each
+    # routine envelope. Each list holds milliseconds; phase keys
+    # match the engine's instrumentation names. ALLOW-only because
+    # the ADR-5 v1.3 caveat queued only the ALLOW p95 tail
+    # diagnosis; L2/L3 + L4 are already explained by CLI subprocess
+    # variance, no breakout needed there.
+    allow_phase_ms: dict[str, list[float]] = field(default_factory=dict)
     publish_errors: list[str] = field(default_factory=list)
     samples: list[_MinuteSample] = field(default_factory=list)
     events_emitted: int = 0
@@ -400,6 +408,79 @@ def _load_lm_dialogue_pairs() -> list[tuple[str, str]]:
     sys.path.insert(0, str(ROOT / "tools"))
     from cassette_record import _LM_DIALOGUE_PAIRS  # noqa: WPS433
     return list(_LM_DIALOGUE_PAIRS)
+
+
+# v1.4: phase order for the ALLOW publish-path breakout block. Total is
+# rendered last so readers can sanity-check sum-of-phases ≈ total.
+_ALLOW_PHASE_ORDER: list[str] = [
+    "inbound_publish",
+    "evaluate_inner",
+    "bias_consult",
+    "hitl_classify_trigger",
+    "hitl_route",
+    "record_decision",
+    "alert_publish",
+    "total",
+]
+
+
+def _format_allow_phase_breakout(
+    allow_phase_ms: dict[str, list[float]] | None,
+) -> list[str]:
+    """v1.4: render the ALLOW publish-path phase breakout markdown block.
+
+    Diagnoses the ALLOW p95 tail per ADR-5 v1.3 §"Caveats". Each row
+    reports per-phase n / p50 / p95 / max in milliseconds. Phases not
+    populated on this run (e.g. ``alert_publish`` only fires when L4
+    rate exceeds 20%) render as ``n=0 / n/a``.
+
+    Returns a list of markdown lines; empty list when no ALLOW samples
+    were collected (legacy report path or pre-instrumented engine).
+    """
+    if not allow_phase_ms:
+        return []
+    lines: list[str] = []
+    lines.append("### ALLOW publish-path phase breakout (v1.4)")
+    lines.append("")
+    lines.append(
+        "Per-phase wall-clock for routine ALLOW envelopes. Sourced from "
+        "`engine._last_phase_timings_ms` (v1.4 instrumentation). "
+        "Diagnoses ADR-5 v1.3 §\"Caveats\" ALLOW p95 tail."
+    )
+    lines.append("")
+    lines.append("| Phase                  |  n  | p50 ms   | p95 ms   | max ms   |")
+    lines.append("|------------------------|-----|----------|----------|----------|")
+    for phase in _ALLOW_PHASE_ORDER:
+        data = allow_phase_ms.get(phase, [])
+        n = len(data)
+        if n == 0:
+            lines.append(
+                f"| {phase:<22} |   0 | n/a      | n/a      | n/a      |"
+            )
+            continue
+        p50 = _percentile(data, 50)
+        p95 = _percentile(data, 95)
+        m = max(data)
+        lines.append(
+            f"| {phase:<22} | {n:>3} | {p50:>5.2f}    | {p95:>5.2f}    | {m:>6.2f}   |"
+        )
+    # Catch any phase the engine emitted that's not in the canonical
+    # order — render them after, so we don't silently lose data on a
+    # future instrumentation addition.
+    extras = sorted(set(allow_phase_ms.keys()) - set(_ALLOW_PHASE_ORDER))
+    for phase in extras:
+        data = allow_phase_ms.get(phase, [])
+        n = len(data)
+        if n == 0:
+            continue
+        p50 = _percentile(data, 50)
+        p95 = _percentile(data, 95)
+        m = max(data)
+        lines.append(
+            f"| {phase:<22} | {n:>3} | {p50:>5.2f}    | {p95:>5.2f}    | {m:>6.2f}   |"
+        )
+    lines.append("")
+    return lines
 
 
 def _format_lifecycle_bridge_final_state(
@@ -609,6 +690,10 @@ def _write_report(
             lm_categorize=lm_data,
         )
     )
+    # v1.4: ALLOW phase breakout (publish-path instrumentation).
+    # Renders inline after the per-band table so a single glance
+    # surfaces both the band totals AND the ALLOW phase attribution.
+    lines.extend(_format_allow_phase_breakout(state.allow_phase_ms))
 
     # P1 / v1.3: LifecycleBridge `_seen` final-state dump. Positively
     # asserts the Task C orphan-key invariant at ship-gate. Read-only
@@ -1258,6 +1343,21 @@ def main() -> int:
                     else:
                         # routine = ALLOW band (P1 / v1.3 per-band split).
                         state.allow_latencies_s.append(elapsed)
+                        # v1.4: pull per-phase breakout from the engine
+                        # for ALLOW-band envelopes only. Diagnoses the
+                        # ALLOW p95 tail per ADR-5 v1.3 caveats. The
+                        # engine sets `_last_phase_timings_ms` to a
+                        # dict at end of evaluate(); pre-instrumented
+                        # builds (or future code that disables the
+                        # capture) leave it None and we silently skip.
+                        phase_ms = getattr(
+                            engine, "_last_phase_timings_ms", None
+                        )
+                        if isinstance(phase_ms, dict):
+                            for k, v in phase_ms.items():
+                                state.allow_phase_ms.setdefault(k, []).append(
+                                    float(v)
+                                )
                     state.events_emitted += 1
                 except Exception as exc:
                     state.publish_errors.append(

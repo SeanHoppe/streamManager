@@ -209,6 +209,14 @@ class GovernanceEngine:
     # does NOT block on this — pre-hydration decisions just skip the
     # cross-session advisory (no graph entry → no match, like today).
     hydrated: bool = False
+    # v1.4: Per-evaluate phase-timing breakouts (ms). Populated at the
+    # end of each evaluate() call; tools (soak driver, perf_probe) read
+    # this attribute to attribute the ALLOW p95 tail (ADR-5 v1.3
+    # §"Caveats"). Keys are phase names; missing key = phase not exercised
+    # on the call. The wall-clock budget is dominated by `evaluate_inner`
+    # for L2+ (CLI subprocess) and by `inbound_publish` / `record_decision`
+    # for L0 ALLOW.
+    _last_phase_timings_ms: dict[str, float] | None = None
 
     def signal_desktop_pause(self) -> None:
         """Mark the next evaluate() as following a Desktop end_turn pause.
@@ -220,6 +228,15 @@ class GovernanceEngine:
         self._desktop_pause_active = True
 
     def evaluate(self, msg: Message) -> GovDecision:
+        # v1.4: per-phase wall-clock breakout. Cheap (single perf_counter
+        # delta per phase). Populated incrementally and surfaced on
+        # ``self._last_phase_timings_ms`` after the call returns so
+        # external profilers (soak driver, perf_probe) can attribute the
+        # ALLOW p95 tail without having to wrap evaluate() themselves.
+        from time import perf_counter as _pc
+        timings: dict[str, float] = {}
+        _t_total_start = _pc()
+
         bus_msg: _msg_bus.Message | None = None
         if self.bus is not None and self.session_id:
             bus_msg = _msg_bus.Message.new(
@@ -229,8 +246,13 @@ class GovernanceEngine:
                 content=msg.content,
                 metadata={"role": msg.role, "msg_id": msg.id},
             )
+            _t = _pc()
             self.bus.publish(bus_msg)
+            timings["inbound_publish"] = (_pc() - _t) * 1000.0
+
+        _t = _pc()
         decision = self._evaluate_inner(msg)
+        timings["evaluate_inner"] = (_pc() - _t) * 1000.0
 
         # v1.3 P5d: consult Learn Mode advisory bias. The bias is read
         # ONLY here, AFTER the existing ladder placement (precheck →
@@ -243,7 +265,9 @@ class GovernanceEngine:
         # a `rm -rf /` past BLOCK. The bias-application site below
         # additionally refuses to attach the hint when the message
         # content matches any of those classes, as belt-and-suspenders.
+        _t = _pc()
         bias = self._consult_learn_mode_bias(msg.content, decision)
+        timings["bias_consult"] = (_pc() - _t) * 1000.0
 
         # FR-HITL §4.9: route through the HITL queue if one is wired AND
         # we have a bus message to anchor the pending row to. The
@@ -252,6 +276,7 @@ class GovernanceEngine:
         # (reset) at the end of evaluate so a single pause only triggers
         # once.
         if self.hitl is not None and bus_msg is not None and self.session_id:
+            _t = _pc()
             try:
                 trigger = self.hitl.classify_trigger(
                     decision, msg.content, self._desktop_pause_active
@@ -259,6 +284,7 @@ class GovernanceEngine:
             except Exception:
                 log.exception("hitl: classify_trigger raised; skipping route")
                 trigger = None
+            timings["hitl_classify_trigger"] = (_pc() - _t) * 1000.0
             if trigger is not None:
                 # v1.3 P5d: bias fires ONLY when the HITL gate is going
                 # to engage anyway. Even at confidence=1.0 the bias
@@ -269,6 +295,7 @@ class GovernanceEngine:
                     self._emit_learn_mode_bias_applied(
                         bus_msg.id, msg.content, bias, trigger
                     )
+                _t = _pc()
                 try:
                     # v1.3 P5d (Fix B): pass bias hint into HITL route so
                     # it lands on the pending row's bias_hint column and
@@ -283,6 +310,7 @@ class GovernanceEngine:
                     )
                 except Exception:
                     log.exception("hitl: route raised; using original decision")
+                timings["hitl_route"] = (_pc() - _t) * 1000.0
         # Always reset the pause flag, whether or not we routed.
         self._desktop_pause_active = False
 
@@ -297,6 +325,7 @@ class GovernanceEngine:
             routing = RoutingDecision(ModelLayer.L0, None)
 
         if self.bus is not None and bus_msg is not None:
+            _t = _pc()
             self.bus.record_decision(
                 message_id=bus_msg.id,
                 action=decision.action,
@@ -306,12 +335,14 @@ class GovernanceEngine:
                 model_used=routing.model_id or "",
                 layer=int(routing.layer),
             )
+            timings["record_decision"] = (_pc() - _t) * 1000.0
 
         # NFR-M4 convergence alert: if L4 share exceeds 20% in the rolling
         # 5-minute window, publish an internal bus event so the dashboard /
         # operator can react. Total < 5 suppresses noisy early alerts.
         should_alert = self._convergence.record(routing.layer)
         if should_alert and self.bus is not None and self.session_id:
+            _t = _pc()
             try:
                 self.bus.publish(
                     _msg_bus.Message.new(
@@ -324,6 +355,12 @@ class GovernanceEngine:
                 )
             except Exception:
                 log.exception("convergence alert publish failed")
+            timings["alert_publish"] = (_pc() - _t) * 1000.0
+
+        # v1.4: surface per-phase timings to external profilers. Captured
+        # AFTER all instrumented phases so the dict is complete on read.
+        timings["total"] = (_pc() - _t_total_start) * 1000.0
+        self._last_phase_timings_ms = timings
         return decision
 
     def _evaluate_inner(self, msg: Message) -> GovDecision:
