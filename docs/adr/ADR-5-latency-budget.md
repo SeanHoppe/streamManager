@@ -294,7 +294,7 @@ ACCEPTED as v1.3 budget. v1.4 latency work measures against this section.
 ### Caveats
 
 - **ALLOW p95 budget widened from ≤ 6 s to ≤ 12 s.** The v1.2 ADR-5 §"Caveats" predicted ALLOW p95 was "likely well inside the ≤ 6 s budget" once separated. The v1.3 measurement (9.60 s, n=50) shows this prediction was wrong. The ALLOW band traverses the full engine.evaluate path (`_install_lazy_hydrator` → `decision_graph.classify` → `bus.publish` → `record_decision`) and the upper tail is dominated by sqlite3 contention in the publish path under the 30-min wall-clock window, NOT by an L0 → L2 misroute. Investigation deferred to v1.4 (`docs/v1.4-backlog.md`); the budget is widened to ≤ 12 s to match the overall p95 envelope while v1.4 instruments the publish path.
-- **LM (categorize) p95 = 15.39 s.** Sonnet round-trip wall-clock; categorizer runs out-of-band so this does NOT enter the verdict hot path budget. Budget set at ≤ 25 s to match the categorizer subprocess timeout (`learn_categorizer.TIMEOUT_SECONDS`).
+- **LM (categorize) p95 = 15.39 s.** Sonnet round-trip wall-clock; categorizer runs out-of-band so this does NOT enter the verdict hot path budget. Budget set at ≤ 25 s — a 5 s margin below the categorizer subprocess timeout (`learn_categorizer.TIMEOUT_SECONDS = 30.0`); a measurement at or above the budget should be investigated *before* it crosses the timeout.
 - **Lifecycle bridge orphan-key check (Task C)** now positively asserted at ship-gate (P1 hardening). v1.3 ship-gate report shows total `_seen` entries = 0, no orphan starts, no orphan ends. Carried v1.2 caveat resolved.
 - **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.2 are within sample noise; the overall p95 is the higher-confidence comparison.
 

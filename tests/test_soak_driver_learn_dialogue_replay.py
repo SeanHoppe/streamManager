@@ -100,8 +100,13 @@ def test_replay_handles_learn_dialogue_envelopes(tmp_path):
 
 
 def test_replay_v12_cassette_omits_lm_row(tmp_path):
-    """v1.2-shape cassette (no learn_dialogue rows) must replay cleanly
-    and produce no LM band — preserves backward compat.
+    """v1.2-shape cassette (no learn_dialogue rows) must replay cleanly.
+
+    Replay always passes ``state.lm_categorize_latencies_s`` as a list
+    (never None), so the per-band table renders an LM row populated with
+    ``n=0`` rather than dropping it. Backward compat invariant: zero
+    learn_dialogue envelopes in the cassette → zero samples in the LM
+    band → ``n=0`` row, not a missing row.
     """
     cassette = tmp_path / "cassette.jsonl"
     _write_cassette(cassette, [_routine_row(0), _routine_row(1)])
