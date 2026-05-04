@@ -32,6 +32,7 @@ import os
 import re
 import subprocess
 import time
+from time import perf_counter as _pc
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -167,11 +168,11 @@ class CliGovernor:
         # cli_pool_send_ms, cli_parse_ms) land on the caller's dict.
         # `cli_setup_ms` is captured at the call site (governance.py)
         # since it spans pre-evaluate engine work.
-        from time import perf_counter as _pc
         _t_dispatch_start = _pc()
         if not is_enabled():
             if sub_timings is not None:
                 sub_timings["cli_dispatch_ms"] = (_pc() - _t_dispatch_start) * 1000.0
+                sub_timings.setdefault("cli_setup_ms", 0.0)
                 sub_timings.setdefault("cli_pool_acquire_ms", 0.0)
                 sub_timings.setdefault("cli_pool_send_ms", 0.0)
                 sub_timings.setdefault("cli_parse_ms", 0.0)
@@ -356,7 +357,6 @@ class CliGovernor:
         in_tok, out_tok, cost = _extract_usage(result.stdout or "")
 
         if result.returncode != 0:
-            _parse_ms = (_pc() - _t_parse) * 1000.0
             log.warning(
                 "cli governance non-zero exit %d; degrading (stderr=%r)",
                 result.returncode,
@@ -373,9 +373,13 @@ class CliGovernor:
                 cost_usd=cost,
             )
             if sub_timings is not None:
+                # Symmetric with pool-path failure: `cli_parse_ms` only
+                # counts a full _extract_usage + _parse_envelope cycle on
+                # the success path. Non-zero-exit skips _parse_envelope,
+                # so emit 0.0 here to keep the parse percentile honest.
                 sub_timings["cli_pool_acquire_ms"] = 0.0
                 sub_timings["cli_pool_send_ms"] = _send_ms
-                sub_timings["cli_parse_ms"] = _parse_ms
+                sub_timings["cli_parse_ms"] = 0.0
                 sub_timings["cli_dispatch_ms"] = (
                     _pc() - _t_dispatch_start
                 ) * 1000.0

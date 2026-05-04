@@ -620,8 +620,11 @@ def _format_evaluate_inner_cli_residue_breakout(
     """
     if not allow_phase_ms:
         return []
-    # Pre-v1.6 stream: every v1.6 key absent → suppress block entirely.
-    if not any(k in allow_phase_ms for k in _CLI_RESIDUE_SUB_PHASE_ORDER):
+    # Pre-v1.6 stream: ALL five v1.6 keys must be present to render the
+    # block. A partial-rollout stream (some keys present, others absent)
+    # would emit a confusing mix of populated rows + n/a rows; treat
+    # that as a pre-v1.6 stream and suppress to keep the report honest.
+    if not all(k in allow_phase_ms for k in _CLI_RESIDUE_SUB_PHASE_ORDER):
         return []
     lines: list[str] = []
     lines.append("### ALLOW _evaluate_inner CLI residue breakout (v1.6)")

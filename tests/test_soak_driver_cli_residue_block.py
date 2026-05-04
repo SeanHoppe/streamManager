@@ -123,6 +123,22 @@ def test_v16_block_handles_empty_state():
     assert soak_driver._format_evaluate_inner_cli_residue_breakout(None) == []
 
 
+def test_v16_block_suppressed_for_partial_rollout_streams():
+    """Partial-rollout invariant: a stream missing ANY of the five
+    residue keys is treated as pre-v1.6 and suppressed. Avoids a
+    confusing mix of populated rows + n/a rows in the soak report."""
+    partial = {
+        "inbound_publish":      [0.05, 0.06],
+        "evaluate_inner":       [1.20, 1.30],
+        "cli_dispatch_ms":      [400.0, 450.0],
+        "cli_pool_send_ms":     [380.0, 420.0],
+    }
+    assert (
+        soak_driver._format_evaluate_inner_cli_residue_breakout(partial)
+        == []
+    )
+
+
 def test_v14_and_v15_blocks_unchanged_by_v16_keys():
     """Back-compat invariant: feeding the same combined v1.4 + v1.5 +
     v1.6 stream to the v1.4 and v1.5 helpers must still produce their
