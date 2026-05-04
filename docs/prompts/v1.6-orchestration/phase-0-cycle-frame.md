@@ -8,7 +8,7 @@ This phase is the framing PR itself — the PR that creates `docs/v1.6-task-plan
 
 After merge, fill the line below with the merge commit SHA so the orchestration directory is a complete record of the cycle:
 
-- Shipped <date> @ <commit-sha>; PR #<n>
+- Shipped 2026-05-04 @ 95664ca; PR #84
 
 ## Branch + base
 

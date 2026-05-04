@@ -157,8 +157,24 @@ class CliGovernor:
         self,
         content: str,
         model_id: str | None = None,
+        sub_timings: dict[str, float] | None = None,
     ) -> CliDecision | None:
+        # v1.6 P1: residue-level wall-clock instrumentation. When
+        # `sub_timings` is None the entry/exit deltas below are computed
+        # into a local throwaway dict and discarded, so v1.5 callers
+        # observe byte-identical behavior. When non-None, the four
+        # CLI-side residue keys (cli_dispatch_ms, cli_pool_acquire_ms,
+        # cli_pool_send_ms, cli_parse_ms) land on the caller's dict.
+        # `cli_setup_ms` is captured at the call site (governance.py)
+        # since it spans pre-evaluate engine work.
+        from time import perf_counter as _pc
+        _t_dispatch_start = _pc()
         if not is_enabled():
+            if sub_timings is not None:
+                sub_timings["cli_dispatch_ms"] = (_pc() - _t_dispatch_start) * 1000.0
+                sub_timings.setdefault("cli_pool_acquire_ms", 0.0)
+                sub_timings.setdefault("cli_pool_send_ms", 0.0)
+                sub_timings.setdefault("cli_parse_ms", 0.0)
             return None
 
         user_prompt = f"Evaluate this proposed action:\n\n{content[:4000]}"
@@ -211,10 +227,21 @@ class CliGovernor:
                 pool_prompt = (
                     f"{self._system_prompt()}\n\n---\n\n{user_prompt}"
                 )
+                # v1.6 P1: cli_pool_acquire_ms wraps wait-for-worker
+                # strictly (with-block enter → exit). cli_pool_send_ms
+                # wraps the model round-trip (worker.send). They are
+                # siblings, not nested.
+                _t_acq = _pc()
                 with self._pool.acquire() as worker:
+                    _acq_ms = (_pc() - _t_acq) * 1000.0
+                    _t_send = _pc()
                     stdout = worker.send(pool_prompt, timeout=TIMEOUT_SECONDS)
+                    _send_ms = (_pc() - _t_send) * 1000.0
                 latency_ms = int((time.monotonic() - start) * 1000)
+                _t_parse = _pc()
                 in_tok, out_tok, cost = _extract_usage(stdout)
+                decision = _parse_envelope(stdout)
+                _parse_ms = (_pc() - _t_parse) * 1000.0
                 self._publish_event(
                     model=chosen_model,
                     tier=tier,
@@ -225,7 +252,14 @@ class CliGovernor:
                     output_tokens=out_tok,
                     cost_usd=cost,
                 )
-                return _parse_envelope(stdout)
+                if sub_timings is not None:
+                    sub_timings["cli_pool_acquire_ms"] = _acq_ms
+                    sub_timings["cli_pool_send_ms"] = _send_ms
+                    sub_timings["cli_parse_ms"] = _parse_ms
+                    sub_timings["cli_dispatch_ms"] = (
+                        _pc() - _t_dispatch_start
+                    ) * 1000.0
+                return decision
             except Exception as exc:
                 latency_ms = int((time.monotonic() - start) * 1000)
                 log.warning("cli_pool path failed (%s); degrading", exc)
@@ -239,8 +273,28 @@ class CliGovernor:
                     output_tokens=None,
                     cost_usd=None,
                 )
+                if sub_timings is not None:
+                    # Pool-path failure: best-effort residue values; pool
+                    # acquire/send may have partially completed but we
+                    # cannot distinguish — emit dispatch_ms as the
+                    # outer wall-clock, leave acquire/send/parse at 0.0
+                    # so percentile math doesn't get confused by
+                    # half-populated rows.
+                    sub_timings.setdefault("cli_pool_acquire_ms", 0.0)
+                    sub_timings.setdefault("cli_pool_send_ms", 0.0)
+                    sub_timings.setdefault("cli_parse_ms", 0.0)
+                    sub_timings["cli_dispatch_ms"] = (
+                        _pc() - _t_dispatch_start
+                    ) * 1000.0
                 return None
 
+        # v1.6 P1: spawn-path timing capture. cli_pool_acquire_ms is
+        # constant 0.0 (no pool wait). cli_pool_send_ms wraps the
+        # subprocess.run round-trip (model wall-clock, exclusive of
+        # parse/publish). cli_parse_ms wraps _extract_usage on the
+        # success path; the eventual _parse_envelope on success is
+        # included so spawn-path parse coverage matches pool-path.
+        _t_send = _pc()
         try:
             result = self._runner(
                 cmd,
@@ -250,6 +304,7 @@ class CliGovernor:
                 check=False,
             )
         except FileNotFoundError:
+            _send_ms = (_pc() - _t_send) * 1000.0
             latency_ms = int((time.monotonic() - start) * 1000)
             log.warning("BRIDGE_API_GOV set but `%s` CLI not on PATH; degrading", CLI_BIN)
             self._publish_event(
@@ -262,8 +317,16 @@ class CliGovernor:
                 output_tokens=None,
                 cost_usd=None,
             )
+            if sub_timings is not None:
+                sub_timings["cli_pool_acquire_ms"] = 0.0
+                sub_timings["cli_pool_send_ms"] = _send_ms
+                sub_timings.setdefault("cli_parse_ms", 0.0)
+                sub_timings["cli_dispatch_ms"] = (
+                    _pc() - _t_dispatch_start
+                ) * 1000.0
             return None
         except subprocess.TimeoutExpired:
+            _send_ms = (_pc() - _t_send) * 1000.0
             latency_ms = int((time.monotonic() - start) * 1000)
             log.warning("cli governance timeout (>%.1fs); degrading", TIMEOUT_SECONDS)
             self._publish_event(
@@ -276,14 +339,24 @@ class CliGovernor:
                 output_tokens=None,
                 cost_usd=None,
             )
+            if sub_timings is not None:
+                sub_timings["cli_pool_acquire_ms"] = 0.0
+                sub_timings["cli_pool_send_ms"] = _send_ms
+                sub_timings.setdefault("cli_parse_ms", 0.0)
+                sub_timings["cli_dispatch_ms"] = (
+                    _pc() - _t_dispatch_start
+                ) * 1000.0
             return None
+        _send_ms = (_pc() - _t_send) * 1000.0
         latency_ms = int((time.monotonic() - start) * 1000)
 
         # Pull token / cost telemetry from the CLI envelope. Defaults are
         # None when `usage` is absent (e.g. older CLI builds).
+        _t_parse = _pc()
         in_tok, out_tok, cost = _extract_usage(result.stdout or "")
 
         if result.returncode != 0:
+            _parse_ms = (_pc() - _t_parse) * 1000.0
             log.warning(
                 "cli governance non-zero exit %d; degrading (stderr=%r)",
                 result.returncode,
@@ -299,6 +372,13 @@ class CliGovernor:
                 output_tokens=out_tok,
                 cost_usd=cost,
             )
+            if sub_timings is not None:
+                sub_timings["cli_pool_acquire_ms"] = 0.0
+                sub_timings["cli_pool_send_ms"] = _send_ms
+                sub_timings["cli_parse_ms"] = _parse_ms
+                sub_timings["cli_dispatch_ms"] = (
+                    _pc() - _t_dispatch_start
+                ) * 1000.0
             return None
 
         self._publish_event(
@@ -312,7 +392,16 @@ class CliGovernor:
             cost_usd=cost,
         )
 
-        return _parse_envelope(result.stdout or "")
+        decision = _parse_envelope(result.stdout or "")
+        _parse_ms = (_pc() - _t_parse) * 1000.0
+        if sub_timings is not None:
+            sub_timings["cli_pool_acquire_ms"] = 0.0
+            sub_timings["cli_pool_send_ms"] = _send_ms
+            sub_timings["cli_parse_ms"] = _parse_ms
+            sub_timings["cli_dispatch_ms"] = (
+                _pc() - _t_dispatch_start
+            ) * 1000.0
+        return decision
 
     def _publish_event(
         self,
