@@ -135,6 +135,37 @@ CREATE TABLE IF NOT EXISTS learn_categorizer_state (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- v1.3 P5e: Canonical (UPSERT) projection of `learn_patterns`.
+-- Additive migration — leaves the append-only `learn_patterns` audit
+-- log untouched. Consolidation/decay pass merges per-prompt_hash rows
+-- into a single canonical record here. Decay sweeps update
+-- `ladder_step` / `last_reinforced_ts` / `contradicted_count` here;
+-- no rewrites of the underlying audit log are required.
+--
+-- Design notes:
+--   * UNIQUE(prompt_hash) is the whole point of this table.
+--   * Append-only `learn_patterns` remains the source of truth for
+--     "what categorizations did we ever observe"; this table answers
+--     "what is the current canonical bias for prompt_hash X".
+--   * Bias readers (P5d `bias_for`) are NOT modified by P5e; they
+--     continue to read `learn_patterns` directly. P5e ships the
+--     decay/consolidate primitives only — wiring `bias_for` to the
+--     canonical projection is deferred to a follow-up if/when the
+--     append-only ordering proves insufficient.
+CREATE TABLE IF NOT EXISTS learn_patterns_canonical (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_hash TEXT NOT NULL UNIQUE,
+    category TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    ladder_step INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_ts REAL NOT NULL,
+    contradicted_count INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learn_patterns_canon_hash
+    ON learn_patterns_canonical(prompt_hash);
 """
 
 

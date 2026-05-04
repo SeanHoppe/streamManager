@@ -285,6 +285,7 @@ class LearnCategorizerWorker:
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         runner: Callable | None = None,
         timeout: float = TIMEOUT_SECONDS,
+        decay_sweep_interval: int | None = None,
     ) -> None:
         self._bus = bus
         self._model = model
@@ -300,6 +301,17 @@ class LearnCategorizerWorker:
         # Hot-path read of the in-memory ledger; the durable mirror in
         # learn_categorizer_state is loaded lazily on start() (Fix A).
         self._last_id_seen = self._load_last_id_seen()
+        # P5e: decay-sweep cadence. Default = run every N ticks per
+        # ``decay.DECAY_SWEEP_TICK_INTERVAL``. Tests can override.
+        from stream_manager.decay import DECAY_SWEEP_TICK_INTERVAL
+        self._decay_interval = (
+            int(decay_sweep_interval)
+            if decay_sweep_interval is not None
+            else int(DECAY_SWEEP_TICK_INTERVAL)
+        )
+        # Tick counter; advanced once per ``tick()`` invocation regardless
+        # of whether any pairs were drained. Used to schedule decay sweeps.
+        self._tick_count = 0
 
     # ── lifecycle ───────────────────────────────────────────────────
 
@@ -389,9 +401,16 @@ class LearnCategorizerWorker:
         ``_POISON_RETRY_BUDGET`` consecutive failures on the same row
         we log a warning and skip past it so a poison record cannot
         permanently stall progress.
+
+        P5e: at the end of every ``self._decay_interval`` ticks, runs
+        a decay sweep over ``learn_patterns_canonical``. The sweep
+        is cheap (one UPDATE per aged row) and never touches the
+        verdict hot path.
         """
+        self._tick_count += 1
         pairs = self._fetch_new_pairs()
         if not pairs:
+            self._maybe_decay_sweep()
             return 0
         n = 0
         for last_id, prompt_text, reply_text in pairs:
@@ -423,7 +442,22 @@ class LearnCategorizerWorker:
                 n += 1
                 self._retry_counts.pop(last_id, None)
                 self._advance_ledger(last_id)
+        self._maybe_decay_sweep()
         return n
+
+    # ── P5e: decay sweep hook ───────────────────────────────────────
+
+    def _maybe_decay_sweep(self) -> None:
+        """Run a decay sweep on the configured cadence. Never raises."""
+        from stream_manager.decay import maybe_run_decay_sweep
+        try:
+            maybe_run_decay_sweep(
+                self._bus,
+                self._tick_count,
+                interval=self._decay_interval,
+            )
+        except Exception:
+            log.exception("learn_categorizer: decay sweep raised")
 
     # ── ledger persistence (Fix A) ──────────────────────────────────
 
@@ -522,6 +556,19 @@ class LearnCategorizerWorker:
             confidence=confidence,
             now_ts=now,
         )
+        # P5e: merge this observation into the canonical projection.
+        # Reinforcement / contradiction semantics live in decay.py.
+        try:
+            from stream_manager.decay import consolidate_patterns
+            consolidate_patterns(
+                self._bus,
+                h,
+                category,
+                confidence,
+                now_ts=now,
+            )
+        except Exception:
+            log.exception("learn_categorizer: consolidate_patterns failed")
 
     def _insert_pattern_row(
         self,

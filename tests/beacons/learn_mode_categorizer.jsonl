@@ -1,0 +1,10 @@
+{"beacon_id": "lm-cat-001", "operator_prompt": "Want me to ship the v1.3 PR?", "operator_reply": "yes please, ship it", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cat-002", "operator_prompt": "Should I force-push to main?", "operator_reply": "absolutely not, never do that", "assertion": {"category": "reject", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cat-003", "operator_prompt": "Want me to run the test suite?", "operator_reply": "go for it", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cat-004", "operator_prompt": "Should I delete the database?", "operator_reply": "no way", "assertion": {"category": "reject", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cat-005", "operator_prompt": "Want me to commit these changes?", "operator_reply": "actually, can you also run the linter first?", "assertion": {"category": "redirect"}, "timeout_s": 30}
+{"beacon_id": "lm-cat-006", "operator_prompt": "Should I restart the server?", "operator_reply": "what do you mean by restart?", "assertion": {"category": "clarify"}, "timeout_s": 30}
+{"beacon_id": "lm-cat-007", "operator_prompt": "I'm about to deploy v1.3.", "operator_reply": "ok, got it", "assertion": {"category": "acknowledge"}, "timeout_s": 30}
+{"beacon_id": "lm-cat-008", "operator_prompt": "Want me to merge the PR?", "operator_reply": "yes, merge it", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cat-009", "operator_prompt": "Should I rebase off main?", "operator_reply": "don't rebase, just merge", "assertion": {"category": "reject", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cat-010", "operator_prompt": "Want me to bump the version?", "operator_reply": "sure, go ahead", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
