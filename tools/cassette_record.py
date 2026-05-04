@@ -79,12 +79,38 @@ def _sample(payloads, n: int) -> list[tuple[str, str]]:
     return list(payloads[:n])
 
 
+def _resolve_cassette_path(out_dir: Path, *, allow_overwrite: bool) -> Path:
+    """Pick the output cassette path.
+
+    P1 / v1.3 hardening: previously the filename was derived from
+    ``_dt.date.today().isoformat()`` only — same-day re-records silently
+    clobbered the prior cassette in place (M2 had to recover from the
+    ``v1.2.0`` tag). The default behaviour now appends a UTC HHMMSS
+    suffix so successive runs land at distinct paths. Operators who
+    explicitly want to clobber the day's cassette in place may pass
+    ``--allow-overwrite`` (the legacy filename shape).
+    """
+    today = _dt.date.today().isoformat()
+    if allow_overwrite:
+        return out_dir / f"soak_cassette_{today}.jsonl"
+    hhmmss = _dt.datetime.now(_dt.timezone.utc).strftime("%H%M%S")
+    return out_dir / f"soak_cassette_{today}T{hhmmss}Z.jsonl"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--out",
         default="tests/fixtures",
         help="Output directory; cassette filename auto-derived from today's date.",
+    )
+    ap.add_argument(
+        "--allow-overwrite",
+        action="store_true",
+        help="Allow overwriting an existing same-day cassette (no UTC HHMMSS "
+             "suffix; clobbers prior cassette in place). Default behaviour "
+             "appends a UTC HHMMSS suffix so same-day re-records do NOT "
+             "silently overwrite the prior cassette (P1 / v1.3 fix).",
     )
     ap.add_argument(
         "--gov-db",
@@ -118,8 +144,9 @@ def main() -> int:
 
     out_dir = (ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    today = _dt.date.today().isoformat()
-    cassette_path = out_dir / f"soak_cassette_{today}.jsonl"
+    cassette_path = _resolve_cassette_path(
+        out_dir, allow_overwrite=bool(args.allow_overwrite)
+    )
 
     if not _check_cli_on_path():
         print(
