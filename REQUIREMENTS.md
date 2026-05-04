@@ -1,7 +1,7 @@
 # AdaptiveBridge — Requirements & Planning Document
 
 **Document type:** PRD + RFC + ADR hybrid
-**Version:** 1.11 (v1.2 surface audit — operator session selector, lifecycle bridge, SSE-only desktop_command, WireCLI-default CLI transport)
+**Version:** 1.12 (v1.3 P5a — Learn Mode design + FR-LM-1..6 advisory dialogue bias)
 **Status:** Draft for review
 **Owner:** TBD
 **Last updated:** 2026-05-04
@@ -485,6 +485,27 @@ ADR-14 remains the historical record of the deprecation window; it is updated wi
 
 Originating task: `docs/v1.2-task-plan.md` §"TASK D — Long-poll consumer path removal (P2)" + ADR-14 v1.2 status note.
 
+### 4.12 Learn Mode (FR-LM)
+
+Learn Mode extends the JSONL-tail ingest to the Desktop ↔ user dialogue, categorizes recurring user preferences out-of-band, and surfaces matches as advisory bias on the next governance decision. The bias never overrides HITL gating and never overrides the absolute safety priorities listed in `INTENT.md` §"Safety priorities". Design captured in `docs/learn-mode-design.md` (P5a).
+
+**FR-LM-1** — **Dialogue ingest.** The JSONL tailer (`src/stream_manager/jsonl_tail.py`) MUST emit two additional `messages.type` values: `desktop_prompt` (extracted from `assistant` text turns) and `user_reply` (extracted from `user` text turns). The two message types MUST be paired via the existing `parentUuid` chain. No new Desktop hook surface is introduced — Claude Desktop does not expose a chat-text hook, and the JSONL transcript is the sole signal source. The ingest path MUST exclude SM's own transcripts using the existing self-monitor filter (memory `feedback_no_self_monitor.md`).
+
+**FR-LM-2** — **Out-of-band categorizer.** Learn Mode MUST run a Sonnet categorizer as a separate worker process, off the verdict hot path. The verdict path MUST NOT invoke the categorizer synchronously. ADR-5 governance latency budget (NFR-P2: p50 ≤ 7 s, p95 ≤ 15 s, hard timeout 25 s) MUST remain unaffected by Learn Mode. The worker MUST use the project-default CLI subprocess backend (`claude -p ... --output-format json`) per memory `feedback_cli_over_sdk.md`; no Anthropic SDK / API-key path.
+
+**FR-LM-3** — **Advisory bias.** Categorized patterns MUST surface on the next matching decision as **advisory bias only**. They MUST NOT override the HITL gate (FR-HITL-2 triggers continue to fire normally) and MUST NOT override the absolute safety priorities in `INTENT.md` §"Safety priorities" (destructive shell verbs, force-push to protected branches, `eval(`/`exec(` injection, credential exfiltration shapes). v1.3 scope is **pre-fill only** — the categorizer-suggested action MAY pre-fill the HITL prompt, but MUST NOT silently skip the HITL gate. Auto-resolve (silent skip at high confidence) is deferred to v1.4+.
+
+**FR-LM-4** — **Decay ladder.** Patterns MUST decay along the existing L1–L4 ladder via:
+1. **Time-based step demote** — without reinforcement, demote one rung at the 30 / 60 / 90 / 120 day marks.
+2. **Reinforcement reset** — any same-direction observation resets the decay clock to zero.
+3. **Contradiction snap-demote** — an opposite-direction observation snaps the pattern down one rung immediately, regardless of where it sits in the decay window.
+
+**FR-LM-5** — **Silent audit UX.** When a Learn Mode pattern is applied to a decision, the dashboard MUST record a **silent audit row** in the decisions feed. There MUST NOT be a toast, undo card, or any other foreground affordance. The advisory nature plus the FR-HITL gate is the safety net; the row exists for replay and post-hoc review.
+
+**FR-LM-6** — **Single-user scope.** v1.3 assumes a single operator. Patterns MUST NOT carry an `owner_user` tag and MUST NOT be partitioned by user identity. SM's own HITL prompts MUST be excluded from the Learn Mode ingest set (per FR-LM-1 self-monitor filter). Multi-user disambiguation is out of scope for v1.3.
+
+Originating task: `docs/v1.3-task-plan.md` §"PHASE P5 — Learn Mode (advisory dialogue bias)" + `docs/learn-mode-design.md` (P5a). Memory source of truth: `project_learn_mode.md` (locked 2026-05-03).
+
 ---
 
 ## 5. Non-functional requirements
@@ -805,3 +826,4 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | 1.9 | 2026-05-02 | SeanHoppe | FR-UI follow-ups: FR-UI-1 frame B "active" = configurable activity window (default 10 s, set via FR-UI-9); FR-UI-4 `Take action` promotion explicit SYNC default + emits `hitl_mode_promoted` bus event; FR-UI-5 weights validation = **hard-fail startup** on bad config (not fallback); FR-UI-9 adds Sub-Agents activity window setting (1–600 s) |
 | 1.10 | 2026-05-02 | SeanHoppe | sync-comms scope freeze: §4.11 FR-DC-1..5 (HMAC-signed `desktop_command` control plane + Session Mirror frame + no-self-monitor transport filter); §3.2 NFR-MS-1..4 (multi-session model with isolated per-session engines, cross-session L3-flag HITL gate, SQLite-only cross-session signal); ADR-12 (control plane bypasses governance) + ADR-13 (shared single-secret HMAC for v1.0). ADR-5 latency budget revised for CLI subprocess path (NFR-P2: p50 ≤ 7s, p95 ≤ 15s, hard timeout 25s). FR-OG-7 loud-degrade behavior on missing `.sm-context.yaml`. Equivalent to ship-plan Task H "v1.7" — numbering advanced because v1.7–v1.9 were consumed by intervening FR-UI work. |
 | 1.11 | 2026-05-04 | SeanHoppe | v1.3 P3 FR-OG drift audit: retroactive capture of v1.2 surface deferred at M4 (`docs/v1.3-backlog.md` §"From v1.2 close-out cycle"). Added FR-OG-8 (operator `sm` CLI + dashboard session picker; ← v1.2 Task B), FR-OG-9 (Claude Code lifecycle bridge envelopes + Frame C dashboard surface + track_only governance default; ← v1.2 Task C + ADR-18), FR-DC-6 (SSE-only `desktop_command` consumer transport; long-poll path removed; ← v1.2 Task D + ADR-14), FR-CC-5 (WireCLI-default CLI transport; `json` branch removed; ← v1.2 Task E + ADR-15 + ADR-5 v1.2 re-baseline). Docs-only audit; zero code touched. ADRs not edited (historical record). |
+| 1.12 | 2026-05-04 | SeanHoppe | v1.3 P5a Learn Mode design: §4.12 FR-LM-1..6 (advisory dialogue bias). FR-LM-1 JSONL tail emits `desktop_prompt`/`user_reply` paired via `parentUuid`; FR-LM-2 Sonnet categorizer worker out-of-band (ADR-5 latency budget unaffected; CLI subprocess backend per `feedback_cli_over_sdk.md`); FR-LM-3 advisory bias only — never overrides HITL gate or `INTENT.md` safety priorities; v1.3 pre-fill only, auto-resolve deferred to v1.4+; FR-LM-4 decay ladder (30/60/90/120-day step demote + reinforcement reset + contradiction snap-demote); FR-LM-5 silent audit row UX (no toast, no undo); FR-LM-6 single-user scope, no `owner_user` tag, SM HITL prompts excluded from ingest per `feedback_no_self_monitor.md`. Companion design doc: `docs/learn-mode-design.md`. Docs-only; zero code touched. |
