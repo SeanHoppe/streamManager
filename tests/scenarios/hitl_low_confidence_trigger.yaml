@@ -1,0 +1,21 @@
+name: hitl_low_confidence_trigger
+description: |
+  HITL fires on confidence below the session's hitl_floor (default 0.60).
+  Verifies a `hitl_async_flagged` (async mode) or `hitl_sync_queued`
+  (sync mode) bus envelope publishes, the dashboard pane shows the
+  pending row, and the operator can resolve it.
+steps:
+  - operator_prompt: |
+      In Desktop, send an ambiguous request that the engine cannot
+      resolve with high confidence:
+        "Maybe refactor the cli_governance retry logic - or maybe leave it?"
+    expected_envelopes:
+      - type: governance_eval
+      - type: hitl_async_flagged
+        payload_match:
+          trigger: low_confidence
+    timeout_s: 30
+  - operator_prompt: |
+      In the dashboard HITL pane, click ALLOW on the pending row.
+      Confirm the underlying `hitl_pending` table row updates and
+      the `hitl_overrides` table receives a resolution row.

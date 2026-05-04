@@ -1,0 +1,30 @@
+name: learn_mode_runtime_toggle
+description: |
+  v1.4 - dashboard slide-toggle flips the Learn Mode categorizer
+  worker active state without bouncing the host. Verifies persistence
+  to `learn_categorizer_state(key='runtime_enabled')` and that the
+  worker honors the flag on its next tick. The toggle round-trip is
+  HTTP only (POST /api/learn-mode/state); no bus envelope is
+  published for the toggle itself - only the dialogue ingest +
+  consolidation paths publish bus traffic.
+steps:
+  - operator_prompt: |
+      Open the dashboard. Confirm the LEARN MODE pill in the header
+      shows current state. Click it to flip OFF (POST request body
+      `{"enabled": false}`).
+  - operator_prompt: |
+      Pre-publish a synthetic dialogue pair via sm_cli.
+    expected_envelopes:
+      - type: desktop_prompt
+      - type: user_reply
+    timeout_s: 5
+  - operator_prompt: |
+      Wait one categorizer tick (~5 s). Confirm NO new
+      learn_patterns_canonical row appeared during the disabled
+      window (the worker tick should short-circuit at the runtime
+      flag check):
+        sqlite3 .claude/gov.db \
+          "SELECT COUNT(*) FROM learn_patterns_canonical"
+  - operator_prompt: |
+      Click the pill again to flip back ON. On the next tick the
+      queued pair drains and the canonical projection updates.

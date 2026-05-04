@@ -1,0 +1,23 @@
+name: governance_l4_alignment
+description: |
+  L4 alignment trigger: prompts that require checking against
+  REQUIREMENTS / INTENT / TODOs route through L4 (cross-doc reasoning).
+  The CLI escalation path publishes a `governance_call` envelope with
+  layer=4 alongside the inbound `governance_eval`.
+steps:
+  - operator_prompt: |
+      In Desktop ask:
+        "Should we change the FR-OG-7 maturity ring scoring formula
+         from weighted-mean to median?"
+    expected_envelopes:
+      - type: governance_eval
+      - type: governance_call
+        payload_match:
+          layer: 4
+    timeout_s: 30
+  - operator_prompt: |
+      Confirm the decisions row records layer=4 and a non-empty
+      model_used:
+        sqlite3 .claude/gov.db \
+          "SELECT action, layer, model_used FROM decisions \
+           ORDER BY id DESC LIMIT 1"
