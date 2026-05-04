@@ -248,6 +248,50 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
   0%,100%{opacity:1;transform:scale(1)}
   50%{opacity:.35;transform:scale(.8)}
 }
+/* v1.4 — Learn Mode runtime slide-toggle (header pill).
+   Visual states:
+     off  → grey dot, no animation  (categorizer worker idle)
+     on   → green dot, pulse        (categorizer running)
+     env-off (the boot env-var is unset) → row dimmed + tooltip warns
+                                            on host restart it won't auto-start.
+   Click flips state via POST /api/learn-mode/state.
+*/
+.lm-toggle{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:4px 10px 4px 8px;
+  font-family:var(--font-d);
+  font-size:10px;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  color:var(--text-ui);
+  background:transparent;
+  border:1px solid var(--border, #2a2a2a);
+  border-radius:14px;
+  cursor:pointer;
+  user-select:none;
+  transition:border-color .15s ease, color .15s ease, opacity .15s ease;
+}
+.lm-toggle:hover{ border-color:var(--accent); color:var(--accent); }
+.lm-toggle:focus-visible{ outline:1px solid var(--accent); outline-offset:2px; }
+.lm-toggle-dot{
+  width:7px;height:7px;
+  border-radius:50%;
+  background:#555;
+  box-shadow:none;
+  transition:background .15s ease, box-shadow .15s ease;
+}
+.lm-toggle[data-state="on"] .lm-toggle-dot{
+  background:var(--c-allow);
+  box-shadow:0 0 7px var(--c-allow), 0 0 16px var(--c-allow);
+  animation:pulse 2.2s ease-in-out infinite;
+}
+.lm-toggle[data-state="on"]{ color:var(--accent); border-color:var(--accent); }
+.lm-toggle[data-env-off="1"]{ opacity:.55; }
+.lm-toggle[data-bus-down="1"]{
+  opacity:.4; cursor:not-allowed; pointer-events:none;
+}
 /* theme switcher */
 .theme-switcher{
   display:flex;
@@ -1829,6 +1873,12 @@ input:focus-visible, textarea:focus-visible{
         <button class="theme-btn"     data-t="paper"    title="Paper (editorial light)"></button>
       </div>
       <div class="live-dot" id="liveDot">LIVE</div>
+      <button class="lm-toggle" id="lmToggle" data-state="off"
+              title="Learn Mode runtime toggle (advisory dialogue bias categorizer)"
+              aria-pressed="false" aria-label="Learn Mode toggle">
+        <span class="lm-toggle-dot"></span>
+        <span class="lm-toggle-label">LEARN MODE</span>
+      </button>
       <button class="gear-btn" id="gearBtn" title="Settings" aria-label="settings">⚙</button>
     </div>
   </header>
@@ -4185,6 +4235,85 @@ setTimeout(loadServerSettings, 500);
   }
   // Expose for tests / external triggers.
   window.SessionMirror = { setSession, appendRow, disconnect, resetMirror };
+})();
+
+// ── v1.4: Learn Mode runtime slide-toggle wiring ──────────────────────
+//
+// Header pill button. Click flips runtime_enabled on the bus via
+// POST /api/learn-mode/state. Caches the last seen state in
+// localStorage so repaint on page load is instant; reconciles with
+// server state on boot.
+(function(){
+  const btn = document.getElementById('lmToggle');
+  if(!btn) return;
+  const LS_KEY = 'sm.lm.runtime_enabled';
+
+  function paint(state){
+    const isOn = state.runtime_enabled === true;
+    btn.dataset.state = isOn ? 'on' : 'off';
+    btn.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+    btn.dataset.envOff = (state.env_enabled === false) ? '1' : '0';
+    btn.dataset.busDown = (state.bus_available === false) ? '1' : '0';
+    let title = 'Learn Mode runtime toggle (advisory dialogue bias categorizer)';
+    if(state.env_enabled === false){
+      title += '\n\n⚠ SM_LEARN_MODE env var is NOT set: worker will not auto-start on host restart.';
+    }
+    if(state.bus_available === false){
+      title += '\n\n⚠ Bus not initialized; toggle is read-only until host restart.';
+    }
+    btn.title = title;
+  }
+
+  // Optimistic paint from localStorage so the pill renders correctly
+  // before the network round-trip lands.
+  try {
+    const cached = localStorage.getItem(LS_KEY);
+    if(cached !== null){
+      paint({ runtime_enabled: cached === '1', env_enabled: true, bus_available: true });
+    }
+  } catch(_){}
+
+  async function refresh(){
+    try {
+      const r = await fetch('/api/learn-mode/state');
+      if(!r.ok) return;
+      const j = await r.json();
+      paint(j);
+      if(j.runtime_enabled !== null && j.runtime_enabled !== undefined){
+        try { localStorage.setItem(LS_KEY, j.runtime_enabled ? '1' : '0'); } catch(_){}
+      }
+    } catch(_){}
+  }
+
+  async function flip(){
+    if(btn.dataset.busDown === '1') return;
+    const next = btn.dataset.state !== 'on';
+    // Optimistic UI: paint immediately, reconcile on server response.
+    paint({ runtime_enabled: next, env_enabled: btn.dataset.envOff !== '1', bus_available: true });
+    try {
+      const r = await fetch('/api/learn-mode/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if(!r.ok){
+        // Roll back optimistic paint.
+        paint({ runtime_enabled: !next, env_enabled: btn.dataset.envOff !== '1', bus_available: true });
+        return;
+      }
+      const j = await r.json();
+      paint(j);
+      try { localStorage.setItem(LS_KEY, j.runtime_enabled ? '1' : '0'); } catch(_){}
+    } catch(_){
+      paint({ runtime_enabled: !next, env_enabled: btn.dataset.envOff !== '1', bus_available: true });
+    }
+  }
+
+  btn.addEventListener('click', flip);
+  refresh();
+  // Light periodic resync — picks up changes from a peer dashboard
+  // tab or a CLI-side write.
+  setInterval(refresh, 15000);
 })();
 </script>
 </body>
