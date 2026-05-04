@@ -56,6 +56,12 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from stream_manager.message_bus import MessageBus
 
+from stream_manager.decay import (
+    DECAY_SWEEP_TICK_INTERVAL,
+    consolidate_patterns,
+    maybe_run_decay_sweep,
+)
+
 log = logging.getLogger(__name__)
 
 # Sonnet is the categorization model per design spec §2.4.
@@ -303,7 +309,6 @@ class LearnCategorizerWorker:
         self._last_id_seen = self._load_last_id_seen()
         # P5e: decay-sweep cadence. Default = run every N ticks per
         # ``decay.DECAY_SWEEP_TICK_INTERVAL``. Tests can override.
-        from stream_manager.decay import DECAY_SWEEP_TICK_INTERVAL
         self._decay_interval = (
             int(decay_sweep_interval)
             if decay_sweep_interval is not None
@@ -449,7 +454,6 @@ class LearnCategorizerWorker:
 
     def _maybe_decay_sweep(self) -> None:
         """Run a decay sweep on the configured cadence. Never raises."""
-        from stream_manager.decay import maybe_run_decay_sweep
         try:
             maybe_run_decay_sweep(
                 self._bus,
@@ -559,7 +563,6 @@ class LearnCategorizerWorker:
         # P5e: merge this observation into the canonical projection.
         # Reinforcement / contradiction semantics live in decay.py.
         try:
-            from stream_manager.decay import consolidate_patterns
             consolidate_patterns(
                 self._bus,
                 h,
@@ -698,12 +701,18 @@ def bias_for(
     *,
     min_confidence: float = MIN_BIAS_CONFIDENCE,
 ) -> "BiasHint | None":
-    """Look up an advisory bias hint for ``prompt`` in ``learn_patterns``.
+    """Look up an advisory bias hint for ``prompt`` in ``learn_patterns_canonical``.
 
     Returns the highest-priority matching row as a ``BiasHint``, or
     ``None`` when no actionable row exists. ``None`` outcomes:
 
-      * No row matches the exact ``prompt_hash(prompt)``.
+      * No canonical row matches the exact ``prompt_hash(prompt)``.
+        This is the design contract: bias is only emitted after at
+        least one categorization has been consolidated into the
+        canonical projection by ``consolidate_patterns`` (P5e). The
+        append-only ``learn_patterns`` audit log is no longer read by
+        the verdict path; ``learn_patterns_canonical`` carries the
+        post-decay/post-reinforcement effective bias.
       * Best matching row has ``confidence < min_confidence``.
       * Best matching row's category is not in
         ``_BIAS_ACTIONABLE_CATEGORIES`` (``unknown``/``clarify``/
@@ -721,7 +730,7 @@ def bias_for(
         The message content the verdict path is about to evaluate. Same
         text passed to ``prompt_hash`` for stable lookup.
     bus : MessageBus
-        Bus owning the ``learn_patterns`` table.
+        Bus owning the ``learn_patterns_canonical`` table.
     min_confidence : float, optional
         Confidence floor; defaults to ``MIN_BIAS_CONFIDENCE`` (0.6).
         Exposed so tests can pin a different threshold.
@@ -736,13 +745,16 @@ def bias_for(
         return None
     h = prompt_hash(prompt)
     try:
+        # v1.3 C1: read the canonical projection (P5e UPSERT table) so
+        # decay/reinforcement/contradiction state actually reaches the
+        # verdict path. ``UNIQUE(prompt_hash)`` on canonical means at
+        # most one row per hash — the ORDER BY is preserved as a
+        # belt-and-suspenders tiebreak in case the constraint is ever
+        # relaxed, but in practice LIMIT 1 is the row.
         rows = bus.fetch_rows(
-            # Fix E (review): id DESC final tiebreak so behavior is fully
-            # deterministic even when (last_reinforced_ts, confidence)
-            # are equal across rows.
             "SELECT id, category, confidence, ladder_step, "
             "last_reinforced_ts "
-            "FROM learn_patterns "
+            "FROM learn_patterns_canonical "
             "WHERE prompt_hash = ? "
             "ORDER BY last_reinforced_ts DESC, confidence DESC, id DESC "
             "LIMIT 1",

@@ -102,7 +102,7 @@ jsonl_tail.py  ──►  bus: messages(type=desktop_prompt | user_reply)
 | Component | Path (proposed) | Responsibility |
 |---|---|---|
 | Tail extension | `src/stream_manager/jsonl_tail.py` | Emit `desktop_prompt` / `user_reply` rows; pair via `parentUuid`; exclude SM-self transcripts (per `feedback_no_self_monitor.md` filter list). |
-| Categorizer worker | `src/stream_manager/learn_mode/categorizer.py` | Drain `desktop_prompt`/`user_reply` pairs, run Sonnet via `claude -p`, write to `patterns`. Off the hot path. |
+| Categorizer worker | `src/stream_manager/learn_mode/categorizer.py` | Drain `desktop_prompt`/`user_reply` pairs, run Sonnet via `claude -p`, write to `patterns` (audit log) and project into the canonical table via `consolidate_patterns`. Off the hot path. See `docs/adr/ADR-19-learn-patterns-canonical-split.md` for the audit/canonical two-table split rationale. |
 | Decay scheduler | `src/stream_manager/learn_mode/decay.py` | Apply the 30/60/90/120 ladder + reinforcement reset + contradiction snap-demote. |
 | Bias reader | inside existing verdict path | Read top-N matching patterns at decide time, attach as advisory context only. Never gates the decision. |
 | UX | dashboard decisions feed | Render the silent audit row when a pattern was used; no toast, no undo. |

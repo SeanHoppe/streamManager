@@ -500,6 +500,8 @@ Learn Mode extends the JSONL-tail ingest to the Desktop ↔ user dialogue, categ
 2. **Reinforcement reset** — any same-direction observation resets the decay clock to zero.
 3. **Contradiction snap-demote** — an opposite-direction observation snaps the pattern down one rung immediately, regardless of where it sits in the decay window.
 
+See `docs/adr/ADR-19-learn-patterns-canonical-split.md` for the canonical/audit split rationale.
+
 **FR-LM-5** — **Silent audit UX.** When a Learn Mode pattern is applied to a decision, the dashboard MUST record a **silent audit row** in the decisions feed. There MUST NOT be a toast, undo card, or any other foreground affordance. The advisory nature plus the FR-HITL gate is the safety net; the row exists for replay and post-hoc review.
 
 **FR-LM-6** — **Single-user scope.** v1.3 assumes a single operator. Patterns MUST NOT carry an `owner_user` tag and MUST NOT be partitioned by user identity. SM's own HITL prompts MUST be excluded from the Learn Mode ingest set (per FR-LM-1 self-monitor filter). Multi-user disambiguation is out of scope for v1.3.

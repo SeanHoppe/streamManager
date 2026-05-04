@@ -45,3 +45,5 @@ Thumbs.db
 reports/cli_failures.jsonl
 reports/dashboard*.log
 reports/soak_*
+reports/replay-*.md
+reports/replay_*.md

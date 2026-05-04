@@ -1332,7 +1332,29 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
 .evt-hitl_async_flagged            {color:#14b8a6}
 .evt-agent_identified              {color:var(--text-ui)}
 .evt-desktop_pause                 {color:var(--text-bright)}
+.evt-learn_mode_bias_applied       {color:var(--text-ui)}
 .evt-default                        {color:var(--text-dim)}
+/* v1.3 C10: Learn Mode advisory chip on HITL pending rows. Visually
+   subordinate to action buttons — operator must read this as advice,
+   never as a verdict. */
+.hitl-bias-advisory{
+  font-family:var(--font-d);
+  font-size:9.5px;
+  letter-spacing:0.06em;
+  padding:2px 6px;
+  margin-top:4px;
+  border:1px dashed var(--text-dim);
+  color:var(--text-dim);
+  background:transparent;
+  text-transform:none;
+  display:inline-block;
+}
+.hitl-bias-advisory .hitl-bias-label{
+  text-transform:uppercase;
+  letter-spacing:0.1em;
+  margin-right:6px;
+  color:var(--text-ui);
+}
 .evlog-empty{
   padding:36px 18px;
   text-align:center;
@@ -2525,6 +2547,29 @@ function renderHitlPanel(){
     const conf = Math.round((item.proposed_confidence||0)*100);
     const preview = clip(item.content||'', 80);
 
+    // v1.3 C10: render the Learn Mode advisory hint (if any) as a
+    // dashed informational chip ABOVE the action buttons. The hint is
+    // advisory-only — never a verdict, and it never short-circuits the
+    // operator's choice. When `bias_hint` is absent (older rows or no
+    // canonical match), nothing renders.
+    const bh = item.bias_hint;
+    let biasHtml = '';
+    if(bh && bh.category){
+      const bConf = (typeof bh.confidence === 'number')
+        ? Math.round(bh.confidence*100) : null;
+      const bStep = (typeof bh.ladder_step_suggestion === 'number')
+        ? bh.ladder_step_suggestion : null;
+      const parts = [];
+      parts.push(esc(String(bh.category)));
+      if(bConf !== null) parts.push(`confidence ${bConf}%`);
+      if(bStep !== null) parts.push(`ladder step ${bStep}`);
+      biasHtml = `
+      <div class="hitl-bias-advisory" title="Learn Mode advisory only — operator decision still required">
+        <span class="hitl-bias-label">Learn Mode advisory</span>
+        ${parts.join(' &middot; ')}
+      </div>`;
+    }
+
     const el = document.createElement('div');
     el.className = 'hitl-item';
     el.dataset.pid = item.id;
@@ -2534,6 +2579,7 @@ function renderHitlPanel(){
       <div><span class="badge badge-${esc(action)}">${esc(action)}</span></div>
       <div class="c-conf">${conf}%</div>
       <div class="hitl-prev" title="${esc(item.content||'')}">${esc(preview)}</div>
+      ${biasHtml}
       <div class="hitl-item-row2">
         <div class="hitl-bar"><div class="hitl-bar-fill" data-bar="${item.id}"></div></div>
         <div class="hitl-btns">
@@ -3408,6 +3454,9 @@ const _KNOWN_EVT_CLASSES = new Set([
   'governance_negative_regression','governance_variance_alert',
   'nfr_model_routing_alert','hitl_sync_queued','hitl_async_flagged',
   'agent_identified','desktop_pause','governance_call',
+  // v1.3 C9: Learn Mode advisory bias-applied audit envelope. Styled
+  // as informational (matches `.evt-learn_mode_bias_applied` rule).
+  'learn_mode_bias_applied',
 ]);
 
 // FR-UI-3: bus event types that trigger autoForeground() of frame A
