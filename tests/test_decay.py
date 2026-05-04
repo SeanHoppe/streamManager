@@ -389,15 +389,15 @@ def test_reject_prompts_never_promote_to_bias(bus: _msg_bus.MessageBus) -> None:
     try:
         from stream_manager.learn_categorizer import bias_for
         h = prompt_hash("force push to main please")
-        # Insert a 'reject' row directly into the append-only audit log
-        # so bias_for() can find it via prompt_hash.
-        now = time.time()
-        bus.execute_write(
-            "INSERT INTO learn_patterns "
-            "(prompt_hash, category, confidence, ladder_step, "
-            " last_reinforced_ts, contradicted_count, created_at) "
-            "VALUES (?, 'reject', 0.95, 4, ?, 0, ?)",
-            (h, now, now),
+        # v1.3 C1: bias_for reads ``learn_patterns_canonical`` (P5e UPSERT
+        # projection), not the append-only audit log. Plant the row in
+        # canonical so bias_for() can find it.
+        _seed_canonical(
+            bus,
+            prompt_hash_val=h,
+            category="reject",
+            confidence=0.95,
+            ladder_step=4,
         )
         hint = bias_for("force push to main please", bus)
         assert hint is not None
