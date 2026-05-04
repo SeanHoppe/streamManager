@@ -211,7 +211,7 @@ Files are ranked by governance relevance: INTENT > REQUIREMENTS > CLAUDE > READM
 **FR-CC-5** — **WireCLI default + `json` transport refusal.** The CLI client transport surface is **WireCLI-default as of v1.2**. The legacy ad-hoc `json` transport branch is **REMOVED**:
 
 - `CliClient(transport=...)` MUST default to `"wirecli"`. Passing `"wirecli"` is a no-op accepted for explicitness.
-- Passing `"json"` MUST raise a `DeprecationWarning` and either fall through to WireCLI (library callers, one cycle of back-compat) or be rejected outright (caller-controlled). The legacy `json` parser branch and its tests are removed.
+- Passing `"json"` MUST raise `ValueError` with a CHANGELOG / ADR-15 migration hint. No fall-through to WireCLI; no DeprecationWarning intermediate path. The legacy `json` parser branch and its tests are removed.
 - The `wirecli.py` module surface is protected: `WireProtocolError`, `WireSchemaVersionError`, `WireTransportError` are the canonical error types. A malformed envelope MUST raise `WireProtocolError` (NOT silently fall back to `ALLOW`); a schema-version mismatch MUST raise `WireSchemaVersionError`; subprocess death MUST raise `WireTransportError`.
 - The kwarg itself MAY be removed entirely in v1.3+ (see ADR-15 status note). FR-CC-3's "MUST pass `--output-format json` or equivalent" guidance now applies via WireCLI's framed protocol; the client no longer parses raw stdout JSON ad hoc.
 
@@ -298,7 +298,7 @@ Originating task: `docs/v1.2-task-plan.md` §"TASK B — Session selector (CLI +
 
 **FR-OG-9** — **Claude Code lifecycle bridge.** SM MUST surface Claude Code background jobs (`BG <id>`) and `Agent(...)` subagent spawns into the SM bus and the dashboard, so the operator can see which jobs and subagents are governed by the active session. The bridge has four contracts:
 
-1. **Source selection** — the bridge MUST consume Claude Code's hook stream when the required event surface (`BackgroundJobStart` / `BackgroundJobEnd` / `AgentSpawn` / `AgentComplete`) is available, and MUST fall back to a directory-poller shim over Claude Code's task output directory (`%LOCALAPPDATA%\claude\...\tasks\<id>.output`) when not. Source choice is recorded in ADR-18.
+1. **Source selection** — the bridge MUST consume Claude Code's task-output directory shim (`%LOCALAPPDATA%\claude\...\tasks\<id>.output`). The hook-stream path (`BackgroundJobStart` / `BackgroundJobEnd` / `AgentSpawn` / `AgentComplete`) is reserved for a future Claude Code release; until then, the JSONL/folder shim is the sole source. Source selection is recorded in ADR-18.
 2. **Envelope emission** — the bridge MUST publish typed envelopes into `MessageBus` using additive `event_type` values (do not redefine existing types):
    - `bg_job_start` — payload `{job_id, command, started_at}`
    - `bg_job_end` — payload `{job_id, exit_code, ended_at}`
