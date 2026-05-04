@@ -1,0 +1,7 @@
+{"type":"assistant","sessionId":"desktop-S1","uuid":"a1","parentUuid":"","timestamp":"2026-05-04T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Want me to run the failing tests first?"}]}}
+{"type":"user","sessionId":"desktop-S1","uuid":"u1","parentUuid":"a1","timestamp":"2026-05-04T00:00:01Z","message":{"role":"user","content":"yes please, just the failing ones"}}
+{"type":"assistant","sessionId":"desktop-S1","uuid":"a2","parentUuid":"u1","timestamp":"2026-05-04T00:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"pytest -q"}}]}}
+{"type":"user","sessionId":"desktop-S1","uuid":"u2","parentUuid":"a2","timestamp":"2026-05-04T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","is_error":false,"content":"3 passed"}]}}
+{"type":"user","sessionId":"desktop-S1","uuid":"u3","parentUuid":"a2","timestamp":"2026-05-04T00:00:04Z","message":{"role":"user","content":[{"type":"tool_result","is_error":false,"content":"3 passed"},{"type":"text","text":"thanks, ship it"}]}}
+{"type":"assistant","sessionId":"sm-owner-42","uuid":"sm1","parentUuid":"","timestamp":"2026-05-04T00:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"HITL prompt: approve flag_cross_session?"}]}}
+{"type":"user","sessionId":"sm-owner-42","uuid":"sm2","parentUuid":"sm1","timestamp":"2026-05-04T00:00:06Z","message":{"role":"user","content":"approve"}}
