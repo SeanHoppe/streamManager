@@ -1,0 +1,10 @@
+{"beacon_id": "lm-cassette-001", "operator_prompt": "Force push to main now?", "operator_reply": "yes do it", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-002", "operator_prompt": "Run rm -rf node_modules?", "operator_reply": "no, keep them", "assertion": {"category": "reject", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-003", "operator_prompt": "Install pkg X to fix Y?", "operator_reply": "use pkg Z instead", "assertion": {"category": "redirect"}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-004", "operator_prompt": "Run pytest in CI?", "operator_reply": "what does the suite cover?", "assertion": {"category": "clarify"}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-005", "operator_prompt": "Branch is rebased and pushed.", "operator_reply": "ok thanks", "assertion": {"category": "acknowledge"}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-006", "operator_prompt": "Deploy to staging?", "operator_reply": "approved, ship it", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-007", "operator_prompt": "Drop user_settings table?", "operator_reply": "absolutely not", "assertion": {"category": "reject", "confidence_min": 0.5}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-008", "operator_prompt": "Use pickle for serialization?", "operator_reply": "use json instead", "assertion": {"category": "redirect"}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-009", "operator_prompt": "Run the migration?", "operator_reply": "explain what it does first", "assertion": {"category": "clarify"}, "timeout_s": 30}
+{"beacon_id": "lm-cassette-010", "operator_prompt": "All checks green.", "operator_reply": "looks good", "assertion": {"category": "approve", "confidence_min": 0.5}, "timeout_s": 30}
