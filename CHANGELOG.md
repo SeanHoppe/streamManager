@@ -6,6 +6,57 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-04
+
+Tagged ship of the v1.4 cycle. See `docs/v1.4-backlog.md` for the
+seed list and `docs/adr/ADR-5-latency-budget.md` §"v1.4 ship-gate
+baseline" for the M3 numbers.
+
+Highlights:
+
+- **Learn Mode runtime slide-toggle** (PR #76) — dashboard header pill
+  flips the categorizer worker active state without bouncing the host.
+  Persisted to `learn_categorizer_state(key='runtime_enabled')`; worker
+  observes the change on its next 5 s tick. Backward-compat preserved
+  for v1.3.1 deployments without a runtime row.
+- **ALLOW publish-path phase instrumentation** (PR #77) — new
+  `engine._last_phase_timings_ms` attribute populated at end of every
+  `evaluate()` call with sub-microsecond `perf_counter` deltas across
+  seven phases. Soak driver report grows an `### ALLOW publish-path
+  phase breakout (v1.4)` block. New `tools/allow_phase_probe.py` for
+  cheap quota-free local profiling.
+- **Scenarios library buildout** (PR #78) — 9 Method-1 YAML scenarios
+  under `tests/scenarios/` covering v1.0–v1.4 surface (governance L0/L4,
+  HITL, lifecycle bridge, SSE desktop_command, WireCLI, Learn Mode
+  end-to-end, advisory bias, runtime toggle). `scenario_runner.py`
+  gains `--scenarios`, `--all`, plus a `_KNOWN_ENVELOPE_TYPES` registry
+  that soft-warns on unknown types.
+- **Cassette ↔ beacon DRY** (PR #79) — single canonical 3-tuple
+  constant `cassette_record._LM_DIALOGUE_PAIRS_WITH_CATEGORY` drives
+  both the cassette refresh and a regenerated beacon JSONL.
+  `tools/regenerate_lm_beacons.py` keeps the two in sync; drift-detection
+  test fails if either side edits without rerunning the regenerator.
+- **v1.4 ship-gate** (PR pending — this cycle) — 32.3-min Tier 3 soak
+  with `--cli-pool-size 2` and the new phase instrumentation enabled.
+  Verdict PASS with overall p95 8.178 s (−2.26 s vs v1.3.1, parity
+  class — likely measurement noise). The phase breakout **disproves
+  the v1.3.1 §"Caveats" hypothesis** that ALLOW p95 was dominated by
+  publish-path sqlite contention: 100% of the 7.57 s ALLOW p95 lives
+  inside `_evaluate_inner` (publish + record_decision sum to under 1 ms).
+  v1.5 should instrument inside `_evaluate_inner` to attribute the
+  7.5-second tail to a specific sub-phase.
+- **ADR-5 §"v1.4 ship-gate baseline"** added; budget table carried
+  forward unchanged from v1.3.1. Status line bumped.
+
+### Notes
+
+- v1.4 verdict path is **at parity** with v1.3.1 (no production-code
+  change to `evaluate_inner` body). The phase instrumentation adds
+  ~7 `perf_counter` deltas per call (~sub-µs each). The probe tool
+  reports in-process ALLOW p95 = 0.16 ms on an idle bus.
+- Lifecycle bridge orphan-free positively asserted at ship-gate again.
+- v1.4 backlog now empty.
+
 ## [1.3.1] — 2026-05-04
 
 P6 close-gaps maintenance release (PR #75). Adds Path-A soak coverage
