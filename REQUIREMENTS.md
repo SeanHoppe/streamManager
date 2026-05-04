@@ -1,10 +1,10 @@
 # AdaptiveBridge — Requirements & Planning Document
 
 **Document type:** PRD + RFC + ADR hybrid
-**Version:** 1.10 (sync-comms scope freeze)
+**Version:** 1.11 (v1.2 surface audit — operator session selector, lifecycle bridge, SSE-only desktop_command, WireCLI-default CLI transport)
 **Status:** Draft for review
 **Owner:** TBD
-**Last updated:** 2026-05-02
+**Last updated:** 2026-05-04
 
 ---
 
@@ -208,6 +208,17 @@ Files are ranked by governance relevance: INTENT > REQUIREMENTS > CLAUDE > READM
 
 **FR-CC-4** — The client MUST send explicit feedback signals to the bridge when a governance suggestion was followed/ignored, enabling reinforcement.
 
+**FR-CC-5** — **WireCLI default + `json` transport refusal.** The CLI client transport surface is **WireCLI-default as of v1.2**. The legacy ad-hoc `json` transport branch is **REMOVED**:
+
+- `CliClient(transport=...)` MUST default to `"wirecli"`. Passing `"wirecli"` is a no-op accepted for explicitness.
+- Passing `"json"` MUST raise `ValueError` with a CHANGELOG / ADR-15 migration hint. No fall-through to WireCLI; no DeprecationWarning intermediate path. The legacy `json` parser branch and its tests are removed.
+- The `wirecli.py` module surface is protected: `WireProtocolError`, `WireSchemaVersionError`, `WireTransportError` are the canonical error types. A malformed envelope MUST raise `WireProtocolError` (NOT silently fall back to `ALLOW`); a schema-version mismatch MUST raise `WireSchemaVersionError`; subprocess death MUST raise `WireTransportError`.
+- The kwarg itself MAY be removed entirely in v1.3+ (see ADR-15 status note). FR-CC-3's "MUST pass `--output-format json` or equivalent" guidance now applies via WireCLI's framed protocol; the client no longer parses raw stdout JSON ad hoc.
+
+ADR-15 remains the historical record of the WireCLI default flip; it is updated with a v1.2 status note but not superseded. ADR-5 is re-baselined for any latency improvement / parity vs. the v1.1 ship-gate measured under the new default.
+
+Originating task: `docs/v1.2-task-plan.md` §"TASK E — json CLI transport removal (P2)" + ADR-15 v1.2 status note + ADR-5 v1.2 re-baseline.
+
 ### 4.7 Agent Registry (FR-AR)
 
 **FR-AR-1** — SM MUST support hybrid agent identification: (a) explicit metadata in message envelope (`agent_id`, `agent_type`, `agent_role`, `phase` fields), and (b) pattern inference via the L0→L4 decision graph when metadata is absent. Metadata takes precedence when present.
@@ -275,6 +286,28 @@ JSONL tail MUST be non-blocking: a lag or parse failure in the tail MUST NOT del
 FR-OG-7 activates only when `.sm-context.yaml` includes a maturity score artifact in its spotlight. Projects without a maturity harness are unaffected.
 
 **Loud-degrade behavior:** When `.sm-context.yaml` is missing entirely (e.g. fresh clone, CI environment, or untracked local-only file), SM MUST emit a single `og7_unconfigured` bus event at startup and the dashboard MUST surface a banner naming the missing config and the FR-OG-7 signals that are silently inactive. Loud-degrade is preferred over silent no-op so the operator sees that maturity-aware governance is off, rather than assuming the harness is running.
+
+**FR-OG-8** — **Operator session selector (CLI + dashboard).** SM MUST expose a session-selector operator surface so an operator running multiple SM workspaces can discover which session/job is being monitored without grepping `gov.db` by hand. The surface has two parts:
+
+1. **`sm` CLI** — a console script (registered via `pyproject.toml` `console_scripts`) MUST provide:
+   - `sm sessions list` — tabular output of `session_id | started_at | last_msg_at | active`, joining the `sessions` table with last-envelope timestamp and `EngineRegistry.refresh_status` active flag.
+   - `sm sessions tail <id>` — follow-mode stream of bus envelopes for the named session, exiting cleanly on `Ctrl-C` (exit code 0).
+2. **Dashboard header session picker** — a header control populated from `/api/registry/active`. Selection MUST filter every dashboard pane (decisions, HITL queue, latency, command stream) by `session_id`. The default selection is the most recently active session (max `last_refresh_ts`). A `__all__` pseudo-id MUST preserve unfiltered behavior. Selection MUST persist in `localStorage` keyed on dashboard origin so a refresh restores the operator's choice. Filtering MUST be client-side over the existing `/events` SSE envelope stream (which already carries `session_id`); no server-side filter endpoint is required.
+
+Originating task: `docs/v1.2-task-plan.md` §"TASK B — Session selector (CLI + UI) (P1)". This entry retroactively captures the operator surface shipped in v1.2 that was deferred from the v1.2 cycle's REQUIREMENTS update (see `docs/v1.3-backlog.md` §"From v1.2 close-out cycle").
+
+**FR-OG-9** — **Claude Code lifecycle bridge.** SM MUST surface Claude Code background jobs (`BG <id>`) and `Agent(...)` subagent spawns into the SM bus and the dashboard, so the operator can see which jobs and subagents are governed by the active session. The bridge has four contracts:
+
+1. **Source selection** — the bridge MUST consume Claude Code's task-output directory shim (`%LOCALAPPDATA%\claude\...\tasks\<id>.output`). The hook-stream path (`BackgroundJobStart` / `BackgroundJobEnd` / `AgentSpawn` / `AgentComplete`) is reserved for a future Claude Code release; until then, the JSONL/folder shim is the sole source. Source selection is recorded in ADR-18.
+2. **Envelope emission** — the bridge MUST publish typed envelopes into `MessageBus` using additive `event_type` values (do not redefine existing types):
+   - `bg_job_start` — payload `{job_id, command, started_at}`
+   - `bg_job_end` — payload `{job_id, exit_code, ended_at}`
+   - `agent_spawn` — payload `{agent_id, parent_session_id, prompt_summary, spawned_at}`
+   - `agent_done` — payload `{agent_id, status, ended_at}`
+3. **Track-only governance default** — bridge envelopes MUST default to `track_only=true`, producing an immediate `ALLOW` decision without invoking L4 alignment. This prevents the bridge from spending governance quota on its own observability traffic. Operators MAY wire a policy that flips `track_only=false` for selected event types, but the bridge itself MUST NOT auto-escalate.
+4. **Dashboard surface** — the FR-UI-1 Frame C ("Background Jobs") MUST render live BG job IDs and agent IDs sourced from the lifecycle bridge, each with start timestamp and current status. Closed rows MUST fade ≥ 60 s after completion. When the FR-OG-8 session picker is set to a specific `session_id`, Frame C MUST filter to bg jobs / agents whose `parent_session_id` matches.
+
+Originating task: `docs/v1.2-task-plan.md` §"TASK C — Claude Code lifecycle bridge (P1)" + ADR-18.
 
 ### 4.9 Human-in-the-Loop (FR-HITL)
 
@@ -441,6 +474,16 @@ SM transitions from passive observer to active orchestrator via a control plane:
 **FR-DC-4** — The SM dashboard MUST render a **Session Mirror frame** that shows the governed-session tool stream live (`tool_call` + `tool_result` events as they arrive). The mirror is read-only; user input on the mirror is not forwarded to the governed session.
 
 **FR-DC-5** — The Session Mirror frame and the `desktop_command` emit endpoints MUST filter `session_id != SM_OWN_SESSION_ID`. SM MUST NOT mirror or command its own session — this enforces the SM-never-self-monitor invariant at the transport layer in addition to the engine layer.
+
+**FR-DC-6** — **SSE-only desktop_command transport.** The `desktop_command` consumer transport surface is **SSE-only as of v1.2**. The legacy long-poll path (v1.1 dual-mode) is **REMOVED**. Specifically:
+
+- The consumer (`CommandConsumer`) MUST source pending commands from the SSE keep-alive endpoint `/api/commands/stream` only. The legacy `/api/commands/pending` HTTP long-poll endpoint MUST return `404` and is no longer part of the documented API surface.
+- The `transport` kwarg on the consumer MAY remain accepted as `"sse"` (no-op default) for one cycle of caller back-compat. Any other value (notably `"long-poll"`) MUST raise a `DeprecationWarning` and either reject the call (CLI tooling, exit non-zero with migration message) or fall through to SSE (library callers).
+- Tests covering the long-poll path are removed; `tests/test_desktop_command_sse.py` is the sole transport test.
+
+ADR-14 remains the historical record of the deprecation window; it is updated with a v1.2 status note but not superseded.
+
+Originating task: `docs/v1.2-task-plan.md` §"TASK D — Long-poll consumer path removal (P2)" + ADR-14 v1.2 status note.
 
 ---
 
@@ -761,3 +804,4 @@ Patterns with `last_seen > 30 days` AND `occurrences < 5` MUST be candidates for
 | 1.8 | 2026-05-02 | SeanHoppe | FR-UI refinements: Bg Jobs frame = generic CLI subprocesses (job name + PID leading cell); Sub-Agents swim-lane = last 10 agents, active pinned top, agent name leading cell; FR-UI-4 `Take action` promotes session to HITL ON (not one-off); FR-UI-3 audible cue default OFF, UI-toggleable; FR-UI-5 ranking weights tunable via `.sm-context.yaml` `decision_suggestion_weights`; FR-UI-9 Settings panel spec |
 | 1.9 | 2026-05-02 | SeanHoppe | FR-UI follow-ups: FR-UI-1 frame B "active" = configurable activity window (default 10 s, set via FR-UI-9); FR-UI-4 `Take action` promotion explicit SYNC default + emits `hitl_mode_promoted` bus event; FR-UI-5 weights validation = **hard-fail startup** on bad config (not fallback); FR-UI-9 adds Sub-Agents activity window setting (1–600 s) |
 | 1.10 | 2026-05-02 | SeanHoppe | sync-comms scope freeze: §4.11 FR-DC-1..5 (HMAC-signed `desktop_command` control plane + Session Mirror frame + no-self-monitor transport filter); §3.2 NFR-MS-1..4 (multi-session model with isolated per-session engines, cross-session L3-flag HITL gate, SQLite-only cross-session signal); ADR-12 (control plane bypasses governance) + ADR-13 (shared single-secret HMAC for v1.0). ADR-5 latency budget revised for CLI subprocess path (NFR-P2: p50 ≤ 7s, p95 ≤ 15s, hard timeout 25s). FR-OG-7 loud-degrade behavior on missing `.sm-context.yaml`. Equivalent to ship-plan Task H "v1.7" — numbering advanced because v1.7–v1.9 were consumed by intervening FR-UI work. |
+| 1.11 | 2026-05-04 | SeanHoppe | v1.3 P3 FR-OG drift audit: retroactive capture of v1.2 surface deferred at M4 (`docs/v1.3-backlog.md` §"From v1.2 close-out cycle"). Added FR-OG-8 (operator `sm` CLI + dashboard session picker; ← v1.2 Task B), FR-OG-9 (Claude Code lifecycle bridge envelopes + Frame C dashboard surface + track_only governance default; ← v1.2 Task C + ADR-18), FR-DC-6 (SSE-only `desktop_command` consumer transport; long-poll path removed; ← v1.2 Task D + ADR-14), FR-CC-5 (WireCLI-default CLI transport; `json` branch removed; ← v1.2 Task E + ADR-15 + ADR-5 v1.2 re-baseline). Docs-only audit; zero code touched. ADRs not edited (historical record). |
