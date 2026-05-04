@@ -104,6 +104,22 @@ CREATE TABLE IF NOT EXISTS desktop_commands (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dc_pending ON desktop_commands(session_id, status);
+
+-- v1.3 P5c: Learn Mode categorizer output. One row per categorized
+-- desktop_prompt/user_reply pair. Additive — does not modify any
+-- existing table. The verdict hot path never writes here; this is
+-- populated exclusively by the out-of-band categorizer worker.
+CREATE TABLE IF NOT EXISTS learn_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_hash TEXT NOT NULL,
+    category TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    ladder_step INTEGER NOT NULL DEFAULT 0,
+    last_reinforced_ts REAL NOT NULL,
+    contradicted_count INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learn_patterns_hash ON learn_patterns(prompt_hash);
 """
 
 
