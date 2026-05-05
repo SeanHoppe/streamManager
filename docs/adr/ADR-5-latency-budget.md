@@ -1,6 +1,6 @@
 # ADR-5: Governance latency budget (revised for v1.0)
 
-- **Status**: Accepted (v1.0); re-baselined v1.1 (2026-05-03); re-baselined v1.2 (2026-05-03, see §"v1.2 ship-gate baseline"); re-baselined v1.3 (2026-05-04, see §"v1.3 ship-gate baseline"); re-baselined v1.4 (2026-05-04, see §"v1.4 ship-gate baseline"); re-baselined v1.5 (2026-05-04, see §"v1.5 ship-gate baseline")
+- **Status**: Accepted (v1.0); re-baselined v1.1 (2026-05-03); re-baselined v1.2 (2026-05-03, see §"v1.2 ship-gate baseline"); re-baselined v1.3 (2026-05-04, see §"v1.3 ship-gate baseline"); re-baselined v1.4 (2026-05-04, see §"v1.4 ship-gate baseline"); re-baselined v1.5 (2026-05-04, see §"v1.5 ship-gate baseline"); re-baselined v1.6 (2026-05-05, see §"v1.6 ship-gate baseline"); re-baselined v1.7 (2026-05-05, see §"v1.7 ship-gate baseline")
 - **Date**: 2026-05-02
 - **Supersedes**: original ADR-5 budget (200 ms p50 / 2 s p95, SDK-era)
 
@@ -545,9 +545,116 @@ ACCEPTED as v1.6 budget. v1.7 latency work measures against this section.
 
 ### Caveats
 
-- **v1.5 `_evaluate_inner` residue caveat — RESOLVED.** v1.6 P1 instrumentation localises the `_evaluate_inner` tail to `cli_pool_send_ms` p95 = 6328.07 ms (99.99% of `cli_dispatch_ms`; ~99.98% of `evaluate_inner`). Driver is the synchronous `worker.send` Anthropic CLI round-trip (subprocess stdin write + stdout JSONL response wait in `CliWorker.send` (see `cli_pool.py`)); v1.7 lever = **Haiku fastpath** (primary; downgrade more L4/ambiguous-BLOCK from Sonnet → Haiku) with **pool sizing >2** as fallback (insurance for concurrent burst load only — `cli_pool_acquire_ms` p95 = 0.06 ms confirms zero queueing under sequential soak).
-- **LM (categorize) p95 = 18.60 s — regression vs v1.5 (+3.21 s).** Trend reversed: v1.4 = 19.26 s → v1.5 = 15.39 s → v1.6 = 18.60 s. Magnitude over 18 s ceiling = 0.60 s (3.3%); n=10 (high variance), spread p50→p95 = 5.91 s, dashboard log clean (no warn/error/retry/timeout/exception), no cassette envelope additions in v1.6 affecting the LM categorizer (per S5a triage). LM is advisory/categorize, not on the safety path. **Decision: ship-with-v1.7-watch** — re-measure at v1.7 ship-gate; if next sample also lands ≥ 18 s, treat as sustained regression and triage cassette/categorizer separately.
+- **v1.5 `_evaluate_inner` residue caveat — RESOLVED.** v1.6 P1 instrumentation localises the `_evaluate_inner` tail to `cli_pool_send_ms` p95 = 6328.07 ms (99.99% of `cli_dispatch_ms`; ~99.98% of `evaluate_inner`). Driver is the synchronous `worker.send` Anthropic CLI round-trip (subprocess stdin write + stdout JSONL response wait in `CliWorker.send` (see `cli_pool.py`)); v1.7 lever = **Haiku fastpath** (primary; downgrade more L4/ambiguous-BLOCK from Sonnet → Haiku) with **pool sizing >2** as fallback (insurance for concurrent burst load only — `cli_pool_acquire_ms` p95 = 0.06 ms confirms zero queueing under sequential soak). **v1.7 disposition: lever wired but DORMANT in production** — see §"v1.7 ship-gate baseline" §Caveats lever-falsification bullet.
+- **LM (categorize) p95 = 18.60 s — regression vs v1.5 (+3.21 s).** Trend reversed: v1.4 = 19.26 s → v1.5 = 15.39 s → v1.6 = 18.60 s. Magnitude over 18 s ceiling = 0.60 s (3.3%); n=10 (high variance), spread p50→p95 = 5.91 s, dashboard log clean (no warn/error/retry/timeout/exception), no cassette envelope additions in v1.6 affecting the LM categorizer (per S5a triage). LM is advisory/categorize, not on the safety path. **Decision: ship-with-v1.7-watch** — re-measure at v1.7 ship-gate; if next sample also lands ≥ 18 s, treat as sustained regression and triage cassette/categorizer separately. **v1.7 disposition: RESOLVED** — v1.7 LM p95 = 11.95 s, watch closes per §"v1.7 ship-gate baseline" §Caveats.
 - **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.5 are within sample noise; the overall and ALLOW p95 are the higher-confidence comparisons.
+
+## v1.7 ship-gate baseline
+
+- **Source**: `reports/soak-20260505T125741Z.md`
+- **Date**: 2026-05-05
+- **Ship SHA**: pending merge of `ship/v1.7-shipgate-finalize` (will be backfilled post-merge; tag `v1.7.0`)
+- **Driver**: `tools/soak_driver.py --cli-pool-size 2` (Tier 3 per ADR-17) **with v1.7 P2 Haiku fastpath router enabled** (additive `cli_dispatch_fallback_ms` key — 6th row in the v1.6 CLI residue block; new `governance_fallback_routed` + `governance_envelope_missing_confidence` envelopes wired)
+- **Runtime**: 1909.7 s (31.8 min)
+- **Events**: 60 emitted / 158 received via SSE
+- **Verdict**: PASS (100% SSE, RSS drift **−11.33 MB** (shrink), no uncaught exceptions, lifecycle bridge 0 orphans)
+
+### Latency targets (overall, n=60)
+
+| Metric  | v1.7 measured |
+|---------|---------------|
+| p50     | 3.530 s       |
+| p95     | 9.277 s       |
+| max     | 14.459 s      |
+| mean    | 3.098 s       |
+
+### Per-band split
+
+| Path                 | n  | p50      | p95      |
+|----------------------|----|----------|----------|
+| ALLOW (routine)      | 50 |  3.55 s  |  5.13 s  |
+| L2/L3 escalation     |  5 |  0.00 s  |  3.70 s  |
+| L4 alignment         |  5 |  8.94 s  | 13.41 s  |
+| LM (categorize)      | 10 |  9.13 s  | 11.95 s  |
+
+### ALLOW _evaluate_inner CLI residue breakout (v1.7 — 6 rows)
+
+First ship-gate with the v1.7 P2 fallback-routing key (`cli_dispatch_fallback_ms`) wired into the v1.6 CLI residue block. The block now renders 6 rows; pre-v1.7 streams continue to render the original 5-row block byte-identically (verified by `tests/test_soak_driver_v17_residue_block.py`).
+
+| Phase                      |  n  | p50 ms   | p95 ms   | max ms   |
+|----------------------------|-----|----------|----------|----------|
+| cli_setup_ms               |  50 |  0.00    |  0.01    |   0.01   |
+| cli_dispatch_ms            |  50 | 3546.60  | 5129.33  | 12830.87 |
+| cli_pool_acquire_ms        |  50 |  0.02    |  0.06    |   0.07   |
+| cli_pool_send_ms           |  50 | 3546.16  | 5128.96  | 12830.28 |
+| cli_parse_ms               |  50 |  0.04    |  0.05    |   0.15   |
+| cli_dispatch_fallback_ms   |  50 |  0.00    |  0.00    |   0.00   |
+
+For reference, the v1.4 publish-path block on the same run reports `evaluate_inner` p95 = **5129.50 ms**.
+
+### Fallback routing summary (NEW v1.7)
+
+| Metric                                        | Value |
+|-----------------------------------------------|-------|
+| `governance_fallback_routed` envelopes emitted | 0     |
+| `cli_dispatch_fallback_ms` p95                 | 0.00 ms |
+| Per-band fallback rate — ambiguous-BLOCK       | n/a (0 ambig-BLOCK envelopes triggered in soak load mix) |
+| Per-band fallback rate — HITL synthesis        | n/a (0 HITL synthesis envelopes triggered in soak load mix) |
+
+**Lever wired but DORMANT in production code paths.** The L4 sub-band routing and the cli_governance retry path are merged; 27 new tests cover the surface deterministically. However, the production caller path (`governance._evaluate_inner_core` pre-routing call site) sets `is_ambiguous_block=False` and `is_hitl_synthesis=False` unconditionally — content-based pre-routing detection of these flags is a v1.8 backlog item. Until that wires, the L4 sub-band's Haiku-fastpath branch is unreachable from the production engine and `fallback_model_id` is `None` on every routing decision. Soak result confirms: 0 fallback fires across 60 events.
+
+### Alignment-eval gate
+
+- **Source**: `reports/alignment-eval-20260505T124519Z.md` (run against the merged P2 router config — same code as `main` post-`9c483be`)
+- **Sonnet pass rate**: 23/24 stable rows = **0.9583** (above 0.95 gate)
+- **Haiku pass rate**: 19/20 stable rows = **0.95**
+- **Haiku regressions vs Sonnet**: **0**
+- **FR-OG-7 row gate result**: **0 regressions** → `--ci-gate` exit **0** (PASS)
+- **Regressing rows**: none
+
+Ship-gate alignment-eval gate clean — no abandonment trigger fires per the v1.7 P3 mint rule.
+
+### Delta vs v1.6 ship-gate (`reports/soak-20260505T073943Z.md`)
+
+| Metric           | v1.6     | v1.7     | Δ          | Class       |
+|------------------|----------|----------|------------|-------------|
+| Overall p50      | 4.092 s  | 3.530 s  | −0.56 s    | improvement (within noise) |
+| Overall p95      | 7.665 s  | 9.277 s  | +1.61 s    | parity (within budget ≤ 12 s; n=60 noise; upstream Anthropic variance) |
+| Overall max      | 14.967 s | 14.459 s | −0.51 s    | parity |
+| Overall mean     | 3.358 s  | 3.098 s  | −0.26 s    | improvement (within noise) |
+| ALLOW p95        |  6.33 s  |  5.13 s  | **−1.20 s** | improvement (NOT lever effect — see §Caveats) |
+| L2/L3 p95        |  4.19 s  |  3.70 s  | −0.49 s    | parity (n=5 noise) |
+| L4 alignment p95 | 13.98 s  | 13.41 s  | −0.57 s    | parity (n=5 noise; under ≤14 s budget) |
+| LM (cat) p95     | 18.60 s  | 11.95 s  | **−6.65 s** | **regression resolved** ✓ (watch closes) |
+| RSS drift        | −11.17 MB | −11.33 MB | parity     | both shrink, well under 50 MB budget |
+| `cli_pool_send_ms` p95 | 6328.07 ms | 5128.96 ms | **−1199 ms (−19.0%)** | improvement (NOT lever effect — see §Caveats) |
+
+v1.7 ships P2 router infrastructure (additive — 1 new `RoutingDecision` field, 1 new `evaluate` kwarg, 1 new sub_timings key, 2 new bus envelopes, 1 conditional 6th row in soak block). Verdict path for v1.6 callers (every production caller post-merge) is byte-identical: 550 fast-tier tests passing.
+
+### Budget
+
+The v1.6 budget table is **carried forward unchanged** for v1.7. The lever is dormant in production (§Caveats), so no measured lever effect justifies tightening. v1.8 latency work measures against the table below:
+
+| Path                 | v1.7 budget (= v1.6 = v1.5 = v1.4 carried forward)    |
+|----------------------|-------------------------------------------------------|
+| ALLOW p95            | ≤ 12 s                                                |
+| L2/L3 escalation p95 | ≤ 8 s                                                 |
+| L4 alignment p95     | ≤ 14 s                                                |
+| LM (categorize) p95  | ≤ 25 s                                                |
+| Overall p95          | ≤ 12 s                                                |
+| Hard timeout         | 25 s (unchanged)                                      |
+
+### Status
+
+ACCEPTED as v1.7 budget. v1.8 latency work measures against this section.
+
+### Caveats
+
+- **v1.6 LM (categorize) watch — RESOLVED.** v1.7 LM p95 = **11.95 s** (n=10) is well below the 18 s ceiling. Trend: v1.4 = 19.26 s → v1.5 = 15.39 s → v1.6 = 18.60 s → **v1.7 = 11.95 s**. Watch closes per the v1.7 backlog rubric ("v1.7 LM p95 < 18 s → watch closed"). Spread p50→p95 = 2.82 s (v1.6 was 5.91 s) — variance also retreated. No further action required.
+- **v1.7 P2 Haiku fastpath lever — wired but DORMANT in production.** The L4 sub-band routing (alignment vs ambig-BLOCK vs HITL synthesis with confidence-gated Sonnet fallback) and the cli_governance retry path are merged; 27 new tests (11 sub-band + 7 fallback routing + 9 soak residue) cover the surface deterministically. **However**, the production caller path (`governance._evaluate_inner_core` pre-routing) sets `is_ambiguous_block=False` and `is_hitl_synthesis=False` unconditionally — content-based detection of these flags is a v1.8 backlog item. Soak result: 0 fallback fires across 60 events; `cli_dispatch_fallback_ms` p95 = 0.00 ms; 0 `governance_fallback_routed` envelopes emitted. **Lever effect cannot yet be measured.**
+- **Lever falsification check.** `cli_pool_send_ms` p95 dropped 19.0% (6328.07 → 5128.96 ms); ALLOW p95 dropped 1.20 s; L4 alignment p95 dropped 0.57 s — all numerical improvements. **However, the drops are NOT attributable to the v1.7 lever**: fallback fire rate is 0% (the lever code path never executed in production during this soak). The drops are upstream Anthropic round-trip variance on a sequential soak driver (same driver, same load mix, same `--cli-pool-size 2`, no engine-code change to `_maybe_cli_evaluate` or `CliWorker.send`). Per the P3 §4 falsification rule: lever cannot be claimed as moved-the-needle until is_ambiguous_block / is_hitl_synthesis content-detection wires (v1.8 backlog item). The 19% improvement is recorded as upstream variance — neither earned regression nor earned lever effect.
+- **Alignment-eval result.** Sonnet pass rate 0.9583 (23/24 stable rows), Haiku pass rate 0.95 (19/20 stable rows), 0 Haiku regressions vs Sonnet, 0 FR-OG-7 regressions, `--ci-gate` exit 0. P1 v2 baseline had observed 1 FR-OG-7 regression on `frog7-valid-transports-04` (sonnet 3/3 GUIDE vs haiku 3/3 INTERVENE); the v1.7 P2 baseline observed both sonnet and haiku unstable on the same row (sonnet 2/3 GUIDE; haiku 2/3 GUIDE) — the unanimous-stability rule correctly classifies this as borderline drift, not a deterministic regression. The row is also FR-OG-7 protected at the production router (`requires_alignment` keeps it on Sonnet only) so even a deterministic Haiku divergence here would be unreachable in production code paths.
+- **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.6 are within sample noise; the overall and ALLOW p95 are the higher-confidence comparisons. ALLOW p95 −1.20 s and `cli_pool_send_ms` p95 −19.0% are the strongest improvement signals but, like the others, classified as upstream variance not lever effect (lever fire rate = 0).
 
 ## References
 
@@ -574,6 +681,13 @@ ACCEPTED as v1.6 budget. v1.7 latency work measures against this section.
   the v1.6 P1 `_evaluate_inner` CLI residue instrumentation enabled
   (the v1.6 baseline source per §"v1.6 ship-gate baseline"); driver
   localised to `cli_pool_send_ms`
+- `reports/soak-20260505T125741Z.md` — v1.7 31.8-min ship-gate soak with
+  the v1.7 P2 Haiku fastpath router enabled (additive
+  `cli_dispatch_fallback_ms` 6th row in the CLI residue block); the
+  v1.7 baseline source per §"v1.7 ship-gate baseline"
+- `reports/alignment-eval-20260505T124519Z.md` — v1.7 alignment-eval
+  `--ci-gate` baseline against the merged P2 router config; sonnet
+  0.9583 / haiku 0.95 / 0 FR-OG-7 regressions / exit 0
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17
