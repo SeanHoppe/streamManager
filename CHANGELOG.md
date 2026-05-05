@@ -6,6 +6,63 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-05
+
+Tagged ship of the v1.6 cycle. See `docs/v1.7-backlog.md` for the seed
+list and `docs/adr/ADR-5-latency-budget.md` §"v1.6 ship-gate baseline"
+for the P2 numbers.
+
+Highlights:
+
+- **`_evaluate_inner` CLI residue instrumentation** (PR #85 + #86, P1) —
+  five new keys on `engine._last_phase_timings_ms`: `cli_setup_ms`,
+  `cli_dispatch_ms`, `cli_pool_acquire_ms`, `cli_pool_send_ms`,
+  `cli_parse_ms`. Soak driver report grows an `### ALLOW _evaluate_inner
+  CLI residue breakout (v1.6)` block alongside the v1.4 publish-path and
+  v1.5 sub-phase blocks. Verdict path unchanged (additive `perf_counter`
+  deltas only, no reordering).
+- **v1.6 ship-gate** (this PR, P2) — 32.6-min Tier 3 soak with
+  `--cli-pool-size 2` and the new CLI residue instrumentation enabled.
+  Verdict PASS with overall p95 7.665 s and ALLOW p95 6.33 s.
+- **Driver localisation finding.** The v1.5 §"Caveats" residue item is
+  **resolved**. `cli_pool_send_ms` p95 = 6328.07 ms accounts for 99.99%
+  of `cli_dispatch_ms` (6329.00 ms) and ~99.98% of `evaluate_inner`
+  (6329.38 ms). Driver is the synchronous `worker.send` Anthropic CLI
+  round-trip (subprocess stdin write + stdout JSONL response wait at
+  `cli_pool.py:255`); `cli_setup_ms` (0.01 ms), `cli_pool_acquire_ms`
+  (0.06 ms — confirms zero queueing under sequential soak), and
+  `cli_parse_ms` (0.15 ms) are all negligible. v1.7 lever = **Haiku
+  fastpath** (primary; downgrade more L4/ambiguous-BLOCK from Sonnet →
+  Haiku) with **pool sizing >2** as fallback (insurance for concurrent
+  burst load only).
+- **LM (categorize) p95 trend disposition.** v1.4 = 19.26 s → v1.5 =
+  15.39 s → v1.6 = **18.60 s** (+3.21 s vs v1.5; 0.60 s over 18 s
+  ceiling, 3.3% breach). Per S5a triage — n=10 high-variance, dashboard
+  log clean, no cassette envelope additions in v1.6 affecting the LM
+  categorizer — **decision: ship-with-v1.7-watch**. LM is advisory /
+  categorize, not on the safety path. Re-measure at v1.7 ship-gate; if
+  next sample also lands ≥ 18 s, treat as sustained regression and
+  triage cassette/categorizer separately.
+- **ADR-5 §"v1.6 ship-gate baseline"** added; budget table carried
+  forward unchanged from v1.5. v1.5 §"Caveats" residue + LM bullets
+  appended w/ forward pointers to v1.6 disposition. Status line bumped.
+
+### Notes
+
+- v1.6 verdict path is **at parity** with v1.5 (no production-code
+  change to `_evaluate_inner` body beyond additional `perf_counter`
+  deltas inside the CLI escalation branch). ALLOW + overall p95
+  increases vs v1.5 are classified as upstream Anthropic round-trip
+  variance on a sequential soak driver, not earned regression — the
+  residue driver (`cli_pool_send_ms`) is upstream model time, not local
+  engine code.
+- Lifecycle bridge orphan-free positively asserted at ship-gate again.
+- `--cli-pool-size 2` remains ship-gate default per
+  `feedback_soak_cli_pool_flag.md`.
+- v1.6 P1 followups (PR #86, da0f271) hardened residue instrumentation
+  emission paths so all `_evaluate_inner` exit branches populate the
+  five keys consistently.
+
 ## [1.5.0] — 2026-05-04
 
 Tagged ship of the v1.5 cycle. See `docs/v1.6-backlog.md` for the seed
