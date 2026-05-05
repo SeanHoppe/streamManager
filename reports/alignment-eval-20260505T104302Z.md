@@ -1,5 +1,17 @@
 # v1.7 P1 alignment-eval baseline
 
+> **PRE-CALIBRATION EVIDENCE — DO NOT compare the `expected` column below
+> against the current `tests/golden/l4_alignment.jsonl`.** This run used
+> the original prescriptive golden-set ("what SM should do" =
+> `INTERVENE`/`BLOCK` on protected-symbol touches). It revealed a 50%
+> control miss concentrated entirely on FR-OG-7 + ambig-BLOCK rows, where
+> Sonnet consistently returned softer adjacent verdicts (`SUGGEST`/`GUIDE`).
+> The golden-set was then recalibrated to Sonnet's empirical majority
+> (semantic shift: golden now encodes "what Sonnet does on this surface"
+> = the P2 gate baseline). The post-calibration green DOD baseline lives
+> at `reports/alignment-eval-20260505T113007Z.md`. See PR #89 for the
+> full calibration narrative.
+
 - generated: 20260505T104302Z
 - runs per row per model: 3
 - control model: `claude-sonnet-4-6`
