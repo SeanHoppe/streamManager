@@ -436,6 +436,9 @@ _ALLOW_PHASE_ORDER: list[str] = [
     "cli_pool_acquire_ms",
     "cli_pool_send_ms",
     "cli_parse_ms",
+    # v1.7 P2: Haiku→Sonnet fallback wall-clock. 0.0 unless the L4
+    # sub-band fired the retry. Pre-v1.7 streams render n=0 / n/a here.
+    "cli_dispatch_fallback_ms",
     "bias_consult",
     "hitl_classify_trigger",
     "hitl_route",
@@ -654,6 +657,26 @@ def _format_evaluate_inner_cli_residue_breakout(
         lines.append(
             f"| {phase:<22} | {n:>3} | {p50:>5.2f}    | {p95:>5.2f}    | {m:>6.2f}   |"
         )
+    # v1.7 P2: Haiku→Sonnet fallback wall-clock row, conditionally appended
+    # only when the stream contains the key. Pre-v1.7 streams (engines that
+    # never emitted cli_dispatch_fallback_ms) suppress the row entirely so
+    # the v1.6 block remains byte-identical for legacy soak inputs. v1.7
+    # streams render the 6th row (typically all-zero p95 until the L4
+    # sub-band starts firing fallback in production).
+    if "cli_dispatch_fallback_ms" in allow_phase_ms:
+        data = allow_phase_ms["cli_dispatch_fallback_ms"]
+        n = len(data)
+        if n == 0:
+            lines.append(
+                "| cli_dispatch_fallback_ms |   0 | n/a      | n/a      | n/a      |"
+            )
+        else:
+            p50 = _percentile(data, 50)
+            p95 = _percentile(data, 95)
+            m = max(data)
+            lines.append(
+                f"| cli_dispatch_fallback_ms | {n:>3} | {p50:>5.2f}    | {p95:>5.2f}    | {m:>6.2f}   |"
+            )
     lines.append("")
     return lines
 

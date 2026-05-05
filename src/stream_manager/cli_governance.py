@@ -49,6 +49,13 @@ MODEL = "claude-haiku-4-5"
 TIMEOUT_SECONDS = 25.0
 CLI_BIN = "claude"
 
+# v1.7 P2: Haiku fastpath fallback floor. When the primary call's parsed
+# confidence drops strictly below this threshold AND a fallback_model_id
+# is supplied to evaluate(), retry once on the fallback model and use
+# its verdict as the final answer.
+FALLBACK_CONFIDENCE_ENV = "BRIDGE_L4_FALLBACK_CONFIDENCE"
+FALLBACK_CONFIDENCE_DEFAULT = 0.70
+
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
 
 # Phase 7 / governance_call: tier inference from model id. Sonnet → L4,
@@ -116,6 +123,25 @@ def is_enabled() -> bool:
     return os.environ.get(ENV_FLAG, "").lower() in ("1", "true", "yes")
 
 
+def _fallback_confidence_floor() -> float:
+    """v1.7 P2 floor for the Haiku→Sonnet retry. Env-overridable via
+    `BRIDGE_L4_FALLBACK_CONFIDENCE`; default `0.70`. Malformed env
+    values silently fall back to the default so a typo never disables
+    the fallback path.
+    """
+    raw = os.environ.get(FALLBACK_CONFIDENCE_ENV, "")
+    if not raw:
+        return FALLBACK_CONFIDENCE_DEFAULT
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "cli_governance: invalid %s=%r; using default %.2f",
+            FALLBACK_CONFIDENCE_ENV, raw, FALLBACK_CONFIDENCE_DEFAULT,
+        )
+        return FALLBACK_CONFIDENCE_DEFAULT
+
+
 class CliGovernor:
     """Wraps the Claude CLI subprocess with the governance prompt.
 
@@ -159,7 +185,110 @@ class CliGovernor:
         content: str,
         model_id: str | None = None,
         sub_timings: dict[str, float] | None = None,
+        fallback_model_id: str | None = None,
     ) -> CliDecision | None:
+        """v1.7 P2 outer orchestration: primary call → maybe fallback retry.
+
+        Backward-compat with v1.6 callers: when `fallback_model_id is None`
+        the body collapses to a single `_evaluate_once` invocation and the
+        method behaves byte-identically to v1.6. The `cli_dispatch_fallback_ms`
+        key is populated as 0.0 in that case so soak driver percentile math
+        sees a consistent shape.
+
+        When `fallback_model_id` is supplied, the primary call's parsed
+        confidence is compared against `BRIDGE_L4_FALLBACK_CONFIDENCE`
+        (default 0.70). On strict-below, the fallback model is retried
+        once and its verdict becomes the final answer; the retry's residue
+        is discarded (only its wall-clock surfaces on `cli_dispatch_fallback_ms`).
+        Missing-confidence envelopes are treated as 1.0 (no fallback) and
+        emit `governance_envelope_missing_confidence`.
+        """
+        primary_model = model_id if model_id is not None else MODEL
+        decision, confidence_present = self._evaluate_once(
+            content, primary_model, sub_timings
+        )
+
+        # Default the new key to 0.0 so v1.6 callers and the no-fire path
+        # both populate it cleanly (soak driver suppresses it for streams
+        # missing the key — see tools/soak_driver.py).
+        if sub_timings is not None:
+            sub_timings.setdefault("cli_dispatch_fallback_ms", 0.0)
+
+        if fallback_model_id is None or decision is None:
+            # No fallback configured (v1.6 caller / FR-OG-7 alignment row),
+            # or the primary call failed structurally — never retry.
+            return decision
+
+        if not confidence_present:
+            # Malformed envelope: confidence field missing. Treat as 1.0
+            # (no fallback fire) AND emit a one-shot warning event so we
+            # can detect schema drift in cassette / dashboards. Do NOT add
+            # a confidence field to the wire schema (P2 spec).
+            self._publish_bus_message(
+                "governance_envelope_missing_confidence",
+                {
+                    "model": primary_model,
+                    "tier": _infer_tier(primary_model),
+                    "trigger": _infer_trigger(content),
+                },
+            )
+            return decision
+
+        floor = _fallback_confidence_floor()
+        if decision.confidence >= floor:
+            return decision
+
+        # Fallback fires. Retry on the fallback model with a throwaway
+        # residue dict so primary's residue keys remain on the caller's
+        # sub_timings; only the retry wall-clock surfaces on
+        # cli_dispatch_fallback_ms.
+        primary_confidence = decision.confidence
+        _t_fb_start = _pc()
+        _throwaway: dict[str, float] = {}
+        fallback_decision, _fb_confidence_present = self._evaluate_once(
+            content, fallback_model_id, _throwaway
+        )
+        _fb_ms = (_pc() - _t_fb_start) * 1000.0
+        if sub_timings is not None:
+            sub_timings["cli_dispatch_fallback_ms"] = _fb_ms
+
+        # Emit the routing-decision audit envelope. Fallback confidence
+        # may be None when the retry failed structurally; record what we
+        # have so dashboards can distinguish "fallback fired and got an
+        # answer" from "fallback fired and degraded too."
+        fb_conf: float | None = (
+            fallback_decision.confidence if fallback_decision is not None else None
+        )
+        self._publish_bus_message(
+            "governance_fallback_routed",
+            {
+                "primary_model": primary_model,
+                "fallback_model": fallback_model_id,
+                "primary_confidence": primary_confidence,
+                "fallback_confidence": fb_conf,
+                "fallback_ms": _fb_ms,
+            },
+        )
+        # Retry's verdict is the final answer when present; if the retry
+        # itself failed, fall back to the primary verdict so we never
+        # silently lose a usable decision.
+        return fallback_decision if fallback_decision is not None else decision
+
+    def _evaluate_once(
+        self,
+        content: str,
+        primary_model: str,
+        sub_timings: dict[str, float] | None,
+    ) -> tuple[CliDecision | None, bool]:
+        """v1.7 P2 single-call body. Returns (decision, confidence_present).
+
+        Lifted from the v1.6 evaluate() body verbatim — same residue
+        instrumentation, same pool/spawn dispatch, same telemetry events.
+        The only behavioral change is the second tuple element so the
+        outer orchestrator can distinguish "missing confidence field"
+        (treat as 1.0 + warn) from "explicit confidence 0.0" (trigger
+        fallback).
+        """
         # v1.6 P1: residue-level wall-clock instrumentation. When
         # `sub_timings` is None the entry/exit deltas below are computed
         # into a local throwaway dict and discarded, so v1.5 callers
@@ -176,14 +305,14 @@ class CliGovernor:
                 sub_timings.setdefault("cli_pool_acquire_ms", 0.0)
                 sub_timings.setdefault("cli_pool_send_ms", 0.0)
                 sub_timings.setdefault("cli_parse_ms", 0.0)
-            return None
+            return None, False
 
         user_prompt = f"Evaluate this proposed action:\n\n{content[:4000]}"
         # Phase 4 / NFR-M2: caller (model_router) may pass model_id for
-        # tier-aware dispatch (Haiku for L2/L3, Sonnet for L4). When None,
-        # fall back to the legacy default so existing callers/tests are
-        # unaffected.
-        chosen_model = model_id if model_id is not None else MODEL
+        # tier-aware dispatch (Haiku for L2/L3, Sonnet for L4). The outer
+        # evaluate() always resolves the model before calling here, so
+        # `primary_model` is non-None.
+        chosen_model = primary_model
         cmd = [
             CLI_BIN, "-p", user_prompt,
             "--system-prompt", self._system_prompt(),
@@ -241,7 +370,7 @@ class CliGovernor:
                 latency_ms = int((time.monotonic() - start) * 1000)
                 _t_parse = _pc()
                 in_tok, out_tok, cost = _extract_usage(stdout)
-                decision = _parse_envelope(stdout)
+                decision, confidence_present = _parse_envelope_with_meta(stdout)
                 _parse_ms = (_pc() - _t_parse) * 1000.0
                 self._publish_event(
                     model=chosen_model,
@@ -260,7 +389,7 @@ class CliGovernor:
                     sub_timings["cli_dispatch_ms"] = (
                         _pc() - _t_dispatch_start
                     ) * 1000.0
-                return decision
+                return decision, confidence_present
             except Exception as exc:
                 latency_ms = int((time.monotonic() - start) * 1000)
                 log.warning("cli_pool path failed (%s); degrading", exc)
@@ -287,7 +416,7 @@ class CliGovernor:
                     sub_timings["cli_dispatch_ms"] = (
                         _pc() - _t_dispatch_start
                     ) * 1000.0
-                return None
+                return None, False
 
         # v1.6 P1: spawn-path timing capture. cli_pool_acquire_ms is
         # constant 0.0 (no pool wait). cli_pool_send_ms wraps the
@@ -325,7 +454,7 @@ class CliGovernor:
                 sub_timings["cli_dispatch_ms"] = (
                     _pc() - _t_dispatch_start
                 ) * 1000.0
-            return None
+            return None, False
         except subprocess.TimeoutExpired:
             _send_ms = (_pc() - _t_send) * 1000.0
             latency_ms = int((time.monotonic() - start) * 1000)
@@ -347,7 +476,7 @@ class CliGovernor:
                 sub_timings["cli_dispatch_ms"] = (
                     _pc() - _t_dispatch_start
                 ) * 1000.0
-            return None
+            return None, False
         _send_ms = (_pc() - _t_send) * 1000.0
         latency_ms = int((time.monotonic() - start) * 1000)
 
@@ -383,7 +512,7 @@ class CliGovernor:
                 sub_timings["cli_dispatch_ms"] = (
                     _pc() - _t_dispatch_start
                 ) * 1000.0
-            return None
+            return None, False
 
         self._publish_event(
             model=chosen_model,
@@ -396,7 +525,7 @@ class CliGovernor:
             cost_usd=cost,
         )
 
-        decision = _parse_envelope(result.stdout or "")
+        decision, confidence_present = _parse_envelope_with_meta(result.stdout or "")
         _parse_ms = (_pc() - _t_parse) * 1000.0
         if sub_timings is not None:
             sub_timings["cli_pool_acquire_ms"] = 0.0
@@ -405,7 +534,7 @@ class CliGovernor:
             sub_timings["cli_dispatch_ms"] = (
                 _pc() - _t_dispatch_start
             ) * 1000.0
-        return decision
+        return decision, confidence_present
 
     def _publish_event(
         self,
@@ -426,13 +555,6 @@ class CliGovernor:
         and logged; they MUST NOT crash the subprocess wrapper (mirrors
         cli_client._emit's NFR-R6 try/except).
         """
-        if self._bus is None or not self._session_id:
-            return
-        try:
-            from stream_manager.message_bus import Message as _BusMessage
-        except Exception:
-            log.exception("cli_governance: failed to import message_bus.Message")
-            return
         metadata: dict[str, object] = {
             "model": model,
             "tier": tier,
@@ -443,18 +565,37 @@ class CliGovernor:
             "cost_usd": cost_usd,
             "trigger": trigger,
         }
+        self._publish_bus_message("governance_call", metadata)
+
+    def _publish_bus_message(
+        self, event_type: str, metadata: dict[str, object]
+    ) -> None:
+        """v1.7 P2: shared publish helper for governance_* envelopes.
+
+        Internal extraction of the bus.publish dance previously inlined in
+        _publish_event. Same NFR-R6 try/except discipline. Used by
+        _publish_event (governance_call) and by the v1.7 fallback path
+        (governance_fallback_routed, governance_envelope_missing_confidence).
+        """
+        if self._bus is None or not self._session_id:
+            return
+        try:
+            from stream_manager.message_bus import Message as _BusMessage
+        except Exception:
+            log.exception("cli_governance: failed to import message_bus.Message")
+            return
         try:
             self._bus.publish(
                 _BusMessage.new(
                     session_id=self._session_id,
-                    type="governance_call",
+                    type=event_type,
                     direction="internal",
                     content="",
                     metadata=metadata,
                 )
             )
         except Exception:
-            log.exception("cli_governance: failed to publish governance_call event")
+            log.exception("cli_governance: failed to publish %s event", event_type)
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -583,20 +724,33 @@ def _debug_dump(stage: str, payload: str) -> None:
 
 
 def _parse_envelope(stdout: str) -> CliDecision | None:
+    decision, _ = _parse_envelope_with_meta(stdout)
+    return decision
+
+
+def _parse_envelope_with_meta(stdout: str) -> tuple[CliDecision | None, bool]:
+    """Parse the CLI envelope and report whether `confidence` was present.
+
+    The second tuple element distinguishes "confidence missing from the
+    inner JSON" (treated as 1.0 by the v1.7 fallback gate, with a warning
+    envelope emitted) from "confidence explicitly 0.0" (treated as 0.0,
+    triggers fallback). On any structural failure (None decision), the
+    bool is False and callers must skip the fallback retry.
+    """
     try:
         envelope = json.loads(stdout)
     except json.JSONDecodeError:
         log.warning("cli governance: outer JSON parse failed; degrading")
         _debug_dump("outer", stdout)
-        return None
+        return None, False
 
     if envelope.get("is_error"):
         log.warning("cli governance: envelope is_error=true; degrading")
-        return None
+        return None, False
 
     inner = envelope.get("result")
     if inner is None:
-        return None
+        return None, False
     if isinstance(inner, dict):
         data = inner
     elif isinstance(inner, str) and inner:
@@ -604,17 +758,18 @@ def _parse_envelope(stdout: str) -> CliDecision | None:
         if data is None:
             log.warning("cli governance: inner JSON parse failed; degrading")
             _debug_dump("inner", inner)
-            return None
+            return None, False
     else:
-        return None
+        return None, False
 
     action = data.get("action")
     if action not in _VALID_ACTIONS:
         _debug_dump("action_enum", json.dumps(data))
-        return None
+        return None, False
+    confidence_present = "confidence" in data
     try:
         confidence = float(data.get("confidence", 0.0))
     except (TypeError, ValueError):
         confidence = 0.0
     reasoning = str(data.get("reasoning", ""))[:500]
-    return CliDecision(action=action, confidence=confidence, reasoning=reasoning)
+    return CliDecision(action=action, confidence=confidence, reasoning=reasoning), confidence_present

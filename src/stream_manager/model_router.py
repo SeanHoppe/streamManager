@@ -39,6 +39,11 @@ class ModelLayer(IntEnum):
 class RoutingDecision:
     layer: ModelLayer
     model_id: str | None  # None for L0/L1
+    # v1.7 P2 Haiku fastpath: when set, the engine retries the L4 call on
+    # `fallback_model_id` if the primary call's confidence drops below
+    # BRIDGE_L4_FALLBACK_CONFIDENCE (default 0.70). None for v1.6 callers
+    # and for the FR-OG-7 alignment sub-band (Sonnet-only, no fallback).
+    fallback_model_id: str | None = None
 
 
 L2_MODEL_DEFAULT = "claude-haiku-4-5-20251001"
@@ -63,11 +68,17 @@ def route(
     """Classify a governance decision into its routing layer.
 
     Priority order is non-negotiable:
-      1. L4 — alignment / ambiguous BLOCK / HITL synthesis (Sonnet)
+      1. L4 — alignment / ambiguous BLOCK / HITL synthesis (Sonnet or Haiku-fastpath)
       2. L0 — precheck or agent_profile source (no LLM)
       3. L1 — graph match >= 0.85 (no LLM)
       4. L2 — graph match 0.60-0.84 (Haiku)
       5. L3 — fallback / pattern inference (Haiku)
+
+    L4 sub-band (v1.7 P2 Haiku fastpath):
+      - requires_alignment      → Sonnet only, no fallback (FR-OG-7 protected)
+      - is_ambiguous_block      → Haiku-first with Sonnet fallback
+      - is_hitl_synthesis       → Haiku-first with Sonnet fallback
+      Priority within the sub-band: requires_alignment beats the other two.
 
     Args:
         source: one of "precheck" | "graph" | "cli" | "default" |
@@ -78,8 +89,17 @@ def route(
         is_hitl_synthesis: True when generating HITL note context.
     """
     # L4: alignment / ambiguous block / HITL synthesis
-    if requires_alignment or is_ambiguous_block or is_hitl_synthesis:
+    if requires_alignment:
+        # FR-OG-7 protected — Sonnet only, never fall back to Haiku.
         return RoutingDecision(ModelLayer.L4, get_l4_model())
+    if is_ambiguous_block or is_hitl_synthesis:
+        # Haiku fastpath with Sonnet fallback. Engine retries on
+        # fallback_model_id when primary confidence < BRIDGE_L4_FALLBACK_CONFIDENCE.
+        return RoutingDecision(
+            ModelLayer.L4,
+            get_l2_model(),
+            fallback_model_id=get_l4_model(),
+        )
 
     # L0: precheck or agent_profile rule (no LLM needed)
     if source in ("precheck", "agent_profile") or source.startswith("agent_profile:"):

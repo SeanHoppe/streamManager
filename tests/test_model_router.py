@@ -66,12 +66,15 @@ def test_route_alignment_returns_l4_sonnet():
     assert r.model_id == L4_MODEL_DEFAULT
 
 
-def test_route_ambiguous_block_returns_l4_sonnet():
-    # Ambiguous BLOCK trumps the L1 graph classification: the alignment /
-    # ambiguity branch wins first per the priority order in route().
+def test_route_ambiguous_block_returns_l4_haiku_with_sonnet_fallback():
+    # v1.7 P2: ambiguous BLOCK rides the Haiku fastpath with a Sonnet
+    # fallback. Layer is still L4; primary model is Haiku; fallback_model_id
+    # is Sonnet. The L4 sub-band wins priority over the L1 graph match
+    # at confidence 0.50, same as v1.6.
     r = route("graph", 0.50, is_ambiguous_block=True)
     assert r.layer == ModelLayer.L4
-    assert r.model_id == L4_MODEL_DEFAULT
+    assert r.model_id == L2_MODEL_DEFAULT
+    assert r.fallback_model_id == L4_MODEL_DEFAULT
 
 
 # ── 7: env var overrides ──────────────────────────────────────────────
