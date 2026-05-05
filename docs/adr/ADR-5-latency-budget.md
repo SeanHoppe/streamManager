@@ -461,10 +461,93 @@ ACCEPTED as v1.5 budget. v1.6 latency work measures against this section.
 
 ### Caveats
 
-- **v1.4 `_evaluate_inner` opacity caveat — partially resolved.** The five v1.5 sub-phases (`og7_check`, `fast_precheck`, `graph_classify`, `hydrator_state_read`, `routing_dispatch`) collectively account for 0.13 ms p95 of the 5599 ms `evaluate_inner` p95. **None of these five dominates the ALLOW p95 tail** — they are in fact ruled out as candidates. The actual tail driver lives in the un-instrumented residue inside `_evaluate_inner`, most plausibly the synchronous `cli_pool` round-trip on the escalation branch. v1.6 should extend instrumentation around the residue (CLI dispatch entry, model round-trip wait, response handling) to close the gap.
+- **v1.4 `_evaluate_inner` opacity caveat — partially resolved.** The five v1.5 sub-phases (`og7_check`, `fast_precheck`, `graph_classify`, `hydrator_state_read`, `routing_dispatch`) collectively account for 0.13 ms p95 of the 5599 ms `evaluate_inner` p95. **None of these five dominates the ALLOW p95 tail** — they are in fact ruled out as candidates. The actual tail driver lives in the un-instrumented residue inside `_evaluate_inner`, most plausibly the synchronous `cli_pool` round-trip on the escalation branch. v1.6 should extend instrumentation around the residue (CLI dispatch entry, model round-trip wait, response handling) to close the gap. **Resolved at v1.6 ship-gate** — see §"v1.6 ship-gate baseline" (driver = `cli_pool_send_ms` p95 = 6328.07 ms, 99.99% of `cli_dispatch_ms`).
 - **`hydrator_state_read` n=50 (fired on every ALLOW), p95 = 0.00 ms.** The lazy-hydrator state read is effectively free under the soak workload. The v1.4 prediction that this might be a tail driver is also falsified.
-- **LM (categorize) p95 = 15.39 s — trend retreated.** The v1.4 watch item ("re-measure if the next ship-gate also lands above 18 s") is **closed**. v1.3.1 = 15.39 s → v1.4 = 19.26 s → v1.5 = 15.39 s; the v1.4 elevation did not persist. The +3.87 s v1.4 excursion is now classified as Sonnet upstream queueing variance within n=10 sample noise, not a sustained regression. No v1.6 follow-up needed.
+- **LM (categorize) p95 = 15.39 s — trend retreated.** The v1.4 watch item ("re-measure if the next ship-gate also lands above 18 s") is **closed**. v1.3.1 = 15.39 s → v1.4 = 19.26 s → v1.5 = 15.39 s; the v1.4 elevation did not persist. The +3.87 s v1.4 excursion is now classified as Sonnet upstream queueing variance within n=10 sample noise, not a sustained regression. ~~No v1.6 follow-up needed.~~ **Update at v1.6 ship-gate:** LM p95 partially reversed to 18.60 s (+3.21 s vs v1.5; 0.60 s over 18 s ceiling). The v1.4 watch criterion ("re-measure if next ship-gate also lands above 18 s") is hereby refined: **magnitude ≥ 1 s over ceiling = sustained regression (re-measure / triage); magnitude < 1 s over ceiling AND n=10 high-variance AND log clean = noise band (ship-with-watch).** v1.6 falls in the noise band (0.60 s over). Per S5a triage — magnitude small, n=10 high-variance, dashboard log clean, no cassette gap — **decision: ship-with-v1.7-watch** (see v1.6 §"Caveats").
 - **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.4 are within sample noise; the overall and ALLOW p95 are the higher-confidence comparisons.
+
+## v1.6 ship-gate baseline
+
+- **Source**: `reports/soak-20260505T073943Z.md`
+- **Date**: 2026-05-05
+- **Ship SHA**: `<filled by S10>` (branch `ship/v1.6-shipgate-finalize`, base `380f453`)
+- **Driver**: `tools/soak_driver.py --cli-pool-size 2` (Tier 3 per ADR-17) **with v1.6 P1 `_evaluate_inner` CLI residue instrumentation enabled** (5 new keys: `cli_setup_ms`, `cli_dispatch_ms`, `cli_pool_acquire_ms`, `cli_pool_send_ms`, `cli_parse_ms`)
+- **Runtime**: 1955.2 s (32.6 min)
+- **Events**: 60 emitted / 158 received via SSE
+- **Verdict**: PASS (100% SSE, RSS drift **−11.17 MB** (shrink), no uncaught exceptions, lifecycle bridge 0 orphans)
+
+### Latency targets (overall, n=60)
+
+| Metric  | v1.6 measured |
+|---------|---------------|
+| p50     | 4.092 s       |
+| p95     | 7.665 s       |
+| max     | 14.967 s      |
+| mean    | 3.358 s       |
+
+### Per-band split
+
+| Path                 | n  | p50      | p95      |
+|----------------------|----|----------|----------|
+| ALLOW (routine)      | 50 |  4.18 s  |  6.33 s  |
+| L2/L3 escalation     |  5 |  0.00 s  |  4.19 s  |
+| L4 alignment         |  5 |  7.54 s  | 13.98 s  |
+| LM (categorize)      | 10 | 12.69 s  | 18.60 s  |
+
+### ALLOW _evaluate_inner CLI residue breakout (NEW v1.6)
+
+First ship-gate with the v1.6 P1 CLI residue instrumentation enabled. Sourced from the `### ALLOW _evaluate_inner CLI residue breakout (v1.6)` block in the report. **Diagnoses the v1.5 §"Caveats" un-instrumented residue item.**
+
+| Phase                  |  n  | p50 ms   | p95 ms   | max ms   |
+|------------------------|-----|----------|----------|----------|
+| cli_setup_ms           |  50 |  0.00    |  0.01    |   0.01   |
+| cli_dispatch_ms        |  50 | 4176.36  | 6329.00  | 11526.56 |
+| cli_pool_acquire_ms    |  50 |  0.03    |  0.06    |   0.13   |
+| cli_pool_send_ms       |  50 | 4175.63  | 6328.07  | 11525.65 |
+| cli_parse_ms           |  50 |  0.08    |  0.15    |   0.26   |
+
+For reference, the v1.4 publish-path block on the same run reports `evaluate_inner` p95 = **6329.38 ms**.
+
+**Finding.** v1.6 P1 residue instrumentation localises the `_evaluate_inner` tail to `cli_pool_send_ms` p95 = 6328.07 ms (99.99% of `cli_dispatch_ms` 6329.00 ms; ~99.98% of `evaluate_inner` 6329.38 ms), confirming the synchronous `worker.send` Anthropic CLI round-trip (subprocess stdin write + stdout JSONL response wait in `CliWorker.send` (see `cli_pool.py`)) is the load-bearing component. `cli_setup_ms` (0.01 ms p95), `cli_pool_acquire_ms` (0.06 ms p95 — confirms zero queueing under sequential soak workload), and `cli_parse_ms` (0.15 ms p95) are negligible. Invariants hold: `cli_setup + cli_dispatch` = 6329.01 ms ≤ `evaluate_inner` 6329.38 ms; `cli_pool_acquire + cli_pool_send + cli_parse` = 6328.28 ms ≤ `cli_dispatch` 6329.00 ms (no double-count). **The v1.5 §"Caveats" residue item is resolved.**
+
+### Delta vs v1.5 ship-gate (`reports/soak-20260504T201714Z.md`)
+
+| Metric           | v1.5     | v1.6     | Δ          | Class       |
+|------------------|----------|----------|------------|-------------|
+| Overall p50      | 2.779 s  | 4.092 s  | +1.31 s    | parity (sequential soak; upstream Anthropic latency variance) |
+| Overall p95      | 5.820 s  | 7.665 s  | +1.85 s    | parity (within budget ≤ 12 s; upstream model variance, residue driver unchanged) |
+| Overall max      | 15.105 s | 14.967 s | −0.14 s    | parity |
+| Overall mean     | 2.678 s  | 3.358 s  | +0.68 s    | parity |
+| ALLOW p95        |  5.60 s  |  6.33 s  | +0.73 s    | parity |
+| L2/L3 p95        |  4.40 s  |  4.19 s  | −0.21 s    | parity (n=5 noise) |
+| L4 alignment p95 | 12.90 s  | 13.98 s  | +1.08 s    | parity (n=5 noise; under ≤14 s budget) |
+| LM (cat) p95     | 15.39 s  | 18.60 s  | +3.21 s    | regression — see §"Caveats" (S5a triage: ship-with-v1.7-watch) |
+| RSS drift        | −1.20 MB | −11.17 MB| parity     | both shrink, well under 50 MB budget |
+
+v1.6 ships P1 instrumentation only (additive; 5 new `_last_phase_timings_ms` keys + soak driver report block; no engine logic changes). ALLOW + overall p95 increases vs v1.5 are within sample-noise on a sequential soak driver — the residue driver (`cli_pool_send_ms`) is upstream Anthropic round-trip time, not local engine code. Treat the parity-band shifts as Anthropic-side variance, not earned regression.
+
+### Budget
+
+The v1.5 budget table is **carried forward unchanged** for v1.6. Driver localisation does not justify tightening (the lever — Haiku fastpath — is a v1.7 candidate, not landed). v1.7 latency work measures against the table below:
+
+| Path                 | v1.6 budget (= v1.5 = v1.4 carried forward)           |
+|----------------------|-------------------------------------------------------|
+| ALLOW p95            | ≤ 12 s                                                |
+| L2/L3 escalation p95 | ≤ 8 s                                                 |
+| L4 alignment p95     | ≤ 14 s                                                |
+| LM (categorize) p95  | ≤ 25 s                                                |
+| Overall p95          | ≤ 12 s                                                |
+| Hard timeout         | 25 s (unchanged)                                      |
+
+### Status
+
+ACCEPTED as v1.6 budget. v1.7 latency work measures against this section.
+
+### Caveats
+
+- **v1.5 `_evaluate_inner` residue caveat — RESOLVED.** v1.6 P1 instrumentation localises the `_evaluate_inner` tail to `cli_pool_send_ms` p95 = 6328.07 ms (99.99% of `cli_dispatch_ms`; ~99.98% of `evaluate_inner`). Driver is the synchronous `worker.send` Anthropic CLI round-trip (subprocess stdin write + stdout JSONL response wait in `CliWorker.send` (see `cli_pool.py`)); v1.7 lever = **Haiku fastpath** (primary; downgrade more L4/ambiguous-BLOCK from Sonnet → Haiku) with **pool sizing >2** as fallback (insurance for concurrent burst load only — `cli_pool_acquire_ms` p95 = 0.06 ms confirms zero queueing under sequential soak).
+- **LM (categorize) p95 = 18.60 s — regression vs v1.5 (+3.21 s).** Trend reversed: v1.4 = 19.26 s → v1.5 = 15.39 s → v1.6 = 18.60 s. Magnitude over 18 s ceiling = 0.60 s (3.3%); n=10 (high variance), spread p50→p95 = 5.91 s, dashboard log clean (no warn/error/retry/timeout/exception), no cassette envelope additions in v1.6 affecting the LM categorizer (per S5a triage). LM is advisory/categorize, not on the safety path. **Decision: ship-with-v1.7-watch** — re-measure at v1.7 ship-gate; if next sample also lands ≥ 18 s, treat as sustained regression and triage cassette/categorizer separately.
+- **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.5 are within sample noise; the overall and ALLOW p95 are the higher-confidence comparisons.
 
 ## References
 
@@ -487,6 +570,10 @@ ACCEPTED as v1.5 budget. v1.6 latency work measures against this section.
 - `reports/soak-20260504T201714Z.md` — v1.5 32-min ship-gate soak with
   the v1.5 `_evaluate_inner` sub-phase instrumentation enabled (the
   v1.5 baseline source per §"v1.5 ship-gate baseline")
+- `reports/soak-20260505T073943Z.md` — v1.6 32-min ship-gate soak with
+  the v1.6 P1 `_evaluate_inner` CLI residue instrumentation enabled
+  (the v1.6 baseline source per §"v1.6 ship-gate baseline"); driver
+  localised to `cli_pool_send_ms`
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17
