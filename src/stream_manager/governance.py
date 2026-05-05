@@ -15,7 +15,7 @@ from stream_manager.agent_registry import AgentProfile, AgentRegistry
 from stream_manager.cli_governance import CliGovernor
 from stream_manager.cli_governance import is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
-from stream_manager.hitl import HitlQueue
+from stream_manager.hitl import PAUSE_PATTERNS, HitlQueue
 from stream_manager.learn_categorizer import BiasHint, bias_for
 from stream_manager.maturity_reader import MaturityReader
 from stream_manager.messages import Message
@@ -152,6 +152,66 @@ def _looks_alignment_action(content: str) -> bool:
         return False
     lowered = content.lower()
     return any(kw in lowered for kw in _ALIGNMENT_KEYWORDS)
+
+
+# v1.8 P1: ambiguous-BLOCK heuristic — destructive intent that did NOT
+# trigger the strict `project_context._DESTRUCTIVE` patterns at fast_precheck
+# (which require, e.g., `rm -rf /` with anchored root, `git push --force`
+# to a *protected* branch, or `DROP DATABASE/TABLE`). When precheck misses
+# but content carries destructive signal, the pre-routing site sets
+# `is_ambiguous_block=True` so `model_router.route()` places the call on
+# the L4 Haiku-fastpath sub-band: Haiku primary with Sonnet fallback on
+# low-confidence retry. Single source of truth — referenced once at the
+# pre-routing call site in `_evaluate_inner_core`.
+_AMBIGUOUS_BLOCK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\brm\s+-rf\b"),
+    re.compile(r"\bgit\s+push\s+(?:--force|-f)\b"),
+    re.compile(r"\bDROP\s+(?:DATABASE|TABLE|SCHEMA)\b", re.IGNORECASE),
+    re.compile(r"\bTRUNCATE\s+(?:TABLE\s+)?\w+", re.IGNORECASE),
+    re.compile(r"\bDELETE\s+FROM\s+\w+", re.IGNORECASE),
+    re.compile(r"\bchmod\s+777\b"),
+    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"),
+    re.compile(r"\bshutdown\s+(?:-[hr]\b|now\b)", re.IGNORECASE),
+    re.compile(r"\bmkfs(?:\.\w+)?\b"),
+    re.compile(r"\bdd\s+if=.*\bof="),
+)
+
+
+def _looks_ambiguous_block(content: str) -> bool:
+    """v1.8 P1: True when content carries destructive-action signal that
+    did not strict-match the precheck patterns. Activates the L4
+    Haiku-fastpath sub-band so escalation cost stays bounded.
+    """
+    if not content:
+        return False
+    for pat in _AMBIGUOUS_BLOCK_PATTERNS:
+        if pat.search(content):
+            return True
+    return False
+
+
+def _looks_hitl_synthesis(
+    content: str,
+    hitl: HitlQueue | None,
+    desktop_pause_active: bool,
+) -> bool:
+    """v1.8 P1: pre-routing proxy for HITL synthesis context.
+
+    Returns True when HITL is wired AND a pre-decision signal indicates
+    `HitlQueue.classify_trigger` would fire DESKTOP_PAUSE: either the
+    engine has been signaled by a Desktop end_turn pause, or content
+    matches the same `PAUSE_PATTERNS` regex used by classify_trigger.
+
+    NEW_PATTERN and LOW_CONFIDENCE triggers require a completed decision
+    (source / confidence) and are intentionally not reflected here.
+    """
+    if hitl is None:
+        return False
+    if desktop_pause_active:
+        return True
+    if not content:
+        return False
+    return bool(PAUSE_PATTERNS.search(content))
 
 
 _ACTION_RANK: dict[str, int] = {
@@ -963,19 +1023,23 @@ class GovernanceEngine:
             self.maturity is not None
             and _looks_alignment_action(msg.content)
         )
-        # v1.7 P2: pre_routing now carries an optional fallback_model_id
-        # (None for FR-OG-7 alignment, Sonnet when the L4 sub-band picks
-        # the Haiku fastpath). is_ambiguous_block / is_hitl_synthesis are
-        # currently always False at the pre-CLI call site — content-based
-        # detection wires those in a follow-up cycle. Until then the
-        # fastpath sub-band is unreachable in production code paths and
-        # fallback_model_id is None.
+        # v1.7 P2: pre_routing carries an optional fallback_model_id —
+        # None for FR-OG-7 alignment (Sonnet only) and for the v1.7 default
+        # state, Sonnet when the L4 sub-band picks the Haiku fastpath.
+        # v1.8 P1: is_ambiguous_block / is_hitl_synthesis are now computed
+        # from content + HITL state. Routing precedence (alignment beats
+        # the sub-band) is enforced inside `model_router.route()` — flags
+        # are passed raw, no call-site precedence check.
+        pre_is_ambiguous_block = _looks_ambiguous_block(msg.content)
+        pre_is_hitl_synthesis = _looks_hitl_synthesis(
+            msg.content, self.hitl, self._desktop_pause_active
+        )
         pre_routing = route(
             source="cli",
             confidence=0.0,
             requires_alignment=pre_requires_alignment,
-            is_ambiguous_block=False,
-            is_hitl_synthesis=False,
+            is_ambiguous_block=pre_is_ambiguous_block,
+            is_hitl_synthesis=pre_is_hitl_synthesis,
         )
         cli_model_id = pre_routing.model_id or get_l2_model()
         cli_decision = self._maybe_cli_evaluate(
