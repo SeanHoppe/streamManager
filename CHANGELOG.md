@@ -6,6 +6,80 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-05-05
+
+Tagged ship of the v1.7 cycle. See `docs/v1.8-backlog.md` for the seed
+list and `docs/adr/ADR-5-latency-budget.md` §"v1.7 ship-gate baseline"
+for the P3 numbers.
+
+Highlights:
+
+- **L4 alignment-eval harness** ([PR #89](https://github.com/SeanHoppe/streamManager/pull/89), P1) — additive `tools/alignment_eval.py`
+  driver + 32-row L4 golden set (`tests/golden/l4_alignment.jsonl`)
+  drives `CliGovernor.evaluate` against control (Sonnet) and candidate
+  (Haiku) models with a 3-runs-per-row unanimous-stability gate. Acts
+  as the v1.7 P2 ship-blocker. P1 v2 baseline:
+  `reports/alignment-eval-20260505T113007Z.md` (sonnet 0.9545; 1 FR-OG-7
+  regression on `frog7-valid-transports-04`). Calibration narrative —
+  v1 baseline at 50% control revealed prescriptive miscalibration;
+  recalibration to Sonnet's empirical majority on borderline rows lifted
+  control to 0.9545 with the unanimous-stability rule classifying drift
+  honestly.
+- **Haiku fastpath router with confidence-gated Sonnet fallback**
+  ([PR #90](https://github.com/SeanHoppe/streamManager/pull/90), P2) — additive `RoutingDecision.fallback_model_id`
+  field + L4 sub-band: `requires_alignment` stays Sonnet-only (FR-OG-7
+  protected); `is_ambiguous_block` / `is_hitl_synthesis` route Haiku-first
+  with Sonnet fallback when primary confidence < `BRIDGE_L4_FALLBACK_CONFIDENCE`
+  (default 0.70). New `governance_fallback_routed` and
+  `governance_envelope_missing_confidence` envelopes wired through a
+  generalized `_publish_bus_message` helper. New `cli_dispatch_fallback_ms`
+  key in `_last_phase_timings_ms` + 6th row in the v1.6 CLI residue
+  block (pre-v1.7 streams unchanged). 27 new tests cover the surface
+  deterministically.
+- **v1.7 ship-gate** (this PR, P3) — 31.8-min Tier 3 soak with
+  `--cli-pool-size 2` and the v1.7 router config enabled. Verdict PASS
+  with overall p95 9.277 s, ALLOW p95 5.13 s, L4 alignment p95 13.41 s.
+  Alignment-eval `--ci-gate` exit 0 (sonnet 0.9583, 0 FR-OG-7 regressions).
+- **Lever wired but DORMANT — falsification recorded.** The L4 sub-band
+  fastpath ships behind a content-detection seam that is not yet wired
+  in production code paths: `governance._evaluate_inner_core` pre-routing
+  sets `is_ambiguous_block=False` and `is_hitl_synthesis=False`
+  unconditionally for now. Soak result: 0 fallback fires across 60 events;
+  `cli_dispatch_fallback_ms` p95 = 0.00 ms. `cli_pool_send_ms` p95 dropped
+  19.0% (6328 → 5129 ms) and ALLOW p95 dropped 1.20 s, but per the P3
+  falsification rule these are recorded as upstream Anthropic round-trip
+  variance, NOT lever effect (the lever code never executed). Content-based
+  detection of the two flags is a v1.8 backlog item; lever effect cannot
+  be measured until that lands.
+- **LM (categorize) watch — RESOLVED.** v1.7 LM p95 = **11.95 s** (n=10)
+  is well below the 18 s ceiling. Trend: v1.4 = 19.26 s → v1.5 = 15.39 s
+  → v1.6 = 18.60 s → **v1.7 = 11.95 s**. Watch closes per the v1.7
+  backlog rubric. Spread p50→p95 = 2.82 s (v1.6 was 5.91 s) — variance
+  also retreated.
+- **ADR-5 §"v1.7 ship-gate baseline"** added; budget table carried
+  forward unchanged from v1.6. v1.6 §Caveats LM bullet annotated with
+  v1.7 disposition (RESOLVED). v1.6 §Caveats lever bullet annotated with
+  v1.7 disposition (DORMANT, see falsification check). Status line
+  bumped (v1.6 + v1.7 baselines added).
+
+### Notes
+
+- v1.7 verdict path is **byte-identical** for v1.6 callers (every
+  production caller post-merge passes `fallback_model_id=None`):
+  550 fast-tier tests passing.
+- `--cli-pool-size 2` remains the ship-gate default per
+  `feedback_soak_cli_pool_flag.md`.
+- Cassette format (`tools/cassette_record.py`) captures decision-output
+  records, not bus events, so the new bus envelopes are out of the
+  cassette schema by design. Test stubs replace cassette evidence for
+  the dormant fallback surface (7 deterministic scenarios in
+  `tests/test_governance_fallback_routing.py`).
+- Lifecycle bridge orphan-free positively asserted at ship-gate again
+  (0 entries, 0 orphans).
+- v1.7 P0 cycle frame ([PR #88](https://github.com/SeanHoppe/streamManager/pull/88)) seeded the four orchestration prompts
+  + task plan + v1.8 backlog (then empty); P3 finalize populates v1.8
+  backlog with the content-detection wiring item.
+
 ## [1.6.0] — 2026-05-05
 
 Tagged ship of the v1.6 cycle. See `docs/v1.7-backlog.md` for the seed
