@@ -470,7 +470,7 @@ ACCEPTED as v1.5 budget. v1.6 latency work measures against this section.
 
 - **Source**: `reports/soak-20260505T073943Z.md`
 - **Date**: 2026-05-05
-- **Ship SHA**: `<filled by S10>` (branch `ship/v1.6-shipgate-finalize`, base `380f453`)
+- **Ship SHA**: `6866dad` (PR #87 merge into main; branch `ship/v1.6-shipgate-finalize`, base `380f453`; tagged `v1.6.0`)
 - **Driver**: `tools/soak_driver.py --cli-pool-size 2` (Tier 3 per ADR-17) **with v1.6 P1 `_evaluate_inner` CLI residue instrumentation enabled** (5 new keys: `cli_setup_ms`, `cli_dispatch_ms`, `cli_pool_acquire_ms`, `cli_pool_send_ms`, `cli_parse_ms`)
 - **Runtime**: 1955.2 s (32.6 min)
 - **Events**: 60 emitted / 158 received via SSE
