@@ -510,9 +510,12 @@ class GovernanceEngine:
 
     @staticmethod
     def _zero_cli_residue_keys(sub: dict[str, float]) -> None:
-        """v1.6 P1: pre-populate the five CLI residue keys with 0.0 on
-        non-CLI branches (FR-OG-7 hit, FR-AR-6 blocked-op, precheck-hit,
+        """v1.6 P1: pre-populate the CLI residue keys with 0.0 on non-CLI
+        branches (FR-OG-7 hit, FR-AR-6 blocked-op, precheck-hit,
         graph-high-confidence-hit, default ALLOW with no CLI).
+
+        v1.7 P2 adds `cli_dispatch_fallback_ms` (Haiku→Sonnet fallback
+        wall-clock; 0.0 unless the L4 sub-band fires the retry).
 
         Soak rows must be dense across all branches so percentile math
         is honest about the precheck-hit ratio (ADR-5 v1.5 §"Caveats").
@@ -524,6 +527,7 @@ class GovernanceEngine:
         sub.setdefault("cli_pool_acquire_ms", 0.0)
         sub.setdefault("cli_pool_send_ms", 0.0)
         sub.setdefault("cli_parse_ms", 0.0)
+        sub.setdefault("cli_dispatch_fallback_ms", 0.0)
 
     def _apply_profile_constraints(
         self,
@@ -959,13 +963,26 @@ class GovernanceEngine:
             self.maturity is not None
             and _looks_alignment_action(msg.content)
         )
+        # v1.7 P2: pre_routing now carries an optional fallback_model_id
+        # (None for FR-OG-7 alignment, Sonnet when the L4 sub-band picks
+        # the Haiku fastpath). is_ambiguous_block / is_hitl_synthesis are
+        # currently always False at the pre-CLI call site — content-based
+        # detection wires those in a follow-up cycle. Until then the
+        # fastpath sub-band is unreachable in production code paths and
+        # fallback_model_id is None.
         pre_routing = route(
             source="cli",
             confidence=0.0,
             requires_alignment=pre_requires_alignment,
+            is_ambiguous_block=False,
+            is_hitl_synthesis=False,
         )
         cli_model_id = pre_routing.model_id or get_l2_model()
-        cli_decision = self._maybe_cli_evaluate(cli_content, cli_model_id)
+        cli_decision = self._maybe_cli_evaluate(
+            cli_content,
+            cli_model_id,
+            fallback_model_id=pre_routing.fallback_model_id,
+        )
         if cli_decision is not None:
             decision = self._apply_mode(
                 GovDecision(
@@ -996,14 +1013,20 @@ class GovernanceEngine:
             source="default",
         )
 
-    def _maybe_cli_evaluate(self, content: str, model_id: str | None = None):
+    def _maybe_cli_evaluate(
+        self,
+        content: str,
+        model_id: str | None = None,
+        fallback_model_id: str | None = None,
+    ):
         # v1.6 P1: residue-level wall-clock instrumentation. cli_setup_ms
         # spans entry → just before CliGovernor.evaluate(...) (covers
         # lazy CliGovernor() construction and _system_prompt() cache
         # build on first call). The four CLI-side keys
         # (cli_dispatch_ms / cli_pool_acquire_ms / cli_pool_send_ms /
         # cli_parse_ms) are populated by CliGovernor.evaluate when we
-        # thread `sub_timings=sub` through.
+        # thread `sub_timings=sub` through. v1.7 P2 adds
+        # `cli_dispatch_fallback_ms` populated by the same path.
         from time import perf_counter as _pc
         _t_setup_start = _pc()
         # `_sub_timings_in_flight` is set by _evaluate_inner before this
@@ -1015,17 +1038,18 @@ class GovernanceEngine:
             sub = {}
         if not _cli_enabled():
             # Per phase-1 prompt: branches that return early WITHOUT
-            # calling the CLI MUST set all five new keys to 0.0 on
-            # `sub`. The few microseconds of `_cli_enabled()` overhead
-            # are intentionally NOT recorded — they would muddy the
-            # precheck-hit-ratio percentile math the soak block relies
-            # on. The non-zero `cli_setup_ms` only fires when the
-            # branch actually traverses the CLI dispatch.
+            # calling the CLI MUST set all keys to 0.0 on `sub`. The few
+            # microseconds of `_cli_enabled()` overhead are intentionally
+            # NOT recorded — they would muddy the precheck-hit-ratio
+            # percentile math the soak block relies on. The non-zero
+            # `cli_setup_ms` only fires when the branch actually traverses
+            # the CLI dispatch.
             sub["cli_setup_ms"] = 0.0
             sub.setdefault("cli_dispatch_ms", 0.0)
             sub.setdefault("cli_pool_acquire_ms", 0.0)
             sub.setdefault("cli_pool_send_ms", 0.0)
             sub.setdefault("cli_parse_ms", 0.0)
+            sub.setdefault("cli_dispatch_fallback_ms", 0.0)
             return None
         if self._cli_governor is None:
             # Phase 7: thread bus + session_id through so CliGovernor can
@@ -1045,7 +1069,12 @@ class GovernanceEngine:
         # callers that haven't been updated.
         chosen = model_id if model_id is not None else get_l2_model()
         sub["cli_setup_ms"] = (_pc() - _t_setup_start) * 1000.0
-        return self._cli_governor.evaluate(content, model_id=chosen, sub_timings=sub)
+        return self._cli_governor.evaluate(
+            content,
+            model_id=chosen,
+            sub_timings=sub,
+            fallback_model_id=fallback_model_id,
+        )
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:
         if self.mode == Mode.OBSERVE:
