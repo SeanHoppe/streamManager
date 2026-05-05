@@ -51,7 +51,8 @@ v1.6 ship-gate localised the `_evaluate_inner` p95 tail to `cli_pool_send_ms` p9
 
 2. **`src/stream_manager/cli_governance.py`** — additive extension of `CliGovernor.evaluate`:
 
-   - Accept a new optional kwarg `fallback_model_id: str | None = None`. When non-None AND the primary call's verdict confidence is below an env-configurable floor `BRIDGE_L4_FALLBACK_CONFIDENCE` (default `0.70`), retry once with `model_id=fallback_model_id`. Use the retry's verdict as the final answer.
+   - Accept a new optional kwarg `fallback_model_id: str | None = None`. When non-None AND the primary call's verdict confidence is strictly below an env-configurable floor `BRIDGE_L4_FALLBACK_CONFIDENCE` (default `0.70`), retry once with `model_id=fallback_model_id`. Use the retry's verdict as the final answer.
+   - **Confidence-field contract:** the floor reads `confidence` from the parsed CLI envelope (the same field already populated by `_parse_envelope` and surfaced on the verdict object — the v1.6 `ConvergenceMonitor` and bus emission paths consume it today). If the parsed envelope is missing `confidence` (malformed CLI response), treat as `1.0` (no fallback) AND emit a `governance_envelope_missing_confidence` warning event. Do NOT add a new confidence field to the envelope schema.
    - Populate `cli_dispatch_fallback_ms` into the caller-provided `sub_timings` dict (additive new key). Value: `0.0` when no fallback fires; wall-clock duration of the retry call when fallback fires.
    - Add a guard: if the primary call returns confidence ≥ floor OR if `fallback_model_id is None`, no retry — `cli_dispatch_fallback_ms = 0.0`.
    - Fallback path emits a new bus envelope `governance_fallback_routed` with payload `{primary_model, fallback_model, primary_confidence, fallback_confidence, fallback_ms}`. Use the existing `_publish_event` machinery; do NOT add new publish helpers.
@@ -74,11 +75,12 @@ v1.6 ship-gate localised the `_evaluate_inner` p95 tail to `cli_pool_send_ms` p9
 
 6. **Tests**:
 
-   - `tests/test_governance_fallback_routing.py`:
-     - (a) ambiguous-BLOCK row with primary confidence ≥ floor stays on Haiku, no fallback fire, `cli_dispatch_fallback_ms == 0.0`, no `governance_fallback_routed` envelope emitted.
-     - (b) ambiguous-BLOCK row with primary confidence < floor triggers Sonnet retry, `cli_dispatch_fallback_ms > 0`, exactly one `governance_fallback_routed` envelope.
+   - `tests/test_governance_fallback_routing.py` — **must NOT depend on real LLM responses.** Stub `CliGovernor.evaluate`'s primary-call verdict (or its envelope-parse output) so the `confidence` field is deterministic per case. LLM TTFT + sampling non-determinism would otherwise flake the assertions.
+     - (a) ambiguous-BLOCK row with stubbed primary confidence ≥ floor stays on Haiku, no fallback fire, `cli_dispatch_fallback_ms == 0.0`, no `governance_fallback_routed` envelope emitted.
+     - (b) ambiguous-BLOCK row with stubbed primary confidence < floor triggers Sonnet retry, `cli_dispatch_fallback_ms > 0`, exactly one `governance_fallback_routed` envelope.
      - (c) FR-OG-7 alignment row (`requires_alignment=True`) NEVER sees the fallback path. `fallback_model_id is None` on the routing decision; `cli_dispatch_fallback_ms == 0.0`; primary call uses Sonnet end-to-end.
-     - (d) Verdict equality: ambiguous-BLOCK on Haiku-only (no fallback fire) matches a v1.6 baseline run on Sonnet for the same prompt within the alignment-eval ≥ 95% threshold (use the P1 golden-set fixtures).
+     - (d) Stubbed envelope missing `confidence` field → no fallback fire (treat as `1.0`); `governance_envelope_missing_confidence` warning emitted exactly once.
+     - (e) Verdict equality (real-CLI integration test, marked `@pytest.mark.alignment_eval`): ambiguous-BLOCK on Haiku-only (no fallback fire) matches a v1.6 baseline run on Sonnet for the same prompt within the alignment-eval ≥ 95% threshold (use the P1 golden-set fixtures).
    - `tests/test_model_router_l4_subband.py`:
      - Asserts the L4 sub-band priority: `requires_alignment=True` always returns Sonnet with no fallback; `is_ambiguous_block=True` (alone) returns Haiku with Sonnet fallback; `is_hitl_synthesis=True` (alone) returns Haiku with Sonnet fallback; the priority order alignment > L0 > L1 > L2 > L3 is unchanged.
    - `tests/test_soak_driver_v17_residue_block.py`:

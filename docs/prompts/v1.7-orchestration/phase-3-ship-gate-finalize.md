@@ -26,7 +26,7 @@ Per memory `feedback_subagent_long_task_abandonment.md`: the 32-min soak MUST ru
 
 ## Task brief
 
-Finalize v1.7. Five deliverables.
+Finalize v1.7. Seven deliverables.
 
 ### 1. Ship-gate soak
 
@@ -75,7 +75,7 @@ Document in §"Caveats". Data-driven only — do NOT predict:
 
 - **`cli_pool_send_ms` p95 trend.** Did it drop vs v1.6 (6328.07 ms)? Compute Δ and classify (improvement / parity / regression). Note that more L4 envelopes riding Haiku is the intended lever — the metric should improve only if Haiku TTFT < Sonnet TTFT and fallback fire rate is low.
 - **L4 alignment p95 trend.** Did the L4 band p95 drop vs v1.6 (13.98 s)? Report Δ. Caveat n=5 noise.
-- **Fallback fire rate.** What share of L4 ambiguous-BLOCK / HITL synthesis rows triggered the Sonnet retry? Report n + percent. High fire rate (> 30%) means Haiku is mostly retrying — minimal latency win, possible quality loss; document and seed v1.8 as `phase-3a-fallback-floor-tuning.md` follow-up.
+- **Fallback fire rate.** What share of L4 ambiguous-BLOCK / HITL synthesis rows triggered the Sonnet retry? Report n + percent. High fire rate (> 30%) means Haiku is mostly retrying — minimal latency win, possible quality loss; document and seed v1.8 as `phase-3c-fallback-floor-tuning.md` follow-up.
 - **Alignment-eval result.** Per-row regression count on Haiku vs Sonnet; FR-OG-7 row gate result. If gate fired on FR-OG-7: SHIP BLOCKED — abort merge, abandon Haiku fastpath, rewrite as pool sizing per `docs/v1.7-task-plan.md` abandonment rule.
 - **Lever falsification check.** If `cli_pool_send_ms` p95 did NOT drop and L4 p95 did NOT drop AND fallback fire rate is low: the Haiku fastpath did not move the needle. Record as falsification, re-open Haiku fastpath as a v1.8 watch item, and consider promoting 🟢 CLI pool sizing >2 (v1.7 backlog item 2) to primary in v1.8.
 
@@ -84,7 +84,7 @@ Document in §"Caveats". Data-driven only — do NOT predict:
 v1.6 §"Caveats" closed the LM watch as ship-with-v1.7-watch (18.60 s vs ceiling 18 s; +3.21 s vs v1.5). Resolve per v1.7 backlog rubric:
 
 - **v1.7 LM p95 < 18 s** → watch closed; document the close in `## [1.7.0]` CHANGELOG section and ADR-5 v1.7 §"Caveats".
-- **v1.7 LM p95 ≥ 18 s AND magnitude > 1 s over ceiling** → sustained regression. Mint `phase-3b-lm-regression-triage.md` (categorizer prompt audit; Sonnet upstream queueing investigation; cassette drift check). Add v1.8 backlog item if triage defers.
+- **v1.7 LM p95 ≥ 18 s AND magnitude > 1 s over ceiling** → sustained regression. Mint `phase-3d-lm-regression-triage.md` (categorizer prompt audit; Sonnet upstream queueing investigation; cassette drift check). Add v1.8 backlog item if triage defers.
 - **v1.7 LM p95 < 18 s but variance still wide (spread p50→p95 > 5 s)** → extend watch into v1.8 with sample-size bump (n>10). Add v1.8 backlog item.
 
 ### 6. CHANGELOG
@@ -132,11 +132,11 @@ If any subagent return uses "deferred to a follow-up" phrasing, demand authoriza
 ## Mint-new-phase rule
 
 After each P3 sub-step completes, scan for follow-ups before ticking:
-- **Soak done** → if residue rows missing/zero on CLI escalation OR `cli_dispatch_fallback_ms` zero everywhere despite fallback fire (envelope count > 0), mint `phase-3-residue-debug.md` (instrumentation bug, BLOCKS ADR-5 update).
-- **Alignment-eval done** → if gate fires on FR-OG-7 rows: ABORT MERGE; mint `phase-3-abandon-haiku-fastpath.md` and rewrite P2 as pool sizing per `docs/v1.7-task-plan.md`.
-- **Lever effect documented** → if `cli_pool_send_ms` p95 did NOT drop AND L4 p95 did NOT drop: mint v1.8 backlog item (Haiku fastpath falsification).
-- **LM trend re-checked** → if LM p95 ≥ 18 s + magnitude > 1 s, mint `phase-3b-lm-regression-triage.md`.
-- **PR review** → if blockers surface, mint `phase-3-ship-pr-fixups.md`.
-- **Tag step** → if tag push fails or post-tag smoke breaks, mint `phase-3-tag-recovery.md`.
+- **Soak done** → if residue rows missing/zero on CLI escalation OR `cli_dispatch_fallback_ms` zero everywhere despite fallback fire (envelope count > 0), mint `phase-3a-residue-debug.md` (instrumentation bug, BLOCKS ADR-5 update).
+- **Alignment-eval done** → if gate fires on `model_floor == "sonnet"` rows (FR-OG-7 canonical population): ABORT MERGE; mint `phase-3b-abandon-haiku-fastpath.md` and rewrite P2 as pool sizing per `docs/v1.7-task-plan.md`.
+- **Lever effect documented** → if fallback fire rate > 30%, mint `phase-3c-fallback-floor-tuning.md`. If `cli_pool_send_ms` p95 did NOT drop AND L4 p95 did NOT drop: mint v1.8 backlog item (Haiku fastpath falsification) — no separate phase, backlog only.
+- **LM trend re-checked** → if LM p95 ≥ 18 s + magnitude > 1 s, mint `phase-3d-lm-regression-triage.md`.
+- **PR review** → if blockers surface, mint `phase-3e-ship-pr-fixups.md`.
+- **Tag step** → if tag push fails or post-tag smoke breaks, mint `phase-3f-tag-recovery.md`.
 
 Report back when v1.7.0 tag pushes with: tag SHA, ship PR URL, ship-gate verdict, lever Δ summary (cli_pool_send_ms p95 v1.6 → v1.7, L4 p95 v1.6 → v1.7, fallback fire rate), alignment-eval gate result, LM watch resolution.

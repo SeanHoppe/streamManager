@@ -95,7 +95,7 @@ LLM responses are non-deterministic at temperature > 0. Run each golden-set row 
 - [ ] `pytest -m "not alignment_eval"` still runs the default fast suite without picking up the harness
 - [ ] Control column ≥ 95% verdict equality on the report (i.e. golden-set is internally consistent against Sonnet)
 - [ ] No edits under `src/`, `tools/soak_driver.py`, `tools/cassette_record.py`, `dashboard/` — verify with `git --no-pager diff origin/main..HEAD --stat`
-- [ ] No new bus envelopes — verify with `grep -rn 'governance_call\|governance_fallback\|alignment_eval' src/`
+- [ ] No new bus envelopes — verify with `grep -rn 'governance_fallback_routed' src/` returns ZERO matches (P1 must NOT pre-introduce P2's envelope; existing v1.6 envelopes like `governance_call` are unchanged)
 - [ ] `reports/alignment-eval-<UTC>Z.md` baseline run committed (or attached to PR description)
 - [ ] Single PR against `main`
 
