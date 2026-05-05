@@ -28,8 +28,8 @@ Highlights:
   **resolved**. `cli_pool_send_ms` p95 = 6328.07 ms accounts for 99.99%
   of `cli_dispatch_ms` (6329.00 ms) and ~99.98% of `evaluate_inner`
   (6329.38 ms). Driver is the synchronous `worker.send` Anthropic CLI
-  round-trip (subprocess stdin write + stdout JSONL response wait at
-  `cli_pool.py:255`); `cli_setup_ms` (0.01 ms), `cli_pool_acquire_ms`
+  round-trip (subprocess stdin write + stdout JSONL response wait in
+  `CliWorker.send`); `cli_setup_ms` (0.01 ms), `cli_pool_acquire_ms`
   (0.06 ms — confirms zero queueing under sequential soak), and
   `cli_parse_ms` (0.15 ms) are all negligible. v1.7 lever = **Haiku
   fastpath** (primary; downgrade more L4/ambiguous-BLOCK from Sonnet →
@@ -57,11 +57,13 @@ Highlights:
   residue driver (`cli_pool_send_ms`) is upstream model time, not local
   engine code.
 - Lifecycle bridge orphan-free positively asserted at ship-gate again.
-- `--cli-pool-size 2` remains ship-gate default per
-  `feedback_soak_cli_pool_flag.md`.
-- v1.6 P1 followups (PR #86, da0f271) hardened residue instrumentation
-  emission paths so all `_evaluate_inner` exit branches populate the
-  five keys consistently.
+- `--cli-pool-size 2` remains the ship-gate default (omitting it
+  silently reproduces the v1.0 cold-start regression by spawning a
+  fresh CLI per event — pool reuse is mandatory for the residue
+  numbers above to be representative).
+- v1.6 P1 followups (PR #86, merge `380f453`) hardened residue
+  instrumentation emission paths so all `_evaluate_inner` exit branches
+  populate the five keys consistently.
 
 ## [1.5.0] — 2026-05-04
 
