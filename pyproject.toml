@@ -48,6 +48,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "slow: integration tests that shell out / run end-to-end and take >1s; exclude with `-m 'not slow'` for fast tier",
+    "alignment_eval: v1.7 P1 alignment harness — drives real `claude -p` against the L4 golden-set; opt-in with `pytest -m alignment_eval`, exclude with `-m 'not alignment_eval'`",
 ]
 
 [tool.ruff]
