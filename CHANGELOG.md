@@ -6,6 +6,50 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-05-06
+
+Tagged ship of the v1.8 cycle. See `docs/v1.9-backlog.md` for the seed
+list and `docs/adr/ADR-5-latency-budget.md` §"v1.8 ship-gate baseline"
+for the P2 numbers.
+
+Highlights:
+
+- **Content-detection wiring at pre-routing call site**
+  ([PR #93](https://github.com/SeanHoppe/streamManager/pull/93), P1) — wires `is_ambiguous_block` and
+  `is_hitl_synthesis` computation into `governance._evaluate_inner_core`
+  at the pre-routing call site, activating the v1.7 P2 Haiku-fastpath
+  lever. `_looks_ambiguous_block` matches a curated list of destructive-
+  action patterns (shell commands, SQL DDL, force-push forms, prose
+  variants) using compiled regexes. `_looks_hitl_synthesis` proxies the
+  HITL classify-trigger surface (DESKTOP_PAUSE flag or PAUSE_PATTERNS
+  match). New test file `tests/test_governance_content_detection.py` (40
+  tests). Verdict-path invariant: when both flags are False (v1.7 default
+  state), behavior is byte-identical to v1.7.
+- **Soak corpus extension for ambiguous-block coverage**
+  ([PR #94](https://github.com/SeanHoppe/streamManager/pull/94), P1a + P1c) — extended `tools/soak_driver.py`
+  `_L2_L3_TRIGGER` with prose-form patterns (force-push, drop-table,
+  delete-table) and imperative declarative forms to exercise
+  `_looks_ambiguous_block` under the standard load mix. Three patterns
+  land at soak positions 5 and 55 (seed-4242), confirmed by unit tests.
+- **v1.8 ship-gate** (this entry, P2) — 32.1-min Tier 3 soak with
+  `--cli-pool-size 2` (`reports/soak-20260506T101746Z.md`). Verdict PASS;
+  overall p95 7.612 s (budget ≤ 12 s). Alignment-eval `--ci-gate` exit 0;
+  0 FR-OG-7 regressions (`reports/alignment-eval-20260506T113450Z.md`).
+
+**Lever-effect outcome — no latency improvement measured.** The
+content-detection wiring correctly routes two soak events to Haiku-first
+(positions 5 and 55 of the seed-4242 sequence match `_looks_ambiguous_block`).
+However, Haiku returned confidence ≥ 0.70 on both events, so the
+`BRIDGE_L4_FALLBACK_CONFIDENCE` floor was never crossed and
+`cli_dispatch_fallback_ms` p95 = 0.00 ms (0 fallback fires). v1.8.0 ships
+as a latency no-op; all p95 deltas vs v1.7 are within upstream Anthropic
+round-trip variance. See `docs/adr/ADR-5-latency-budget.md` §"v1.8
+ship-gate baseline" §Caveats and `docs/v1.9-backlog.md` §"Haiku fastpath
+confidence floor" for the next-cycle investigation options.
+
+**LM (categorize) p95 = 13.30 s** (v1.7: 11.95 s, +1.35 s). Within the
+18 s ceiling; LM watch stays closed.
+
 ## [1.7.0] — 2026-05-05
 
 Tagged ship of the v1.7 cycle. See `docs/v1.8-backlog.md` for the seed

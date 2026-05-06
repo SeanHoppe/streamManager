@@ -1,6 +1,6 @@
 # ADR-5: Governance latency budget (revised for v1.0)
 
-- **Status**: Accepted (v1.0); re-baselined v1.1 (2026-05-03); re-baselined v1.2 (2026-05-03, see §"v1.2 ship-gate baseline"); re-baselined v1.3 (2026-05-04, see §"v1.3 ship-gate baseline"); re-baselined v1.4 (2026-05-04, see §"v1.4 ship-gate baseline"); re-baselined v1.5 (2026-05-04, see §"v1.5 ship-gate baseline"); re-baselined v1.6 (2026-05-05, see §"v1.6 ship-gate baseline"); re-baselined v1.7 (2026-05-05, see §"v1.7 ship-gate baseline")
+- **Status**: Accepted (v1.0); re-baselined v1.1 (2026-05-03); re-baselined v1.2 (2026-05-03, see §"v1.2 ship-gate baseline"); re-baselined v1.3 (2026-05-04, see §"v1.3 ship-gate baseline"); re-baselined v1.4 (2026-05-04, see §"v1.4 ship-gate baseline"); re-baselined v1.5 (2026-05-04, see §"v1.5 ship-gate baseline"); re-baselined v1.6 (2026-05-05, see §"v1.6 ship-gate baseline"); re-baselined v1.7 (2026-05-05, see §"v1.7 ship-gate baseline"); re-baselined v1.8 (2026-05-06, see §"v1.8 ship-gate baseline")
 - **Date**: 2026-05-02
 - **Supersedes**: original ADR-5 budget (200 ms p50 / 2 s p95, SDK-era)
 
@@ -651,10 +651,115 @@ ACCEPTED as v1.7 budget. v1.8 latency work measures against this section.
 ### Caveats
 
 - **v1.6 LM (categorize) watch — RESOLVED.** v1.7 LM p95 = **11.95 s** (n=10) is well below the 18 s ceiling. Trend: v1.4 = 19.26 s → v1.5 = 15.39 s → v1.6 = 18.60 s → **v1.7 = 11.95 s**. Watch closes per the v1.7 backlog rubric ("v1.7 LM p95 < 18 s → watch closed"). Spread p50→p95 = 2.82 s (v1.6 was 5.91 s) — variance also retreated. No further action required.
-- **v1.7 P2 Haiku fastpath lever — wired but DORMANT in production.** The L4 sub-band routing (alignment vs ambig-BLOCK vs HITL synthesis with confidence-gated Sonnet fallback) and the cli_governance retry path are merged; 27 new tests (11 sub-band + 7 fallback routing + 9 soak residue) cover the surface deterministically. **However**, the production caller path (`governance._evaluate_inner_core` pre-routing) sets `is_ambiguous_block=False` and `is_hitl_synthesis=False` unconditionally — content-based detection of these flags is a v1.8 backlog item. Soak result: 0 fallback fires across 60 events; `cli_dispatch_fallback_ms` p95 = 0.00 ms; 0 `governance_fallback_routed` envelopes emitted. **Lever effect cannot yet be measured.**
+- **v1.7 P2 Haiku fastpath lever — wired but DORMANT in production.** The L4 sub-band routing (alignment vs ambig-BLOCK vs HITL synthesis with confidence-gated Sonnet fallback) and the cli_governance retry path are merged; 27 new tests (11 sub-band + 7 fallback routing + 9 soak residue) cover the surface deterministically. **However**, the production caller path (`governance._evaluate_inner_core` pre-routing) sets `is_ambiguous_block=False` and `is_hitl_synthesis=False` unconditionally — content-based detection of these flags is a v1.8 backlog item. Soak result: 0 fallback fires across 60 events; `cli_dispatch_fallback_ms` p95 = 0.00 ms; 0 `governance_fallback_routed` envelopes emitted. **Lever effect cannot yet be measured.** → **LEVER ACTIVATED in v1.8 (pre-routing content-detection wired at `governance._evaluate_inner_core`); see §"v1.8 ship-gate baseline" §Caveats for the measured outcome.**
 - **Lever falsification check.** `cli_pool_send_ms` p95 dropped 19.0% (6328.07 → 5128.96 ms); ALLOW p95 dropped 1.20 s; L4 alignment p95 dropped 0.57 s — all numerical improvements. **However, the drops are NOT attributable to the v1.7 lever**: fallback fire rate is 0% (the lever code path never executed in production during this soak). The drops are upstream Anthropic round-trip variance on a sequential soak driver (same driver, same load mix, same `--cli-pool-size 2`, no engine-code change to `_maybe_cli_evaluate` or `CliWorker.send`). Per the P3 §4 falsification rule: lever cannot be claimed as moved-the-needle until is_ambiguous_block / is_hitl_synthesis content-detection wires (v1.8 backlog item). The 19% improvement is recorded as upstream variance — neither earned regression nor earned lever effect.
 - **Alignment-eval result.** Sonnet pass rate 0.9583 (23/24 stable rows), Haiku pass rate 0.95 (19/20 stable rows), 0 Haiku regressions vs Sonnet, 0 FR-OG-7 regressions, `--ci-gate` exit 0. P1 v2 baseline had observed 1 FR-OG-7 regression on `frog7-valid-transports-04` (sonnet 3/3 GUIDE vs haiku 3/3 INTERVENE); the v1.7 P2 baseline observed both sonnet and haiku unstable on the same row (sonnet 2/3 GUIDE; haiku 2/3 GUIDE) — the unanimous-stability rule correctly classifies this as borderline drift, not a deterministic regression. The row is also FR-OG-7 protected at the production router (`requires_alignment` keeps it on Sonnet only) so even a deterministic Haiku divergence here would be unreachable in production code paths.
 - **L2/L3 + L4 + LM are n=5 / n=5 / n=10** respectively. Per-band p95 deltas vs v1.6 are within sample noise; the overall and ALLOW p95 are the higher-confidence comparisons. ALLOW p95 −1.20 s and `cli_pool_send_ms` p95 −19.0% are the strongest improvement signals but, like the others, classified as upstream variance not lever effect (lever fire rate = 0).
+
+## v1.8 ship-gate baseline
+
+- **Source**: `reports/soak-20260506T101746Z.md`
+- **Date**: 2026-05-06
+- **Ship SHA**: `main` HEAD at v1.8.0 tag (v1.8 P1 content-detection wiring merged via PR #93 + P1a/P1c prompt coverage via PR #94)
+- **Driver**: `tools/soak_driver.py --cli-pool-size 2` (Tier 3 per ADR-17) with v1.8 P1 `is_ambiguous_block` / `is_hitl_synthesis` content-detection wiring active at `governance._evaluate_inner_core`
+- **Runtime**: 1924.2 s (32.1 min)
+- **Events**: 60 emitted / 250 received via SSE
+- **Verdict**: PASS (100% SSE, RSS drift −7.15 MB, no uncaught exceptions, lifecycle bridge 0 orphans)
+
+### Latency targets (overall, n=60)
+
+| Metric  | v1.8 measured |
+|---------|---------------|
+| p50     | 3.521 s       |
+| p95     | 7.612 s       |
+| max     | 12.052 s      |
+| mean    | 3.060 s       |
+
+### Per-band split
+
+| Path                 | n  | p50      | p95      |
+|----------------------|----|----------|----------|
+| ALLOW (routine)      | 49 |  3.52 s  |  6.48 s  |
+| L2/L3 escalation     |  7 |  3.27 s  |  6.96 s  |
+| L4 alignment         |  4 |  5.34 s  | 11.85 s  |
+| LM (categorize)      | 10 | 10.17 s  | 13.30 s  |
+
+Note: load mix shifted slightly from v1.7 (ALLOW=50, L2/L3=5, L4=5) to v1.8 (ALLOW=49, L2/L3=7, L4=4) because P2a extended `_L2_L3_TRIGGER` from 5 to 8 items, shifting the seed-4242 shuffle balance. LM=10 unchanged.
+
+### ALLOW _evaluate_inner CLI residue breakout (v1.6 — 6 rows)
+
+| Phase                      |  n  | p50 ms   | p95 ms   | max ms   |
+|----------------------------|-----|----------|----------|----------|
+| cli_setup_ms               |  49 |  0.00    |  0.01    |   0.01   |
+| cli_dispatch_ms            |  49 | 3521.12  | 6477.09  | 9201.16  |
+| cli_pool_acquire_ms        |  49 |  0.03    |  0.56    |  15.75   |
+| cli_pool_send_ms           |  49 | 3520.59  | 6470.35  | 9200.45  |
+| cli_parse_ms               |  49 |  0.04    |  0.09    |   0.15   |
+| cli_dispatch_fallback_ms   |  49 |  0.00    |  0.00    |   0.00   |
+
+### Fallback routing summary (v1.8 — lever activated, outcome: dormant under production load)
+
+| Metric                                              | Value |
+|-----------------------------------------------------|-------|
+| `governance_fallback_routed` envelopes emitted      | 0     |
+| `cli_dispatch_fallback_ms` p95                      | 0.00 ms |
+| Per-band fallback rate — ambiguous-BLOCK            | 0% (0/n — see §Caveats) |
+| Per-band fallback rate — HITL synthesis             | 0% (0/n — no HITL session active during soak) |
+| Total L2/L3 + L4 events with `is_ambiguous_block=True` | 2 (soak positions 5 and 55 — imperative destructive prompts matching `_looks_ambiguous_block`) |
+| Haiku-first path taken (routing) | 2/2 (routing wired correctly) |
+| Sonnet retry fired | 0/2 (Haiku returned confidence ≥ 0.70 on both — fallback floor not crossed) |
+
+### Alignment-eval gate
+
+- **Source**: `reports/alignment-eval-20260506T113450Z.md` (fresh run at v1.8 ship-gate; `model_router.py` / `cli_governance.py` unchanged from v1.7 P2 — only `governance.py` pre-routing call site + `tools/soak_driver.py` corpus modified)
+- **Sonnet pass rate**: 21/23 stable rows = **0.913**
+- **Haiku pass rate**: 18/20 stable rows = **0.90**
+- **Haiku regressions vs Sonnet**: **0**
+- **FR-OG-7 row gate result**: **0 regressions** (`haiku_regression_frog7=0`) → `--ci-gate` exit **0** (PASS)
+
+Ship-gate alignment-eval gate clean.
+
+### Delta vs v1.7 ship-gate (`reports/soak-20260505T125741Z.md`)
+
+| Metric               | v1.7     | v1.8     | Δ           | Class |
+|----------------------|----------|----------|-------------|-------|
+| Overall p50          | 3.530 s  | 3.521 s  | −0.01 s     | parity (noise) |
+| Overall p95          | 9.277 s  | 7.612 s  | **−1.67 s** | improvement (upstream variance — see §Caveats) |
+| Overall max          | 14.459 s | 12.052 s | −2.41 s     | parity (noise) |
+| Overall mean         | 3.098 s  | 3.060 s  | −0.04 s     | parity |
+| ALLOW p95            |  5.13 s  |  6.48 s  | +1.35 s     | regression (upstream variance — see §Caveats) |
+| L2/L3 p95            |  3.70 s  |  6.96 s  | +3.26 s     | apparent regression (n=5 → n=7; load-mix shift + 3 new destructive prompts in band — see §Caveats) |
+| L4 alignment p95     | 13.41 s  | 11.85 s  | −1.56 s     | improvement (upstream variance; n=5 → n=4 noise) |
+| LM (cat) p95         | 11.95 s  | 13.30 s  | +1.35 s     | parity (< 18 s ceiling; watch stays closed) |
+| RSS drift            | −11.33 MB | −7.15 MB | +4.18 MB   | both shrink, well under 50 MB budget |
+| `cli_pool_send_ms` p95 | 5128.96 ms | 6470.35 ms | **+1341 ms (+26%)** | regression (upstream variance — lever fire rate 0%; see §Caveats) |
+| Fallback fire rate   | 0%       | 0%       | no change   | lever remains dormant under production load |
+
+### Budget
+
+v1.7 budget table **carried forward unchanged** for v1.8. Fallback fire rate = 0% means no measured lever effect; no basis to tighten the budget.
+
+| Path                 | v1.8 budget (= v1.7 = v1.6 = v1.5 = v1.4 carried forward)   |
+|----------------------|--------------------------------------------------------------|
+| ALLOW p95            | ≤ 12 s                                                       |
+| L2/L3 escalation p95 | ≤ 8 s                                                        |
+| L4 alignment p95     | ≤ 14 s                                                       |
+| LM (categorize) p95  | ≤ 25 s                                                       |
+| Overall p95          | ≤ 12 s                                                       |
+| Hard timeout         | 25 s (unchanged)                                             |
+
+### Status
+
+ACCEPTED as v1.8 budget.
+
+### Caveats
+
+- **v1.8 P1 content-detection wiring — ACTIVATED, lever still DORMANT under production load.** `is_ambiguous_block` and `is_hitl_synthesis` are now computed from content at `governance._evaluate_inner_core` (unit tests: `tests/test_governance_content_detection.py`, 40 passing). Routing sends ambiguous-block content to Haiku-first with Sonnet fallback. Two events in the ship-gate soak matched `_looks_ambiguous_block=True` (positions 5 and 55 of seed-4242 sequence). **However, Haiku returned confidence ≥ 0.70 on both, so the `BRIDGE_L4_FALLBACK_CONFIDENCE` floor was never crossed and `cli_dispatch_fallback_ms` = 0.00 ms for both.** Fallback fire rate = 0%. The Haiku-first routing path is taken (wiring correct), but the Sonnet retry path is not triggered. Two P2a corpus-fix attempts (P1c-B deliberative questions, P2a imperative declarative forms) both failed to produce Haiku confidence < 0.70 on destructive-content prompts. Root cause: Haiku consistently returns high-confidence verdicts (SUGGEST / BLOCK / INTERVENE at ≥ 0.70) on short destructive commands. v1.9 backlog item: investigate confidence floor reduction, HITL-synthesis-only Haiku path, or verdict-based fallback trigger (see `docs/v1.9-backlog.md`).
+- **Overall p95 delta is upstream variance, not lever effect.** Overall p95 dropped −1.67 s vs v1.7 while ALLOW p95 INCREASED +1.35 s. Both moves are within upstream Anthropic round-trip variance range (consistent with v1.7's ±1.6 s swing vs v1.6). No lever code path executed during the soak. v1.8 ships as a latency no-op.
+- **L2/L3 p95 apparent regression (+3.26 s) is load-mix artefact.** P2a extended `_L2_L3_TRIGGER` from 5 to 8 items (adding 3 imperative destructive prompts). Seed-4242 shuffle placed 7 L2/L3 events in the 60-event sequence (vs 5 in v1.7). The two imperative destructive prompts in those 7 events trigger Haiku-first routing (slightly longer first-token path vs standard Sonnet) and the CLI judge may return INTERVENE/BLOCK on them (longer deliberation). The +3.26 s shift is attributable to the changed load shape, not a regression in the unchanged code path.
+- **`cli_pool_send_ms` p95 +26%** (5128.96 → 6470.35 ms). Same variance classification as v1.7's −19% drop. No lever fires; zero code change to `CliWorker.send`; delta is upstream API round-trip variance.
+- **LM p95 = 13.30 s.** Up from v1.7's 11.95 s (+1.35 s) but well within the 18 s ceiling. Watch stays closed per the v1.7 rubric.
+- **Alignment-eval expanded baseline.** The v1.8 eval uses the expanded golden set (32 rows including 5 HITL-synthesis ALLOW rows, 8 ambig-BLOCK rows, and 4 negative-BLOCK rows added in v1.7 P1). Haiku regression vs Sonnet = 0; FR-OG-7 row gate exits 0.
 
 ## References
 
@@ -688,6 +793,12 @@ ACCEPTED as v1.7 budget. v1.8 latency work measures against this section.
 - `reports/alignment-eval-20260505T124519Z.md` — v1.7 alignment-eval
   `--ci-gate` baseline against the merged P2 router config; sonnet
   0.9583 / haiku 0.95 / 0 FR-OG-7 regressions / exit 0
+- `reports/soak-20260506T101746Z.md` — v1.8 32.1-min ship-gate soak with
+  v1.8 P1 content-detection wiring active; the v1.8 baseline source per
+  §"v1.8 ship-gate baseline"
+- `reports/alignment-eval-20260506T113450Z.md` — v1.8 alignment-eval
+  `--ci-gate` ship-gate run; sonnet 0.913 / haiku 0.90 / 0 FR-OG-7
+  regressions / 0 haiku regressions vs sonnet / exit 0
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17
