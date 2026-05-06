@@ -54,6 +54,7 @@ def _content_from_payload(payload: dict) -> str:
 
 
 def main() -> int:
+    _startup_cwd = Path.cwd()
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
@@ -73,7 +74,8 @@ def main() -> int:
         if bus_path:
             bus = MessageBus(bus_path)
             if session_id:
-                bus.open_session(session_id, project_slug=ROOT.name, pid=os.getpid())
+                slug = os.environ.get("STREAM_MANAGER_PROJECT") or _startup_cwd.name
+                bus.open_session(session_id, project_slug=slug, pid=os.getpid())
 
         # Per-session engine via registry. The hook process is short-lived,
         # so the registry holds at most one engine per invocation; the
