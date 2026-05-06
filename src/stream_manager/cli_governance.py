@@ -56,6 +56,15 @@ CLI_BIN = "claude"
 FALLBACK_CONFIDENCE_ENV = "BRIDGE_L4_FALLBACK_CONFIDENCE"
 FALLBACK_CONFIDENCE_DEFAULT = 0.70
 
+# v1.9 P1: Fallback trigger mode. "verdict" (default) fires the Haiku→Sonnet
+# retry when the primary verdict is BLOCK or INTERVENE on ambiguous-block
+# content. "confidence" preserves the original v1.7 P2 behavior (fire when
+# primary confidence < BRIDGE_L4_FALLBACK_CONFIDENCE). Override via
+# BRIDGE_L4_FALLBACK_MODE; any other value warns and defaults to "verdict".
+BRIDGE_L4_FALLBACK_MODE_ENV: str = "BRIDGE_L4_FALLBACK_MODE"
+FALLBACK_MODE_DEFAULT: str = "verdict"
+_VALID_FALLBACK_MODES = frozenset({"verdict", "confidence"})
+
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
 
 # Phase 7 / governance_call: tier inference from model id. Sonnet → L4,
@@ -142,6 +151,25 @@ def _fallback_confidence_floor() -> float:
         return FALLBACK_CONFIDENCE_DEFAULT
 
 
+def _fallback_mode() -> str:
+    """v1.9 P1 fallback trigger mode selector.
+
+    Reads `BRIDGE_L4_FALLBACK_MODE`; default "verdict". Returns one of
+    {"verdict", "confidence"}. Any other value logs a warning and defaults
+    to "verdict" so a typo never silently disables the verdict trigger.
+    """
+    raw = os.environ.get(BRIDGE_L4_FALLBACK_MODE_ENV, "").strip().lower()
+    if not raw:
+        return FALLBACK_MODE_DEFAULT
+    if raw in _VALID_FALLBACK_MODES:
+        return raw
+    log.warning(
+        "cli_governance: invalid %s=%r; using default %r",
+        BRIDGE_L4_FALLBACK_MODE_ENV, raw, FALLBACK_MODE_DEFAULT,
+    )
+    return FALLBACK_MODE_DEFAULT
+
+
 class CliGovernor:
     """Wraps the Claude CLI subprocess with the governance prompt.
 
@@ -220,10 +248,12 @@ class CliGovernor:
             return decision
 
         if not confidence_present:
-            # Malformed envelope: confidence field missing. Treat as 1.0
-            # (no fallback fire) AND emit a one-shot warning event so we
-            # can detect schema drift in cassette / dashboards. Do NOT add
-            # a confidence field to the wire schema (P2 spec).
+            # Malformed envelope: confidence field missing. Schema-drift
+            # warning is emitted regardless of trigger mode so dashboards
+            # / cassettes can still detect it. In confidence mode this
+            # also short-circuits the fire decision (treat as 1.0). In
+            # verdict mode, fall through — the verdict itself is the
+            # trigger signal, not the confidence value.
             self._publish_bus_message(
                 "governance_envelope_missing_confidence",
                 {
@@ -232,11 +262,24 @@ class CliGovernor:
                     "trigger": _infer_trigger(content),
                 },
             )
-            return decision
 
-        floor = _fallback_confidence_floor()
-        if decision.confidence >= floor:
-            return decision
+        # v1.9 P1: trigger mode dispatch. "verdict" (default) fires the
+        # Haiku→Sonnet retry on BLOCK/INTERVENE primary verdicts regardless
+        # of confidence. "confidence" preserves the v1.7 P2 confidence-floor
+        # gate (fire when primary confidence < floor).
+        mode = _fallback_mode()
+        if mode == "confidence":
+            if not confidence_present:
+                # Confidence missing → treat as 1.0 (no fire) per v1.7 P2.
+                return decision
+            floor = _fallback_confidence_floor()
+            if decision.confidence >= floor:
+                return decision
+        else:
+            # mode == "verdict" — fire only on BLOCK / INTERVENE primary
+            # verdicts. ALLOW / SUGGEST / GUIDE → no retry.
+            if decision.action not in {"BLOCK", "INTERVENE"}:
+                return decision
 
         # Fallback fires. Retry on the fallback model with a throwaway
         # residue dict so primary's residue keys remain on the caller's
@@ -267,6 +310,10 @@ class CliGovernor:
                 "primary_confidence": primary_confidence,
                 "fallback_confidence": fb_conf,
                 "fallback_ms": _fb_ms,
+                # v1.9 P1: which trigger fired this retry — "verdict"
+                # (BLOCK/INTERVENE primary) or "confidence" (below floor).
+                # Additive metadata only; existing keys unchanged.
+                "trigger_mode": mode,
             },
         )
         # Retry's verdict is the final answer when present; if the retry

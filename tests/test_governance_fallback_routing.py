@@ -100,8 +100,14 @@ def _governor(runner: _MultiRunner, bus: _CapturingBus | None = None) -> CliGove
 
 
 def test_a_confidence_at_floor_no_fire(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Primary confidence == floor (0.70) → no retry (strict-below gate)."""
+    """Primary confidence == floor (0.70) → no retry (strict-below gate).
+
+    v1.9 P1: this test exercises confidence-mode semantics; the env opt-in
+    is required because verdict mode (the default since v1.9) would
+    otherwise fire on the BLOCK verdict regardless of confidence.
+    """
     monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
     runner = _MultiRunner([
         {"action": "BLOCK", "confidence": FALLBACK_CONFIDENCE_DEFAULT, "reasoning": "at floor"},
     ])
@@ -124,7 +130,11 @@ def test_a_confidence_at_floor_no_fire(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_b_confidence_below_floor_retries_on_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """v1.9 P1: existing v1.7 P2 confidence-mode test. Pinned to confidence
+    mode so the SUGGEST verdict (no retry under verdict default) still
+    exercises the original below-floor retry path."""
     monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
     runner = _MultiRunner([
         {"action": "SUGGEST", "confidence": 0.45, "reasoning": "haiku unsure"},
         {"action": "INTERVENE", "confidence": 0.92, "reasoning": "sonnet certain"},
@@ -178,7 +188,12 @@ def test_c_alignment_row_no_fallback_path(monkeypatch: pytest.MonkeyPatch) -> No
 def test_d_missing_confidence_treated_as_one_with_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """v1.9 P1: confidence-mode missing-envelope semantics preserved.
+    Verdict-mode would also short-circuit on ALLOW (the DROP_CONF default
+    action), but pinning to confidence mode keeps the original v1.7 P2
+    code path under test."""
     monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
     runner = _MultiRunner(["DROP_CONF"])
     bus = _CapturingBus()
     sub: dict[str, float] = {}
@@ -224,8 +239,12 @@ def test_e_v16_caller_no_fallback_kwarg_unchanged(
 
 def test_f_env_override_floor(monkeypatch: pytest.MonkeyPatch) -> None:
     """Floor reads BRIDGE_L4_FALLBACK_CONFIDENCE; raising it makes a 0.85
-    primary trigger fallback even though it would not at the default 0.70."""
+    primary trigger fallback even though it would not at the default 0.70.
+
+    v1.9 P1: pinned to confidence mode so the floor-override semantics are
+    still exercised (verdict mode would no-fire on SUGGEST regardless)."""
     monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
     monkeypatch.setenv("BRIDGE_L4_FALLBACK_CONFIDENCE", "0.95")
     runner = _MultiRunner([
         {"action": "SUGGEST", "confidence": 0.85, "reasoning": "below 0.95"},
@@ -250,8 +269,12 @@ def test_g_fallback_retry_failure_falls_back_to_primary(
 ) -> None:
     """When fallback retry itself returns a structurally bad envelope,
     keep the primary verdict so we never silently lose a usable decision.
-    Envelope is_error=true on the retry path."""
+    Envelope is_error=true on the retry path.
+
+    v1.9 P1: pinned to confidence mode so the SUGGEST 0.40 primary still
+    triggers the retry path being tested (verdict mode would no-fire)."""
     monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
     err_envelope = json.dumps({
         "type": "result",
         "subtype": "error",
@@ -279,3 +302,213 @@ def test_g_fallback_retry_failure_falls_back_to_primary(
     fb_envs = bus.by_type("governance_fallback_routed")
     assert len(fb_envs) == 1
     assert fb_envs[0]["fallback_confidence"] is None
+
+
+# ---------------------------------------------------------------------------
+# v1.9 P1: verdict-based trigger tests (default mode = "verdict")
+# ---------------------------------------------------------------------------
+
+
+def test_verdict_mode_block_fires_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default verdict mode: BLOCK primary verdict on ambiguous-block content
+    triggers Sonnet retry regardless of confidence (Haiku may return BLOCK
+    with confidence=0.95, which would NOT fire under v1.7 confidence mode).
+    """
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.delenv("BRIDGE_L4_FALLBACK_MODE", raising=False)  # default = verdict
+    runner = _MultiRunner([
+        {"action": "BLOCK", "confidence": 0.95, "reasoning": "haiku confident block"},
+        {"action": "BLOCK", "confidence": 0.99, "reasoning": "sonnet concurs"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "rm -rf /",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    assert decision is not None
+    assert decision.action == "BLOCK"
+    assert len(runner.calls) == 2  # primary + retry
+    assert sub["cli_dispatch_fallback_ms"] > 0.0
+    fb_envs = bus.by_type("governance_fallback_routed")
+    assert len(fb_envs) == 1
+    assert fb_envs[0]["trigger_mode"] == "verdict"
+
+
+def test_verdict_mode_intervene_fires_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default verdict mode: INTERVENE primary verdict also triggers retry."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.delenv("BRIDGE_L4_FALLBACK_MODE", raising=False)
+    runner = _MultiRunner([
+        {"action": "INTERVENE", "confidence": 0.88, "reasoning": "haiku intervene"},
+        {"action": "GUIDE", "confidence": 0.81, "reasoning": "sonnet softens"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "force push to main",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    assert decision is not None
+    # Retry's verdict wins.
+    assert decision.action == "GUIDE"
+    assert len(runner.calls) == 2
+    fb_envs = bus.by_type("governance_fallback_routed")
+    assert len(fb_envs) == 1
+    assert fb_envs[0]["trigger_mode"] == "verdict"
+
+
+def test_verdict_mode_allow_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default verdict mode: ALLOW primary verdict → no retry, even with low
+    confidence (which WOULD have fired under v1.7 confidence mode)."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.delenv("BRIDGE_L4_FALLBACK_MODE", raising=False)
+    runner = _MultiRunner([
+        {"action": "ALLOW", "confidence": 0.30, "reasoning": "haiku unsure but allow"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "ls -la",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    assert decision is not None
+    assert decision.action == "ALLOW"
+    assert len(runner.calls) == 1  # primary only
+    assert sub["cli_dispatch_fallback_ms"] == 0.0
+    assert "governance_fallback_routed" not in bus.types()
+
+
+def test_verdict_mode_suggest_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default verdict mode: SUGGEST primary verdict → no retry."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.delenv("BRIDGE_L4_FALLBACK_MODE", raising=False)
+    runner = _MultiRunner([
+        {"action": "SUGGEST", "confidence": 0.40, "reasoning": "haiku suggests"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "git commit -m foo",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    assert decision is not None
+    assert decision.action == "SUGGEST"
+    assert len(runner.calls) == 1
+    assert sub["cli_dispatch_fallback_ms"] == 0.0
+    assert "governance_fallback_routed" not in bus.types()
+
+
+def test_confidence_mode_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit BRIDGE_L4_FALLBACK_MODE=confidence: BLOCK with confidence
+    >= 0.70 → no retry. Original v1.7 P2 behavior preserved."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
+    runner = _MultiRunner([
+        {"action": "BLOCK", "confidence": 0.85, "reasoning": "confident block"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "rm -rf /",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    assert decision is not None
+    assert decision.action == "BLOCK"
+    assert len(runner.calls) == 1  # confidence >= floor → no retry
+    assert sub["cli_dispatch_fallback_ms"] == 0.0
+    assert "governance_fallback_routed" not in bus.types()
+
+
+def test_confidence_mode_fires_on_low_confidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit confidence mode: confidence < floor → retry fires; envelope
+    records trigger_mode="confidence"."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.setenv("BRIDGE_L4_FALLBACK_MODE", "confidence")
+    runner = _MultiRunner([
+        {"action": "BLOCK", "confidence": 0.40, "reasoning": "haiku unsure block"},
+        {"action": "BLOCK", "confidence": 0.95, "reasoning": "sonnet sure"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "drop the users table",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    assert decision is not None
+    assert decision.action == "BLOCK"
+    assert decision.confidence == 0.95
+    assert len(runner.calls) == 2
+    fb_envs = bus.by_type("governance_fallback_routed")
+    assert len(fb_envs) == 1
+    assert fb_envs[0]["trigger_mode"] == "confidence"
+
+
+def test_non_ambiguous_block_no_fallback_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fallback_model_id=None (FR-OG-7 alignment row / non-ambiguous-block
+    path): no retry regardless of mode or Haiku verdict."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    # Default verdict mode would otherwise fire on BLOCK; the None gate
+    # short-circuits ahead of mode dispatch.
+    monkeypatch.delenv("BRIDGE_L4_FALLBACK_MODE", raising=False)
+    runner = _MultiRunner([
+        {"action": "BLOCK", "confidence": 0.10, "reasoning": "no fallback configured"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    decision = _governor(runner, bus).evaluate(
+        "alignment-protected action",
+        model_id="claude-sonnet-4-6",
+        sub_timings=sub,
+        fallback_model_id=None,
+    )
+    assert decision is not None
+    assert decision.action == "BLOCK"
+    assert len(runner.calls) == 1
+    assert sub["cli_dispatch_fallback_ms"] == 0.0
+    assert "governance_fallback_routed" not in bus.types()
+
+
+def test_fallback_routed_envelope_has_trigger_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Schema check: governance_fallback_routed envelope carries trigger_mode
+    in addition to all v1.7 P2 fields (primary_model, fallback_model,
+    primary_confidence, fallback_confidence, fallback_ms). Additive only."""
+    monkeypatch.setenv("BRIDGE_API_GOV", "true")
+    monkeypatch.delenv("BRIDGE_L4_FALLBACK_MODE", raising=False)  # verdict default
+    runner = _MultiRunner([
+        {"action": "BLOCK", "confidence": 0.92, "reasoning": "primary"},
+        {"action": "BLOCK", "confidence": 0.96, "reasoning": "fallback"},
+    ])
+    bus = _CapturingBus()
+    sub: dict[str, float] = {}
+    _governor(runner, bus).evaluate(
+        "rm -rf /var",
+        model_id="claude-haiku-4-5-20251001",
+        sub_timings=sub,
+        fallback_model_id="claude-sonnet-4-6",
+    )
+    fb_envs = bus.by_type("governance_fallback_routed")
+    assert len(fb_envs) == 1
+    fb = fb_envs[0]
+    # v1.7 P2 fields — unchanged.
+    assert fb["primary_model"] == "claude-haiku-4-5-20251001"
+    assert fb["fallback_model"] == "claude-sonnet-4-6"
+    assert fb["primary_confidence"] == 0.92
+    assert fb["fallback_confidence"] == 0.96
+    assert fb["fallback_ms"] > 0.0
+    # v1.9 P1 additive field.
+    assert fb["trigger_mode"] == "verdict"
