@@ -16,7 +16,7 @@ On 2026-05-06, Matt's QA subprocess had been running for >1h17m with no visible 
 **Manual triage required:**
 1. `ls ~/.claude/sessions/` — discover active PIDs (4 files; had to cross-check which was certPortal)
 2. `ps -p <pid>` — validate `status:"busy"` was stale on the originally-suspect PID (18600)
-3. Grep session JONSLs for `b1bu59d1l` — find token was a background Bash task ID
+3. Grep session JSONLs for `b1bu59d1l` — find token was a background Bash task ID
 4. Locate task output file in `$TEMP/claude/<cwd-slug>/<sessionId>/tasks/<token>.output` — found 0 bytes
 5. Realise 0 bytes ≠ hung — actual output routes via `tee` to `oversight/logs/matt-2026-05-06.log`
 6. Tail log — confirmed Matt alive, running JOB-5593, 8 prior jobs all PASS
@@ -59,13 +59,13 @@ On 2026-05-06, Matt's QA subprocess had been running for >1h17m with no visible 
 
 ### AC-2: Learn Mode JSONL ingestion from external sessions
 - Learn Mode accepts a configurable list of JSONL paths (or cwd globs) beyond the Desktop session
-- certPortal oversight JONSLs are ingested as a separate named source (`certportal-oversight`)
+- certPortal oversight JSONLs are ingested as a separate named source (`certportal-oversight`)
 - Categoriser tags oversight-agent turns with source label so SM learning is not polluted with governance-of-governance patterns
 - Opt-in per source; default off
 
 ### AC-3: Background task token tracking
 - When SM or an external session registers a bg task token, SM records: token ID, output file path, originating session, start time
-- SM polls output file size; emits `bg_task_completed` bus event when size changes from 0
+- SM polls output file size; emits `bg_task_output_ready` bus event when size changes from 0
 - Dashboard shows pending bg tokens with age, path, and file size
 - Operator can trigger a Monitor on any registered token from the dashboard
 
