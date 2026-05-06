@@ -174,6 +174,13 @@ _AMBIGUOUS_BLOCK_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bshutdown\s+(?:-[hr]\b|now\b)", re.IGNORECASE),
     re.compile(r"\bmkfs(?:\.\w+)?\b"),
     re.compile(r"\bdd\s+if=.*\bof="),
+    # Prose forms missed by the SQL/shell literals above.
+    # Caught by soak triage: cassette had "Force push to main now?",
+    # "Drop user_settings table?", and L4-trigger "delete the legacy
+    # precheck table" — none matched the literal-only patterns.
+    re.compile(r"\bforce[- ]push\b", re.IGNORECASE),
+    re.compile(r"\bdrop\s+(?:\w+\s+)?\w[\w_-]*\s+table\b", re.IGNORECASE),
+    re.compile(r"\bdelete\s+(?:\w+\s+){1,4}table\b", re.IGNORECASE),  # {1,4}: ≥1 word required; hyphenated tokens (user-events) not matched by \w+ — intentional scope limit
 )
 
 
