@@ -45,29 +45,167 @@ L0–L1 are fast (< 50 ms). L2–L3 use project context loaded from all `*.md` f
 
 ---
 
-## Dashboard
+## Dashboard web UI
 
-Open `http://localhost:8765` while uvicorn is running. Three visual themes: **Obsidian** (dark) · **Phosphor** (green-on-black) · **Paper** (light).
+Open `http://localhost:8765` while uvicorn is running.
 
-Dashboard frames:
+### Theme
 
-| Frame | Content |
+Three themes selectable via the theme buttons in the header:
+
+| Theme | Style |
 |---|---|
-| Interactive REPL | Live message stream; verdict badges per event |
-| Sub-Agents | Agent registry: discovered roles, active sessions, scope flags |
-| Background Jobs | CliPool health, LM categorizer queue depth, soak status |
+| **Obsidian** | Dark industrial, amber accent |
+| **Phosphor** | CRT green-on-black terminal |
+| **Paper** | Light editorial, red accent |
 
-Only true escalations (`INTERVENE`, negative regression, static-rule fire) auto-foreground a frame. Lower-severity signals badge in place.
+---
+
+### Header controls
+
+| Control | What it does |
+|---|---|
+| Session selector (dropdown) | Filter all feeds to one session; "All sessions" = unfiltered |
+| **LIVE** dot | Green = SSE connected and receiving events; grey = disconnected |
+| **LM** toggle | Toggle Learn Mode categorizer on/off at runtime (no restart needed) |
+| ⚙ gear button | Open settings panel (HITL mode, timeout, confidence floor, motion, audible cue) |
+
+---
+
+### Governance mode bar
+
+Horizontal bar below the header. Shows the current governance posture for the active session:
+
+`OBSERVE → SUGGEST → GUIDE → INTERVENE → BLOCK`
+
+Color matches verdict palette. Updates live on each incoming decision event.
+
+---
+
+### Last-call strip
+
+Thin strip below the governance mode bar. Shows metrics from the most recent governance call:
+
+| Field | Meaning |
+|---|---|
+| Status | Verdict of the call (`ALLOW`, `BLOCK`, etc.) |
+| Tier | Decision graph layer that fired (L0–L4) |
+| Model | `haiku` or `sonnet` (which model was used for L4) |
+| Latency | Wall-clock ms from hook entry to verdict |
+| Tokens | Prompt + completion tokens consumed |
+| Cost | Estimated cost of the call |
+
+---
+
+### Three frames
+
+#### Frame A — Interactive Sessions
+
+Live decision stream. Each row shows:
+
+- **Verdict badge** — color-coded: green (ALLOW) → yellow (SUGGEST/GUIDE) → orange (INTERVENE) → red (BLOCK)
+- **Confidence pips** — visual indicator of model confidence (0.0–1.0)
+- **Layer** — L0–L4 which graph layer made the decision
+- **Model** — haiku / sonnet
+- **Agent profile** — inferred role slug (developer, reviewer, tester, unknown)
+- **Content excerpt** — truncated message content
+
+Click any decision row to expand reasoning and see ranked candidate actions (FR-UI-5 suggestions).
+
+#### Frame B — Sub-Agents
+
+Two tabs:
+
+- **Swimlane** — each discovered agent in its own lane; verdict history as a timeline
+- **Filtered feed** — decisions filtered to the selected agent only
+
+Each agent card shows: profile slug, attribution plugin/skill, sidechain flag, first/last seen, active mode override (if set).
+
+To set a per-agent governance mode override: click the agent card → select override mode from the dropdown. Override is in-memory (session-scoped, not persisted to WAL).
+
+#### Frame C — Background Jobs
+
+Three sub-sections:
+
+| Sub-section | Content |
+|---|---|
+| **Jobs list** | CliPool worker health; shows running, idle, and stale workers |
+| **Active Jobs / Agents** | Lifecycle bridge jobs — background tasks and spawned subagents with open start but no end event yet |
+| **Async HITL Queue** | Unresolved async HITL items (visible when HITL mode is `async` and items are pending) |
+
+---
+
+### Session Mirror panel
+
+Slide-out panel below the main frames. Shows raw `tool_call` / `tool_result` bus events for the selected session in real time. Useful for watching what Claude Desktop is executing without switching to the terminal.
+
+Controls: **PAUSE** (stop scrolling) · **CLEAR** (reset view) · **▼/▲** (collapse/expand).
+
+---
+
+### Stats sidebar (right column)
+
+| Stat | Meaning |
+|---|---|
+| Total decisions | Cumulative decision count across all sessions |
+| Sessions `[ASYNC]` | Session count; badge shows current HITL mode |
+| Graph % | Percentage of decisions resolved by graph (L0–L3) vs L4 model call |
+| Avg confidence | Mean confidence score across all decisions |
+| Distribution | Per-verdict bar chart (ALLOW / SUGGEST / GUIDE / INTERVENE / BLOCK) |
+| Session list | Recent sessions with start time and active flag |
+| Agent badges | Identified agent roles for the active session |
 
 ---
 
 ## HITL (Human-in-the-Loop)
 
-When HITL mode is ON and SM emits `INTERVENE`, the dashboard surfaces a ranked option list. You pick; SM persists the pick and uses it as advisory bias for future similar events.
+### HITL modes
 
-When HITL is OFF, SM posts its proposed answer as a read-only card — monitor-only by default, with per-card opt-in to take action.
+Set via gear ⚙ → HITL mode, or via the settings API:
 
-Learn Mode pre-fills the HITL prompt with the categorizer's suggested action. You still confirm before SM acts.
+| Mode | Behavior |
+|---|---|
+| `async` | SM flags `INTERVENE` events in the Async HITL Queue; session continues; you resolve when ready |
+| `sync` | SM pauses the session on `INTERVENE` and waits for your decision (gate-and-wait) |
+| `off` | No HITL gate; SM posts verdict as read-only advisory card |
+
+Mode changes persist to `gov.db` and emit a `hitl_mode_promoted` bus event.
+
+### Resolving a HITL item
+
+When an item appears in the Async HITL Queue (Frame C) or blocks the session (sync mode):
+
+1. Review the proposed action and reasoning
+2. If Learn Mode is active, the prompt is pre-filled with the categorizer's suggestion — you can accept or override
+3. Choose a resolution:
+   - **Approved** — accept SM's proposed action
+   - **Dismissed** — dismiss without acting; session unblocks
+   - **Override** — select a different verdict: `ALLOW`, `SUGGEST`, `GUIDE`, `INTERVENE`, `BLOCK`
+4. Click confirm. SM persists the resolution and optionally uses it as advisory bias for future similar events.
+
+### Post-hoc annotation
+
+On any decision row in Frame A, click **Annotate** to record an override action + optional note. Writes to `hitl_overrides` WAL table. Used to correct decisions after the fact without blocking the session.
+
+---
+
+### Cross-session patterns
+
+Visible at the bottom of the stats sidebar when patterns with `cross_session=1` exist. These are patterns that SM has promoted for use across all sessions (not just the originating one).
+
+To demote a pattern back to session-local: click **Demote** on the pattern row.
+
+---
+
+### Export decisions
+
+Download all governance decisions as NDJSON:
+
+```
+http://localhost:8765/api/decisions/export
+```
+
+Optional filter: `?session_id=<id>`. Each line is one decision record with fields: `decision_id`, `session_id`, `timestamp`, `action`, `confidence`, `reasoning`, `matched_hash`, `model_used`, `layer`, `agent_profile_slug`, `trigger_reason`.
 
 ---
 
