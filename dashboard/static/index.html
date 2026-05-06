@@ -1859,6 +1859,7 @@ input:focus-visible, textarea:focus-visible{
    SIDENAV SHELL — layout, routing, nav items
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 html,body{ height:100%; overflow:hidden; }
+@media print{ html,body{ overflow:visible; height:auto; } }
 body{ display:flex; flex-direction:row; }
 
 /* Left sidebar */
@@ -1973,7 +1974,7 @@ body{ display:flex; flex-direction:row; }
 .app-top{ flex-shrink:0; padding:0 16px; }
 .app-top .header{ padding:10px 0; justify-content:flex-end; }
 .app-top .header .logo{ display:none; }
-.app-top .gmode-bar{ margin:-10px 0 0; }
+.app-top .gmode-bar{ margin:-10px 0 0; /* offsets .header padding:10px 0 so bar abuts header bottom */ }
 
 /* View layout fills remaining shell height */
 .view-layout{
@@ -2057,7 +2058,7 @@ html[data-view="events"]  .view-group[data-view="events"]  { display:flex; }
     <div class="sidenav-logo-sub">Stream Manager</div>
   </div>
   <div class="sidenav-items">
-    <button class="nav-item" data-nav="agents" aria-current="page">
+    <button class="nav-item" data-nav="agents">
       <span class="nav-icon">⬡</span>
       <span class="nav-label">Agents</span>
     </button>
@@ -4408,7 +4409,7 @@ setTimeout(loadServerSettings, 500);
     // Flash monitor nav item if currently on another view
     if(count > 0 && document.documentElement.dataset.view !== 'monitor'){
       const btn = document.querySelector('.nav-item[data-nav="monitor"]');
-      if(btn){ btn.classList.add('nav-alert'); setTimeout(()=> btn.classList.remove('nav-alert'), 1800); }
+      if(btn){ clearTimeout(btn._navAlertTimer); btn.classList.add('nav-alert'); btn._navAlertTimer = setTimeout(()=> btn.classList.remove('nav-alert'), 1800); }
     }
   };
 
