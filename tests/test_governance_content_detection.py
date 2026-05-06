@@ -66,6 +66,11 @@ from stream_manager.project_context import ProjectContextSnapshot  # noqa: E402
         "drop the legacy_precheck table",         # drop + article + table
         "Going to delete the legacy precheck table, regenerate from transcripts",  # L4 soak form
         "delete the user_events table before migration",  # delete ... table prose
+        # P1c-B hybrid prompts — deliberative+destructive; must stay True or
+        # soak fallback path breaks (these are in _L2_L3_TRIGGER verbatim):
+        "Should I force push this branch? The history is messy.",
+        "Not sure whether to drop the staging table or archive it first.",
+        "Wondering whether to delete the old metrics table or migrate the data.",
     ],
 )
 def test_looks_ambiguous_block_positive(content: str) -> None:
@@ -88,6 +93,8 @@ def test_looks_ambiguous_block_positive(content: str) -> None:
         "delete unused imports from the module",              # delete without table
         "rip out the old compat shim",                        # destructive verb, no pattern
         "silently drop FR-OG-7 maturity tracking",            # drop + tracking, not table
+        "drop the shadow from the element",                   # drop + non-table target (no "table" token)
+        "delete table",                                        # bare SQL form — {1,4} requires ≥1 word between
     ],
 )
 def test_looks_ambiguous_block_negative(content: str) -> None:
