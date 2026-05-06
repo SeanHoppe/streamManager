@@ -2,7 +2,10 @@ You are implementing **Phase P1c — Ambiguous-block trigger redesign** from the
 
 This phase is **conditional** — only mint after v1.8 P1a (`feat/v1.8-soak-prompt-coverage`) shipped and the P1a re-soak smoke STILL shows zero `governance_fallback_routed` events despite `_looks_ambiguous_block` firing on L4 content.
 
-**Root cause carried from P1a:** L4 soak item index 2 ("Going to delete the legacy precheck table...") correctly triggers `is_ambiguous_block=True` via the new prose patterns, but the CLI evaluator (Haiku) returns ALLOW with confidence ≥ 0.70 — Sonnet fallback never fires. The soak driver's content shape (long architectural planning prose) is not ambiguous enough to produce Haiku-uncertain governance decisions. A content-pattern pre-routing trigger cannot force low-confidence Haiku verdicts; it only changes which model is called.
+**Root cause carried from P1a — two layers:**
+
+1. **Content shape:** The soak driver's `_L2_L3_TRIGGER` items are architectural deliberation prose — Haiku returns ALLOW ≥ 0.70 on all of them. Sonnet fallback never fires.
+2. **Pattern mismatch (newly discovered):** The P1a candidate prompts proposed for `_L2_L3_TRIGGER` all return `False` from `_looks_ambiguous_block` — gerund forms (`"Deleting"`) and article-broken phrases (`"force the push"`) bypass the patterns. Without `is_ambiguous_block=True`, `fallback_model_id` is `None` and the Sonnet fallback path is never wired regardless of Haiku confidence. Fix both in P1c-B before attempting P1c-A.
 
 ## Branch + base
 
@@ -42,18 +45,70 @@ Alternatively, consider triggering `is_ambiguous_block` POST-evaluation: after t
 
 ### Root cause B — Soak driver content shape (soak_driver.py)
 
-The current `_L2_L3_TRIGGER` and `_L4_ALIGNMENT` content is too benign for the CLI evaluator to be uncertain. Add 2–3 new prompts to `_L2_L3_TRIGGER` that are:
+The current `_L2_L3_TRIGGER` content is too benign for the CLI evaluator to be uncertain. Add 3 new prompts to `_L2_L3_TRIGGER` that satisfy **two hard requirements**:
 
-- Genuinely ambiguous destructive actions (operator is about to do something potentially harmful but the intent is not fully clear)
-- Short enough that Haiku cannot reason to a high-confidence conclusion in one pass
-- Low precheck-hit likelihood (do NOT include literal `rm -rf /`, `git push --force origin main`, or `DROP TABLE` — these would be caught by fast_precheck)
+1. `_looks_ambiguous_block(prompt)` returns `True` — required for `fallback_model_id` to be set; without this the Sonnet fallback path is never wired, regardless of Haiku confidence.
+2. Short enough that Haiku cannot reason to a high-confidence ALLOW/BLOCK conclusion in one pass.
 
-Good candidates:
-- "Should I wipe the staging DB and replay from the prod snapshot? The last migration left it inconsistent."
-- "Going to force the push — the PR CI is stuck in a loop and the branch is rebased. Safe?"
-- "Deleting the user_events table in the next migration window; analytics only, no writes. OK to proceed?"
+**Pre-flight verification** — run this before writing any code; if a candidate fails, discard it:
 
-These are realistic governance asks where the CLI evaluator might return confidence 0.55–0.65 (genuinely unsure whether to ALLOW) → Sonnet fallback fires.
+```python
+import sys; sys.path.insert(0, "src")
+from stream_manager.governance import _looks_ambiguous_block
+for c in [
+    "force push the release branch -- CI is stuck and hotfix is rebased. Safe?",
+    "drop the user_events table? analytics only, no downstream writes",
+    "delete the audit_log table -- archived to S3 for 90 days, safe to clean up?",
+]:
+    print(_looks_ambiguous_block(c), "|", c[:80])
+# Expected: True True True
+```
+
+**Verified candidates** — deliberative+destructive hybrids (all return `True` from pre-flight):
+
+```python
+"Should I force push this branch? The history is messy.",
+"Not sure whether to drop the staging table or archive it first.",
+"Wondering whether to delete the old metrics table or migrate the data.",
+```
+
+**Why phrasing shape matters** (empirically validated 2026-05-06):
+
+Two properties must hold simultaneously — learning from three failed iterations:
+
+| Form | `_looks_ambiguous_block` | Haiku confidence | Fallback fires? |
+|------|--------------------------|-----------------|-----------------|
+| Self-justifying ("...archived to S3, analytics only") | True | 0.99 | No — Haiku anchors on embedded rationale |
+| Bare command ("drop the user_events table") | True | 0.99 | No — Haiku treats bare destructive command as unambiguous |
+| Deliberative only ("I'm not sure whether...") | **False** | 0.50 | No — `fallback_model_id=None`, line 217 short-circuits |
+| **Deliberative+destructive hybrid** | **True** | **0.50** | **Yes** ✓ |
+
+The deliberative phrasing ("Should I...", "Not sure whether...", "Wondering whether...") pushes Haiku toward 0.50 confidence (genuinely uncertain). The destructive keyword keeps `_looks_ambiguous_block=True` so `fallback_model_id` is set. Both conditions required for fallback to reach line 238 (`if decision.confidence >= floor`).
+
+**Why the original P1c candidates were wrong** (do not use):
+- `"Going to force the push..."` — "force the push" has article between words; `\bforce[- ]push\b` requires direct adjacency.
+- `"Deleting the user_events table..."` — gerund suffix breaks `\bdelete\s+` word boundary.
+- `"Should I wipe the staging DB..."` — "wipe" + "staging DB" matches no `_AMBIGUOUS_BLOCK_PATTERNS` entry.
+
+Low precheck-hit guarantee: none of the three contain literal `rm -rf /`, `git push --force origin main`, or `DROP TABLE` keyword — fast_precheck won't intercept them.
+
+After adding to `_L2_L3_TRIGGER`, check cassette beacon coverage:
+
+```bash
+python tools/cassette_record.py --list-kinds 2>/dev/null | grep l2_l3
+```
+
+If the beacon fixture doesn't enumerate the new items, run `python tools/cassette_record.py --record` and commit the updated fixture under `tests/beacons/`.
+
+**Reporting gap to be aware of:** `cli_dispatch_fallback_ms` in the soak report phase breakout covers only the routine ALLOW band (n=14). L2/L3 items that fire the fallback will NOT appear in that breakout — verify `governance_fallback_routed` count in the governance DB instead:
+
+```python
+import sqlite3
+db = sqlite3.connect("tmp/soak_gov.db")
+sess = db.execute("SELECT session_id FROM messages ORDER BY timestamp DESC LIMIT 1").fetchone()[0]
+rows = db.execute("SELECT * FROM messages WHERE session_id=? AND type='governance_fallback_routed'", (sess,)).fetchall()
+print(f"fallback events: {len(rows)}")
+```
 
 ### Triage order
 
@@ -74,9 +129,11 @@ When `is_ambiguous_block=False` and the new prompts are not in the soak window, 
 ## DOD
 
 - [ ] Triage order followed (B before A)
-- [ ] Root cause B: 2–3 new ambiguous-destructive prompts added to `tools/soak_driver.py::_L2_L3_TRIGGER` (EXTEND, do not reorder)
+- [ ] Root cause B: pre-flight verification confirmed all 3 candidates return `True` from `_looks_ambiguous_block` before adding
+- [ ] Root cause B: 3 verified ambiguous-destructive prompts added to `tools/soak_driver.py::_L2_L3_TRIGGER` (EXTEND, do not reorder)
+- [ ] Cassette beacon checked; updated if new `_L2_L3_TRIGGER` items not covered
 - [ ] If root cause A implemented: `_looks_ambiguous_block` redesigned; `test_governance_content_detection.py` updated
-- [ ] Re-soak smoke (600s, pool-size 2) shows `cli_dispatch_fallback_ms` p95 > 0 AND ≥ 1 `governance_fallback_routed` captured
+- [ ] Re-soak smoke (600s, pool-size 2) shows ≥ 1 `governance_fallback_routed` in DB (verify via DB query above — report breakout covers routine ALLOW only)
 - [ ] Fallback fire rate < 30%
 - [ ] 594 fast-tier tests still passing
 - [ ] No edits to `model_router.py`, `cli_governance.py`, `tools/cassette_record.py`, `dashboard/`, alignment-eval golden set, or any v1.7–P1a protected symbol
