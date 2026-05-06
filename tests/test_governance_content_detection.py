@@ -58,6 +58,14 @@ from stream_manager.project_context import ProjectContextSnapshot  # noqa: E402
         "chmod 777 /var/www",                     # not in precheck
         ":(){:|:&};:",                            # fork bomb
         "shutdown -h now",                        # not in precheck
+        # P1a prose forms — cassette prompts + L4 soak content that missed
+        # the literal-only patterns:
+        "Force push to main now?",                # cassette: force-push prose
+        "force-push to the release branch",       # hyphenated variant
+        "Drop user_settings table?",              # cassette: drop-X-table prose
+        "drop the legacy_precheck table",         # drop + article + table
+        "Going to delete the legacy precheck table, regenerate from transcripts",  # L4 soak form
+        "delete the user_events table before migration",  # delete ... table prose
     ],
 )
 def test_looks_ambiguous_block_positive(content: str) -> None:
@@ -74,6 +82,12 @@ def test_looks_ambiguous_block_positive(content: str) -> None:
         "list the files in src/",
         "I would like to understand the routing layer",
         "can you summarize the design doc",
+        # P1a negative controls: prose that SOUNDS similar but must not fire
+        "I pushed a change forcefully to unblock the team",   # "force" but not "force push"
+        "we should drop the feature flag for dark mode",      # drop + non-table target
+        "delete unused imports from the module",              # delete without table
+        "rip out the old compat shim",                        # destructive verb, no pattern
+        "silently drop FR-OG-7 maturity tracking",            # drop + tracking, not table
     ],
 )
 def test_looks_ambiguous_block_negative(content: str) -> None:
