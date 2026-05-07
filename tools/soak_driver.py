@@ -1358,6 +1358,16 @@ def main() -> int:
              "spawn-per-call (default). 2 is the recommended pool size.",
     )
     ap.add_argument(
+        "--worker-recycle-every-n",
+        type=int,
+        default=None,
+        help="v2.0 P1: aggressive per-turn isolation A/B. When set, the CLI "
+             "pool recycles each worker after every N successful sends. "
+             "Default unset preserves byte-identical v1.9 behaviour "
+             "(CALLS_PER_RECYCLE=50). Used by the v2.0 P1 fallback-revival "
+             "A/B (control + N=1, 5, 10). See `docs/v2.0-task-plan.md` §P1.",
+    )
+    ap.add_argument(
         "--cli-replay",
         type=str,
         default=None,
@@ -1476,9 +1486,20 @@ def main() -> int:
                 reaped = reap_stale_workers(root=ROOT)
                 if reaped:
                     print(f"[soak] reaped {reaped} stale CLI worker(s) at boot")
-                cli_pool_obj = CliPool(size=args.cli_pool_size, pid_root=ROOT)
+                cli_pool_obj = CliPool(
+                    size=args.cli_pool_size,
+                    pid_root=ROOT,
+                    worker_recycle_every_n=args.worker_recycle_every_n,
+                )
                 cli_pool_obj.warmup()
-                print(f"[soak] CLI warm-pool enabled (size={args.cli_pool_size})")
+                recycle_msg = (
+                    f", worker_recycle_every_n={args.worker_recycle_every_n}"
+                    if args.worker_recycle_every_n is not None
+                    else ""
+                )
+                print(
+                    f"[soak] CLI warm-pool enabled (size={args.cli_pool_size}{recycle_msg})"
+                )
             except Exception as exc:
                 print(f"[soak] cli_pool init failed: {exc}; falling back to spawn-per-call",
                       file=sys.stderr)
