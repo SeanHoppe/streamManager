@@ -233,6 +233,16 @@ async def _startup_cli_pool() -> None:
             reg.start_refresh()
     except Exception:
         log.exception("registry: start_refresh raised; continuing")
+    # v1.9 P2: external session watcher. Read-only observation of
+    # `~/.claude/sessions/` and bg-task tokens. Daemon thread; idempotent.
+    # Best-effort — failure must never block dashboard startup.
+    try:
+        from stream_manager.session_watcher import start_session_watcher
+        bus = _get_bus()
+        if bus is not None:
+            start_session_watcher(bus)
+    except Exception:
+        log.exception("session_watcher: startup raised; continuing")
 
 
 @app.on_event("shutdown")
@@ -245,6 +255,12 @@ async def _shutdown_cli_pool_event() -> None:
             reg.stop_refresh()
     except Exception:
         log.exception("registry: stop_refresh raised; continuing")
+    # v1.9 P2: stop the session watcher (daemon thread; 1s join).
+    try:
+        from stream_manager.session_watcher import stop_session_watcher
+        stop_session_watcher()
+    except Exception:
+        log.exception("session_watcher: shutdown raised; continuing")
     _shutdown_cli_pool()
 
 
@@ -630,6 +646,54 @@ async def api_sessions(limit: int = 10):
         return out
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ── v1.9 P2: external session watcher dashboard endpoints ───────────
+
+
+@app.get("/api/sessions/external")
+async def api_external_sessions():
+    """Snapshot of external claude -p sessions discovered by the watcher.
+
+    Read-only mirror of ``SessionWatcher.list_active_sessions``. Empty
+    list when the watcher is not running (no error — the dashboard panel
+    just renders empty).
+    """
+    try:
+        from stream_manager.session_watcher import get_session_watcher
+        watcher = get_session_watcher()
+        if watcher is None:
+            return {"sessions": [], "count": 0}
+        sessions = watcher.list_active_sessions()
+        return {"sessions": sessions, "count": len(sessions)}
+    except Exception:
+        log.exception("session_watcher: external sessions endpoint failed")
+        return JSONResponse(
+            {"sessions": [], "count": 0, "error": "internal error"},
+            status_code=500,
+        )
+
+
+@app.get("/api/sessions/bg-tasks")
+async def api_bg_tasks():
+    """Snapshot of pending background-task tokens tracked by the watcher.
+
+    Read-only mirror of ``SessionWatcher.list_pending_bg_tasks``. Empty
+    list when the watcher is not running.
+    """
+    try:
+        from stream_manager.session_watcher import get_session_watcher
+        watcher = get_session_watcher()
+        if watcher is None:
+            return {"tasks": [], "count": 0}
+        tasks = watcher.list_pending_bg_tasks()
+        return {"tasks": tasks, "count": len(tasks)}
+    except Exception:
+        log.exception("session_watcher: bg tasks endpoint failed")
+        return JSONResponse(
+            {"tasks": [], "count": 0, "error": "internal error"},
+            status_code=500,
+        )
 
 
 # ── FR-HITL §4.9 dashboard endpoints ─────────────────────────────────
