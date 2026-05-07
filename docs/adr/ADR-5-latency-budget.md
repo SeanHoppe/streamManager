@@ -930,6 +930,117 @@ ACCEPTED as v2.0 P3 lever-effect entry. v2.0 P4 ship-gate measures
 the post-rip baseline; soak report omits `cli_dispatch_fallback_ms`
 key cleanly per the ADR-18 amendment.
 
+## v2.0 ship-gate baseline
+
+- **Source**: `reports/soak-20260507T174051Z.md`
+- **Date**: 2026-05-07
+- **Ship branch**: `ship/v2.0-shipgate-finalize` (target tag `v2.0.0`)
+- **Driver**: `python tools/soak_driver.py --cli-pool-size 2` (no
+  `--worker-recycle-every-n` — verdict-fallback ripped in P3, no
+  cadence to promote per P1 falsification)
+- **Runtime**: 1930.1 s (32.2 min); 60 events emitted, 158 received
+  (263.3% via SSE seed-replay)
+- **Verdict**: PASS
+
+### Latency targets (overall, n=60)
+
+| Metric        | v1.9 baseline | v2.0 ship-gate | Delta         |
+|---------------|---------------|----------------|---------------|
+| count         |  60           |  60            |  0            |
+| p50 wall      |  3.94 s       |  3.72 s        |  −0.22 s      |
+| p95 wall      | 14.96 s       |  9.12 s        |  −5.84 s      |
+| max wall      | 21.49 s       | 19.10 s        |  −2.39 s      |
+| mean wall     |  3.79 s       |  3.24 s        |  −0.55 s      |
+
+p95 improvement vs v1.9 is meaningful but n=60 leaves the per-band
+tails sample-size-bound — see §"Caveats". Comparison source:
+v1.9 ship-gate row at §"v1.9 ship-gate baseline / Latency targets".
+
+### Per-band split
+
+| Path                 |   n  | v1.9 p95   | v2.0 p95   | Delta        |
+|----------------------|------|------------|------------|--------------|
+| ALLOW (routine)      |  49  |  6.98 s    |  6.70 s    |  −0.28 s     |
+| L2/L3 escalation     |   7  | 11.10 s    |  9.63 s    |  −1.47 s     |
+| L4 alignment         |   4  | 18.10 s    | 17.70 s    |  −0.40 s     |
+| LM (categorize)      |  10  | 18.60 s    | 14.12 s    |  −4.48 s     |
+
+L4 alignment p95 stays in the structural-floor band described at
+§"v1.4 ship-gate baseline / Caveats" (Sonnet alignment + FR-OG-7
+synthesis bound by network + token output, not pool transport).
+
+### ALLOW _evaluate_inner CLI residue breakout (v1.6 — 5 rows post-P3)
+
+`cli_dispatch_fallback_ms` row removed per ADR-18 §"Amendments"
+(2026-05-07 — first-ever subtractive change to FROZEN
+`engine._last_phase_timings_ms`).
+
+| Phase                  |  n  | p50 ms     | p95 ms     | max ms     |
+|------------------------|-----|------------|------------|------------|
+| cli_setup_ms           | 49  |    0.00    |    0.01    |    0.02    |
+| cli_dispatch_ms        | 49  | 3667.82    | 6699.11    | 9079.28    |
+| cli_pool_acquire_ms    | 49  |    0.03    |    0.06    |    0.08    |
+| cli_pool_send_ms       | 49  | 3667.01    | 6698.35    | 9078.62    |
+| cli_parse_ms           | 49  |    0.08    |    0.11    |    0.23    |
+
+`cli_pool_send_ms` p95 ≈ `cli_dispatch_ms` p95 (driver localised to
+`CliWorker.send` exactly as v1.6 P1 confirmed). No regression vs
+v1.9 cycle.
+
+### Lever ledger after v2.0 P4 ship-gate
+
+| Surface                                           | v1.9 | v2.0 |
+|---------------------------------------------------|------|------|
+| `WIRED_LEVER_LEDGER_COUNT` (ADR-18 HTML comment)  |  2   |  0   |
+| `tools/soak_driver.WIRED_LEVER_LEDGER` (dict)     |  2   |  0   |
+
+Empty-ledger inert-gate line emitted in soak summary:
+`Lever ledger: 0 wired levers — DORMANT-N gate inert`. Drift-detection
+test `tests/test_dormant_ledger_consistency.py` asserts ADR-18 comment
+matches dict on every CI run.
+
+### Alignment-eval gate
+
+- Sonnet pass rate: 0.95 (19/20 stable; ≥ 0.95 ✅)
+- Haiku pass rate:  1.00 (18/18 stable; ≥ 0.85 ✅)
+- FR-OG-7 regressions: 0
+- Haiku regressions vs Sonnet: 0
+- Source: `reports/alignment-eval-20260507T191138Z.md` (sidecar:
+  `reports/alignment-eval-20260507T191138Z.json`).
+
+### LOC delta vs v1.9.0 (`a7d0666`)
+
+`git --no-pager diff a7d0666..HEAD --stat -- src tests tools dashboard`
+end row: `11 files changed, 123 insertions(+), 1246 deletions(-)`.
+**Net: −1123 LOC.** ADR-18 Rule 3 budget (consolidation cycle ≤ 0
+net add) cleared by ~−1123. P3 estimate was ~−700; final beat target
+by ~60%.
+
+### Lever-effect ledger update
+
+- **v2.0 P1**: cli_pool worker A/B falsified the warm-process-reuse
+  revival hypothesis (0% fallback fire rate at all four cadences).
+  Source: `reports/v2-p1-cli-pool-ab-20260507T141200Z.md`.
+- **v2.0 P3**: Haiku fastpath (DORMANT-3 mandatory) + verdict-fallback
+  (DORMANT-2 + anticipatory rip authority) removed in single PR.
+  ADR-18 §"Amendments" authorised first subtractive change to
+  `engine._last_phase_timings_ms`.
+
+### Status
+
+ACCEPTED as v2.0 ship-gate baseline. Cycle-discipline rules now in
+force for v2.1+ per ADR-18.
+
+### Caveats
+
+- Per-band n is small (ALLOW 49, L2/L3 7, L4 4). p95 improvements
+  meaningful for ALLOW; L2/L3 + L4 noise band overlaps the v1.9
+  numbers.
+- LM categorize p95 14.12 s — within the v1.9 watch band that closed
+  at 11.95 s baseline + drift; treat as advisory until LM gets a
+  dedicated lever or larger-n soak (Tier 4 candidate carried into
+  v2.1 backlog).
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline

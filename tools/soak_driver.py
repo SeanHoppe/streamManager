@@ -452,6 +452,49 @@ _ALLOW_PHASE_ORDER: list[str] = [
     "total",
 ]
 
+
+# v2.0 P4: DORMANT-N wired-lever ledger. After P3 rips Haiku fastpath
+# (DORMANT-3) + verdict-fallback (DORMANT-2), dict is empty. ADR-18
+# Rule 2 codification — any wired lever that has not fired in N ship
+# cycles must be either ripped or justified; this dict drives the
+# soak-summary signal.
+#
+# Schema (for future re-introductions):
+#   {lever_name: (fire_rate_metric_key, dormant_n_count_at_cycle_start)}
+#
+# DORMANT-N semantics (no active enforcement while ledger is empty):
+#   DORMANT-1 → INFO       (one-cycle-cold, watch)
+#   DORMANT-2 → WARN       (two-cycle-cold, decide rip or justify next cycle)
+#   DORMANT-3 → BLOCK      (three-cycle-cold, mandatory rip per ADR-18 Rule 2)
+#                          + non-zero exit after summary complete
+#
+# Drift-detection: tests/test_dormant_ledger_consistency.py asserts
+# len(WIRED_LEVER_LEDGER) equals the WIRED_LEVER_LEDGER_COUNT HTML
+# comment in docs/adr/ADR-18-mvp-surface-freeze.md. Keep both in sync.
+WIRED_LEVER_LEDGER: dict[str, tuple[str, int]] = {}
+
+
+def _format_lever_ledger() -> list[str]:
+    """v2.0 P4: render the lever-ledger subsection.
+
+    Empty ledger → single inert-gate line. Future re-introductions
+    bump the count and shape of this subsection, alerting reviewers.
+    """
+    lines: list[str] = []
+    lines.append("## Lever ledger")
+    lines.append("")
+    if not WIRED_LEVER_LEDGER:
+        lines.append("- Lever ledger: 0 wired levers — DORMANT-N gate inert")
+    else:
+        lines.append(
+            f"- Lever ledger: {len(WIRED_LEVER_LEDGER)} wired lever(s)"
+        )
+        for name, (metric, dormant_n) in sorted(WIRED_LEVER_LEDGER.items()):
+            lines.append(f"  - {name} (metric={metric}, DORMANT-{dormant_n})")
+    lines.append("")
+    return lines
+
+
 # v1.5: sub-phase keys rendered by the `### ALLOW _evaluate_inner
 # sub-phase breakout (v1.5)` block. Diagnoses ADR-5 v1.4 §"Caveats" —
 # 100% of the v1.4 ALLOW p95 tail sat inside `_evaluate_inner` and was
@@ -897,6 +940,10 @@ def _write_report(
     # consumption of the bridge surface — no modification.
     lines.extend(_format_lifecycle_bridge_final_state(bridge_seen))
 
+    # v2.0 P4: WIRED_LEVER_LEDGER subsection. Additive; emits the
+    # DORMANT-N inert-gate line when ledger is empty (post-P3 rips).
+    lines.extend(_format_lever_ledger())
+
     lines.append("## Process metrics (per-minute samples on dashboard server PID)")
     lines.append("")
     lines.append("| min | wall | RSS MB | FDs | messages | decisions | error |")
@@ -1298,6 +1345,8 @@ def _run_replay(args) -> int:
         )
     )
     lines.extend(_format_lifecycle_bridge_final_state(set()))
+    # v2.0 P4: WIRED_LEVER_LEDGER subsection (replay tier mirrors live).
+    lines.extend(_format_lever_ledger())
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
