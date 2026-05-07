@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _DOD_HEADING = re.compile(r"^\s*##\s+DOD\s*$", re.IGNORECASE)
+# Stops on next h2; h3 sub-blocks under ## DOD are intentionally lumped in.
 _NEXT_H2 = re.compile(r"^\s*##\s+\S")
+# Matches any indent depth — nested - [ ] items are captured as siblings, intentional for current prompts.
 _CHECKBOX = re.compile(r"^\s*-\s*\[\s*\]\s*(.+?)\s*$")
 
 

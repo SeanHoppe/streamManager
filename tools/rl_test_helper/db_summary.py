@@ -5,10 +5,13 @@ NEVER writes. NEVER mutates schema. Opens with `mode=ro` URI.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections import Counter
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 
 @dataclass
@@ -31,8 +34,14 @@ class ShadowSummary:
 
 
 def _ro_connect(db_path: Path) -> sqlite3.Connection:
-    uri = f"file:{db_path.as_posix()}?mode=ro"
-    return sqlite3.connect(uri, uri=True)
+    safe = quote(db_path.as_posix(), safe="/:")
+    return sqlite3.connect(f"file:{safe}?mode=ro", uri=True)
+
+
+def _resolve_self_session_id(sm_self_session_id: str | None) -> str | None:
+    if sm_self_session_id is not None:
+        return sm_self_session_id
+    return os.environ.get("BRIDGE_SM_SELF_SESSION_ID")
 
 
 def _journal_mode(conn: sqlite3.Connection) -> str:
@@ -40,8 +49,9 @@ def _journal_mode(conn: sqlite3.Connection) -> str:
     return (row[0] if row else "").lower()
 
 
-def summarise_episodes(db_path: Path, sm_self_session_id: str | None) -> EpisodeSummary:
-    with _ro_connect(db_path) as conn:
+def summarise_episodes(db_path: Path, sm_self_session_id: str | None = None) -> EpisodeSummary:
+    sm_self_session_id = _resolve_self_session_id(sm_self_session_id)
+    with closing(_ro_connect(db_path)) as conn:
         wal = _journal_mode(conn) == "wal"
         total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
         by_source = dict(conn.execute("SELECT source, COUNT(*) FROM episodes GROUP BY source").fetchall())
@@ -64,8 +74,9 @@ def summarise_episodes(db_path: Path, sm_self_session_id: str | None) -> Episode
     )
 
 
-def summarise_shadow(db_path: Path, sm_self_session_id: str | None) -> ShadowSummary:
-    with _ro_connect(db_path) as conn:
+def summarise_shadow(db_path: Path, sm_self_session_id: str | None = None) -> ShadowSummary:
+    sm_self_session_id = _resolve_self_session_id(sm_self_session_id)
+    with closing(_ro_connect(db_path)) as conn:
         total = conn.execute("SELECT COUNT(*) FROM shadow_episodes").fetchone()[0]
         agreed = conn.execute("SELECT COUNT(*) FROM shadow_episodes WHERE agree=1").fetchone()[0]
         disagree_rows = conn.execute(

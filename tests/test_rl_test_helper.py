@@ -117,6 +117,7 @@ def test_extract_dod_rows_parses_phase1_style_dod(tmp_path: Path):
         "- [ ] First requirement\n"
         "- [ ] Second requirement with `code` and *emphasis*\n"
         "- [x] Already done — should still be ignored (only unchecked)\n"
+        "- [  ] Double-space requirement\n"
         "- [ ] Third requirement\n"
         "\n## Mint-new-phase rule\n\n"
         "- [ ] not in DOD section\n",
@@ -126,9 +127,10 @@ def test_extract_dod_rows_parses_phase1_style_dod(tmp_path: Path):
     assert [r.requirement for r in rows] == [
         "First requirement",
         "Second requirement with `code` and *emphasis*",
+        "Double-space requirement",
         "Third requirement",
     ]
-    assert [r.index for r in rows] == [1, 2, 3]
+    assert [r.index for r in rows] == [1, 2, 3, 4]
 
 
 def test_render_matrix_md_has_header_and_one_row_per_req(tmp_path: Path):
