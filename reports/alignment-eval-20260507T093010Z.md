@@ -1,4 +1,4 @@
-# v1.7 P1 alignment-eval baseline
+# v1.9 alignment-eval baseline
 
 - generated: 20260507T093010Z
 - runs per row per model: 3
