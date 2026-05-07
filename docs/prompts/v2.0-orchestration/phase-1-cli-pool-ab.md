@@ -80,6 +80,12 @@ NOT inside `CliWorker.send`.
      `cli_pool_send_ms` p95, spawn-overhead delta vs Arm A, overall
      p95, ALLOW p95, L2/L3 verdict distribution on `_L2_L3_TRIGGER`
      prompts.
+   - **Total wall-clock: ~128 min (4 arms × ~32 min)**. Launch each
+     arm via `run_in_background` + `ScheduleWakeup` per
+     `feedback_subagent_long_task_abandonment.md`. Do NOT chain four
+     soaks in a single Bash call (subagent abandonment + 5-min cache
+     window cost). Sequential launches from the main thread; each
+     arm's wakeup re-enters at PID-exit detection.
 6. **Report**: author `reports/v2-p1-cli-pool-ab-<UTC-timestamp>.md`.
    Sections:
    - Setup (commit SHA, soak parameters, four-arm matrix)
@@ -95,12 +101,26 @@ NOT inside `CliWorker.send`.
 ## Decision criteria (binding for P3)
 
 - **Any arm > 0% fire rate**: P1 outcome = "fallback revived". P3
-  keeps fallback path. The arm with best (fire-rate × lowest spawn
-  overhead) becomes v2.0 default value for `worker_recycle_every_n`.
-  Lever counter resets in ADR-18.
+  keeps fallback path. ADR-18 counter resets immediately on probe
+  fire (per ADR-18 Rule 2 §"What counts as a strike"). The arm with
+  best (fire-rate × lowest spawn overhead) is recorded as the
+  recommended cadence in ADR-5 lever-effect ledger and forwarded by
+  `tools/soak_driver.py --worker-recycle-every-n` at ship-gate.
+  `CliPool.__init__` default stays `None` permanently — no FROZEN
+  signature default flip (ADR-18 Rule 1).
 - **All arms = 0% fire rate**: P1 outcome = "warm-process hypothesis
-  falsified". Fallback path joins Haiku fastpath in DORMANT-3. P3
-  rips both. ADR-5 records the falsification.
+  falsified". Lever stays DORMANT-2 by counter (A/B is not a Tier 3
+  strike) but P3 invokes *anticipatory rip authority* (ADR-18 Rule 2
+  §"What counts as a strike") and rips both. ADR-5 records the
+  falsification.
+
+**Arm-differentiation note.** Arm B (recycle-every-1) ≈ fresh-process
+control — fire there confirms fresh-process matters but does not
+differentiate cli_pool warm-process bias from generic Claude
+variance. Differentiation comes from Arm C / D fire (partial pool
+reuse). Report MUST call out which arms fired separately; "any arm
+fired" is the binding revival criterion but the recommended cadence
+should weight C/D over B-only fire when interpreting causation.
 
 ## DOD
 

@@ -61,7 +61,11 @@ UNCHANGED. `tools/soak_driver.py` flag set UNCHANGED.
      - Pure docs / `docs/**` only → no soak
      - Pure tests / `tests/**` only → Tier 1 (replay)
      - `tools/**` only → Tier 1 (replay)
-     - `src/stream_manager/cli_pool.py` → Tier 1.5 required
+     - `src/stream_manager/cli_pool.py` → Tier 1.5 required (note:
+       v2.0 P1 `feat/v2-p1-cli-pool-ab` is the canonical first
+       invocation; matrix is forward-looking from P2 merge — if P1
+       merges before P2, P1 is exempt by timing and operator should
+       run Tier 1.5 retroactively as a sanity check, not as a gate)
      - `src/stream_manager/cli_governance.py` → Tier 1.5 required
      - `src/stream_manager/governance.py` → Tier 1.5 required
      - `src/stream_manager/model_router.py` → Tier 1.5 required

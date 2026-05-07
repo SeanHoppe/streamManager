@@ -50,9 +50,12 @@ Per `docs/prompts/v1.6-shipgate/S1-wipe-soak-state.md` pattern.
 Clean `.bridge/`, `reports/soak-*` working state.
 
 ### S2 — Run Tier 3 ship-gate soak
-`python tools/soak_driver.py --cli-pool-size 2` (with the v2.0 P1
-default `worker_recycle_every_n` value if P1 promoted one; else
-unset). Wall-clock ~32 min. Launch via `run_in_background` +
+`python tools/soak_driver.py --cli-pool-size 2 [--worker-recycle-every-n <N>]`
+where `<N>` is the recommended cadence from P1 (Branch A — fallback
+revived); omit the flag entirely under Branch B (fallback ripped) or
+if P1 produced no clear winner. `CliPool.__init__` default stays
+`None` either way — no FROZEN signature default flip per ADR-18
+Rule 1. Wall-clock ~32 min. Launch via `run_in_background` +
 `ScheduleWakeup` from main thread (per
 `feedback_subagent_long_task_abandonment.md`). Use Monitor template
 from `feedback_monitoring_live_sessions.md` for PASS / FAIL / panic /
@@ -79,21 +82,35 @@ deletion-positive).
 ### S5 — Codify DORMANT-N WARN/BLOCK in soak driver
 Extend `tools/soak_driver.py` post-soak summary output:
 - After existing summary fields, emit a new "Lever ledger" subsection.
-- For each lever in ADR-18 §"lever ledger" still classified as wired
-  (not in §"Decommissioned"): cross-reference the soak's measured
-  fire rate. Emit:
+- Hard-code a `WIRED_LEVER_LEDGER` dict in `tools/soak_driver.py`
+  that mirrors ADR-18's current wired levers (after P3 rips). Each
+  entry: `{lever_name: (fire_rate_metric_key, dormant_n_count_at_cycle_start)}`.
+- For each entry: cross-reference the soak's measured fire rate for
+  that metric key. Emit:
   - DORMANT-1 → INFO line (counter started)
   - DORMANT-2 → WARN line
   - DORMANT-3 → BLOCK line (and exit non-zero AFTER all summary
     output complete)
-- This is additive output; the lever ledger read is hard-coded against
-  ADR-18's current ledger (no parser of ADR-18 markdown — just a
-  dict in `tools/soak_driver.py` that mirrors the ADR ledger). Add a
-  test that the dict matches ADR-18's wired-lever count.
+- **Empty-ledger case (Branch B):** if `WIRED_LEVER_LEDGER` is empty
+  (P3 ripped both levers), still emit
+  `Lever ledger: 0 wired levers — DORMANT-N gate inert`. This
+  preserves a regression signal: future re-introduction of any
+  lever bumps `WIRED_LEVER_LEDGER` and the summary line changes
+  shape, alerting reviewers.
+
+**Test (drift-detection between dict and ADR-18):** add
+`tests/test_dormant_ledger_consistency.py`. Test reads
+`docs/adr/ADR-18-mvp-surface-freeze.md`, regex-matches
+`WIRED_LEVER_LEDGER_COUNT:\s*(\d+)`, asserts equality with
+`len(WIRED_LEVER_LEDGER)` imported from `tools/soak_driver`.
+Single-line parse, no full-markdown parser. Failure message points
+at both files: "ADR-18 says N wired levers; soak_driver dict has M.
+Update both in the same PR (ADR-18 HTML comment + dict)."
 
 After v2.0 P3 rips, the wired-lever count is either 1 (Branch A —
-fallback retained) or 0 (Branch B — both ripped). The dict must
-reflect P3's chosen branch.
+fallback retained) or 0 (Branch B — both ripped). Both the dict and
+the ADR-18 HTML comment must reflect P3's chosen branch; P3 PR
+updates both same-commit.
 
 ### S6 — Update ADR-5
 Append §"v2.0 ship-gate baseline" section. Include:

@@ -98,9 +98,19 @@ content-detection predicate):
 There is no third option. "Carry-forward" is not allowed past
 DORMANT-3.
 
+**What counts as a strike.** Counter strikes only on Tier 3
+ship-gate soaks. A/B revival probes (e.g. v2.0 P1) do NOT strike;
+they either reset the counter on non-zero fire OR feed the next
+ship-gate strike via continued 0% fire. A/B falsification of a
+revival hypothesis grants *anticipatory rip authority* under this
+rule even before the next Tier 3 strike — i.e. a phase may rip the
+lever in the same cycle as the failed revival probe rather than
+waiting for the ship-gate strike.
+
 Tracking lives in ADR-5 §lever-effect outcomes (existing format
 already records fire rate per cycle). The DORMANT-N counter resets on
-*any* non-zero fire rate or on a deliberate rip.
+*any* non-zero fire rate (including A/B probe fire) or on a
+deliberate rip.
 
 Current lever ledger at v2.0 P0:
 
@@ -108,6 +118,16 @@ Current lever ledger at v2.0 P0:
 |---|---|---|---|
 | Haiku fastpath router (read of `is_ambiguous_block` / `is_hitl_synthesis` at pre-CLI dispatch site) | v1.7 P2 | v1.7, v1.8, v1.9 | DORMANT-3 — BLOCK at v2.0 ship-gate unless revived |
 | Confidence-floor + verdict-based fallback (`cli_governance.py` retry trigger) | v1.7 / v1.8 / v1.9 P1 | v1.8, v1.9 | DORMANT-2 — WARN; v2.0 P1b A/B is the revival lever |
+
+<!-- WIRED_LEVER_LEDGER_COUNT: 2 -->
+
+The HTML comment above is **load-bearing**: v2.0 P4 codifies a
+DORMANT-N gate in `tools/soak_driver.py` that hard-codes a
+`WIRED_LEVER_LEDGER` dict mirroring this ledger. A test asserts
+`len(WIRED_LEVER_LEDGER) == int(re.search(r"WIRED_LEVER_LEDGER_COUNT:\s*(\d+)", ADR-18-text).group(1))`.
+Any phase that adds, removes, or re-classifies a wired lever MUST
+update both this comment and the dict in the same PR. P3 rip phases
+update both; future feature phases that wire a new lever bump both.
 
 ### Rule 3: cycle LOC budget
 
@@ -133,6 +153,15 @@ the terminal ship-gate phase). v2.0 has P0 + P1 + P2 + P3 + P4 — three
 work phases (P1, P2, P3) plus framing + ship-gate. v1.9 had four work
 phases (P1, P1a, P2, P3) — one over budget; the overshoot drove the
 ~2800 LOC delta. Phase budget enforces scope discipline at frame time.
+
+**Definition of "phase".** A *phase* is a top-level numbered work
+unit that ships its own PR against `main`. Branch decisions inside
+one phase (e.g. v2.0 P3 Branch A vs B), ship-gate sub-tasks (Sn
+pattern from `docs/prompts/v1.6-shipgate/`), and post-merge
+correctives (Cn sub-cycle pattern from v1.3 / v1.6 / v1.8) do NOT
+count against the phase budget. v1.9 P1a counted because it shipped
+its own PR; v2.0 P3 Branch A/B is one phase regardless of which
+branch fires.
 
 ### Rule 5: backlog hard cap
 
@@ -182,13 +211,23 @@ changes in P0. v2.0 P1 (cli_pool A/B) is the first phase to run under
 the new rules and is also the revival attempt for the DORMANT-2
 fallback lever.
 
-If v2.0 P1 A/B produces 0% fire rate: lever moves to DORMANT-3, v2.0
-P3 rips both the fallback path AND the Haiku fastpath router (already
-DORMANT-3 at cycle start). Net deletion target is comfortably met.
+If v2.0 P1 A/B produces 0% fire rate at all four arms: revival
+hypothesis falsified. Lever stays DORMANT-2 by counter rules
+(A/B is not a Tier 3 strike) but P3 invokes *anticipatory rip
+authority* (Rule 2 §"What counts as a strike") to rip both the
+fallback path AND the Haiku fastpath router (already DORMANT-3 at
+cycle start) in the same cycle. P4 Tier 3 ship-gate then measures
+the post-rip baseline; the would-be DORMANT-3 strike is moot
+because the lever no longer exists. Net deletion target comfortably
+met.
 
-If v2.0 P1 A/B produces non-zero fire rate: lever counter resets;
-v2.0 P3 rips only the Haiku fastpath router (still DORMANT-3); P4
-ship-gate measures the new ADR-5 baseline.
+If v2.0 P1 A/B produces non-zero fire rate at any arm: fallback
+counter resets immediately on the probe fire; v2.0 P3 rips only the
+Haiku fastpath router (still DORMANT-3); P4 ship-gate measures the
+new ADR-5 baseline. The recommended recycle cadence flows through
+`tools/soak_driver.py --worker-recycle-every-n` only;
+`CliPool.__init__` default stays `None` (Rule 1 FROZEN — no default
+flip).
 
 ## Open questions
 

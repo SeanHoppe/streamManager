@@ -18,12 +18,17 @@ ADR-18 Rule 2 mandates rip-or-revive at DORMANT-3. Two levers in scope:
    in `governance._evaluate_inner_core` but the pre-CLI dispatch site
    never reads them). Rips unconditionally in P3.
 2. **Confidence + verdict-based fallback** — DORMANT-2 entering
-   v2.0; v2.0 P1 outcome is the third soak that determines DORMANT-3
-   status. **Branching:**
+   v2.0. v2.0 P1 A/B is a *revival probe*, not a Tier 3 ship-gate
+   strike (ADR-18 Rule 2 §"What counts as a strike"). **Branching:**
    - P1 produced > 0% fire rate at any arm → fallback revived,
-     counter resets, P3 keeps fallback path.
-   - P1 produced 0% fire rate at all four arms → fallback joins
-     DORMANT-3, P3 rips it.
+     counter resets immediately on probe fire, P3 keeps fallback
+     path.
+   - P1 produced 0% fire rate at all four arms → revival hypothesis
+     falsified. P3 invokes *anticipatory rip authority* under
+     ADR-18 Rule 2 §"What counts as a strike" — A/B falsification
+     grants rip authority in the same cycle without waiting for the
+     next Tier 3 ship-gate strike. Cite that ADR section verbatim
+     in the P3 PR description.
 
 Read `reports/v2-p1-cli-pool-ab-<timestamp>.md` first. Choose Branch
 A or Branch B based on the report's binding fire-rate outcome.
@@ -92,7 +97,11 @@ outcome in your PR description.
    content-detection helpers themselves.
 4. **ADR-18 §"Initial classification"**: move the Haiku fastpath row
    from "FROZEN" to a new §"Decommissioned" subsection with rip-date
-   + rip-PR.
+   + rip-PR. **Decrement** the
+   `<!-- WIRED_LEVER_LEDGER_COUNT: N -->` HTML comment to match
+   (Branch A → 1; Branch B → 0). The P4 ship-gate test asserts this
+   number equals `len(WIRED_LEVER_LEDGER)` in
+   `tools/soak_driver.py`.
 5. **ADR-5 lever-effect ledger**: append v2.0 P3 entry — Haiku
    fastpath ripped at v2.0 P3 (DORMANT-3 trigger). Fallback retained
    (P1 revival).
@@ -100,7 +109,9 @@ outcome in your PR description.
    references that name `is_ambiguous_block` route()-kwarg consumer
    — annotate as "ripped at v2.0 P3" rather than deleting the rows
    (preserves history).
-7. **Net deletion target**: 150-200 LOC.
+7. **Net deletion target**: 150-200 LOC (estimate; final delta
+   recorded in PR description. Gate is "strongly negative", not the
+   specific number).
 
 ### Branch B — Haiku fastpath rip + fallback rip
 
@@ -129,7 +140,9 @@ Everything in Branch A, PLUS:
 6. **ADR-18 §"Decommissioned"** — add fallback row.
 7. **ADR-5 lever-effect ledger** — append v2.0 P3 entry; record
    warm-process hypothesis falsification.
-8. **Net deletion target**: 300-400 LOC.
+8. **Net deletion target**: 300-400 LOC (estimate; final delta
+   recorded in PR description. Gate is "more negative than Branch A",
+   not the specific number).
 
 ## DOD
 
