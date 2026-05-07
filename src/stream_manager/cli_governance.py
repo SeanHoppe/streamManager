@@ -49,22 +49,6 @@ MODEL = "claude-haiku-4-5"
 TIMEOUT_SECONDS = 25.0
 CLI_BIN = "claude"
 
-# v1.7 P2: Haiku fastpath fallback floor. When the primary call's parsed
-# confidence drops strictly below this threshold AND a fallback_model_id
-# is supplied to evaluate(), retry once on the fallback model and use
-# its verdict as the final answer.
-FALLBACK_CONFIDENCE_ENV = "BRIDGE_L4_FALLBACK_CONFIDENCE"
-FALLBACK_CONFIDENCE_DEFAULT = 0.70
-
-# v1.9 P1: Fallback trigger mode. "verdict" (default) fires the Haiku→Sonnet
-# retry when the primary verdict is BLOCK or INTERVENE on ambiguous-block
-# content. "confidence" preserves the original v1.7 P2 behavior (fire when
-# primary confidence < BRIDGE_L4_FALLBACK_CONFIDENCE). Override via
-# BRIDGE_L4_FALLBACK_MODE; any other value warns and defaults to "verdict".
-BRIDGE_L4_FALLBACK_MODE_ENV: str = "BRIDGE_L4_FALLBACK_MODE"
-FALLBACK_MODE_DEFAULT: str = "verdict"
-_VALID_FALLBACK_MODES = frozenset({"verdict", "confidence"})
-
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
 
 # Phase 7 / governance_call: tier inference from model id. Sonnet → L4,
@@ -132,44 +116,6 @@ def is_enabled() -> bool:
     return os.environ.get(ENV_FLAG, "").lower() in ("1", "true", "yes")
 
 
-def _fallback_confidence_floor() -> float:
-    """v1.7 P2 floor for the Haiku→Sonnet retry. Env-overridable via
-    `BRIDGE_L4_FALLBACK_CONFIDENCE`; default `0.70`. Malformed env
-    values silently fall back to the default so a typo never disables
-    the fallback path.
-    """
-    raw = os.environ.get(FALLBACK_CONFIDENCE_ENV, "")
-    if not raw:
-        return FALLBACK_CONFIDENCE_DEFAULT
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        log.warning(
-            "cli_governance: invalid %s=%r; using default %.2f",
-            FALLBACK_CONFIDENCE_ENV, raw, FALLBACK_CONFIDENCE_DEFAULT,
-        )
-        return FALLBACK_CONFIDENCE_DEFAULT
-
-
-def _fallback_mode() -> str:
-    """v1.9 P1 fallback trigger mode selector.
-
-    Reads `BRIDGE_L4_FALLBACK_MODE`; default "verdict". Returns one of
-    {"verdict", "confidence"}. Any other value logs a warning and defaults
-    to "verdict" so a typo never silently disables the verdict trigger.
-    """
-    raw = os.environ.get(BRIDGE_L4_FALLBACK_MODE_ENV, "").strip().lower()
-    if not raw:
-        return FALLBACK_MODE_DEFAULT
-    if raw in _VALID_FALLBACK_MODES:
-        return raw
-    log.warning(
-        "cli_governance: invalid %s=%r; using default %r",
-        BRIDGE_L4_FALLBACK_MODE_ENV, raw, FALLBACK_MODE_DEFAULT,
-    )
-    return FALLBACK_MODE_DEFAULT
-
-
 class CliGovernor:
     """Wraps the Claude CLI subprocess with the governance prompt.
 
@@ -213,113 +159,12 @@ class CliGovernor:
         content: str,
         model_id: str | None = None,
         sub_timings: dict[str, float] | None = None,
-        fallback_model_id: str | None = None,
     ) -> CliDecision | None:
-        """v1.7 P2 outer orchestration: primary call → maybe fallback retry.
-
-        Backward-compat with v1.6 callers: when `fallback_model_id is None`
-        the body collapses to a single `_evaluate_once` invocation and the
-        method behaves byte-identically to v1.6. The `cli_dispatch_fallback_ms`
-        key is populated as 0.0 in that case so soak driver percentile math
-        sees a consistent shape.
-
-        When `fallback_model_id` is supplied, the primary call's parsed
-        confidence is compared against `BRIDGE_L4_FALLBACK_CONFIDENCE`
-        (default 0.70). On strict-below, the fallback model is retried
-        once and its verdict becomes the final answer; the retry's residue
-        is discarded (only its wall-clock surfaces on `cli_dispatch_fallback_ms`).
-        Missing-confidence envelopes are treated as 1.0 (no fallback) and
-        emit `governance_envelope_missing_confidence`.
-        """
         primary_model = model_id if model_id is not None else MODEL
-        decision, confidence_present = self._evaluate_once(
+        decision, _confidence_present = self._evaluate_once(
             content, primary_model, sub_timings
         )
-
-        # Default the new key to 0.0 so v1.6 callers and the no-fire path
-        # both populate it cleanly (soak driver suppresses it for streams
-        # missing the key — see tools/soak_driver.py).
-        if sub_timings is not None:
-            sub_timings.setdefault("cli_dispatch_fallback_ms", 0.0)
-
-        if fallback_model_id is None or decision is None:
-            # No fallback configured (v1.6 caller / FR-OG-7 alignment row),
-            # or the primary call failed structurally — never retry.
-            return decision
-
-        if not confidence_present:
-            # Malformed envelope: confidence field missing. Schema-drift
-            # warning is emitted regardless of trigger mode so dashboards
-            # / cassettes can still detect it. In confidence mode this
-            # also short-circuits the fire decision (treat as 1.0). In
-            # verdict mode, fall through — the verdict itself is the
-            # trigger signal, not the confidence value.
-            self._publish_bus_message(
-                "governance_envelope_missing_confidence",
-                {
-                    "model": primary_model,
-                    "tier": _infer_tier(primary_model),
-                    "trigger": _infer_trigger(content),
-                },
-            )
-
-        # v1.9 P1: trigger mode dispatch. "verdict" (default) fires the
-        # Haiku→Sonnet retry on BLOCK/INTERVENE primary verdicts regardless
-        # of confidence. "confidence" preserves the v1.7 P2 confidence-floor
-        # gate (fire when primary confidence < floor).
-        mode = _fallback_mode()
-        if mode == "confidence":
-            if not confidence_present:
-                # Confidence missing → treat as 1.0 (no fire) per v1.7 P2.
-                return decision
-            floor = _fallback_confidence_floor()
-            if decision.confidence >= floor:
-                return decision
-        else:
-            # mode == "verdict" — fire only on BLOCK / INTERVENE primary
-            # verdicts. ALLOW / SUGGEST / GUIDE → no retry.
-            if decision.action not in {"BLOCK", "INTERVENE"}:
-                return decision
-
-        # Fallback fires. Retry on the fallback model with a throwaway
-        # residue dict so primary's residue keys remain on the caller's
-        # sub_timings; only the retry wall-clock surfaces on
-        # cli_dispatch_fallback_ms.
-        primary_confidence = decision.confidence
-        _t_fb_start = _pc()
-        _throwaway: dict[str, float] = {}
-        fallback_decision, _fb_confidence_present = self._evaluate_once(
-            content, fallback_model_id, _throwaway
-        )
-        _fb_ms = (_pc() - _t_fb_start) * 1000.0
-        if sub_timings is not None:
-            sub_timings["cli_dispatch_fallback_ms"] = _fb_ms
-
-        # Emit the routing-decision audit envelope. Fallback confidence
-        # may be None when the retry failed structurally; record what we
-        # have so dashboards can distinguish "fallback fired and got an
-        # answer" from "fallback fired and degraded too."
-        fb_conf: float | None = (
-            fallback_decision.confidence if fallback_decision is not None else None
-        )
-        self._publish_bus_message(
-            "governance_fallback_routed",
-            {
-                "primary_model": primary_model,
-                "fallback_model": fallback_model_id,
-                "primary_confidence": primary_confidence,
-                "fallback_confidence": fb_conf,
-                "fallback_ms": _fb_ms,
-                # v1.9 P1: which trigger fired this retry — "verdict"
-                # (BLOCK/INTERVENE primary) or "confidence" (below floor).
-                # Additive metadata only; existing keys unchanged.
-                "trigger_mode": mode,
-            },
-        )
-        # Retry's verdict is the final answer when present; if the retry
-        # itself failed, fall back to the primary verdict so we never
-        # silently lose a usable decision.
-        return fallback_decision if fallback_decision is not None else decision
+        return decision
 
     def _evaluate_once(
         self,
@@ -327,14 +172,11 @@ class CliGovernor:
         primary_model: str,
         sub_timings: dict[str, float] | None,
     ) -> tuple[CliDecision | None, bool]:
-        """v1.7 P2 single-call body. Returns (decision, confidence_present).
+        """Single-call body. Returns (decision, confidence_present).
 
-        Lifted from the v1.6 evaluate() body verbatim — same residue
-        instrumentation, same pool/spawn dispatch, same telemetry events.
-        The only behavioral change is the second tuple element so the
-        outer orchestrator can distinguish "missing confidence field"
-        (treat as 1.0 + warn) from "explicit confidence 0.0" (trigger
-        fallback).
+        confidence_present is retained as the second tuple element to keep
+        the parse path unambiguous about "missing field" vs "explicit 0.0",
+        even though no caller now branches on it.
         """
         # v1.6 P1: residue-level wall-clock instrumentation. When
         # `sub_timings` is None the entry/exit deltas below are computed
@@ -617,12 +459,10 @@ class CliGovernor:
     def _publish_bus_message(
         self, event_type: str, metadata: dict[str, object]
     ) -> None:
-        """v1.7 P2: shared publish helper for governance_* envelopes.
+        """Shared publish helper for governance_* envelopes.
 
-        Internal extraction of the bus.publish dance previously inlined in
-        _publish_event. Same NFR-R6 try/except discipline. Used by
-        _publish_event (governance_call) and by the v1.7 fallback path
-        (governance_fallback_routed, governance_envelope_missing_confidence).
+        NFR-R6 try/except discipline mirrors cli_client._emit. Bus failures
+        are caught and logged; they MUST NOT crash the subprocess wrapper.
         """
         if self._bus is None or not self._session_id:
             return
@@ -779,10 +619,8 @@ def _parse_envelope_with_meta(stdout: str) -> tuple[CliDecision | None, bool]:
     """Parse the CLI envelope and report whether `confidence` was present.
 
     The second tuple element distinguishes "confidence missing from the
-    inner JSON" (treated as 1.0 by the v1.7 fallback gate, with a warning
-    envelope emitted) from "confidence explicitly 0.0" (treated as 0.0,
-    triggers fallback). On any structural failure (None decision), the
-    bool is False and callers must skip the fallback retry.
+    inner JSON" from "confidence explicitly 0.0". On any structural
+    failure (None decision), the bool is False.
     """
     try:
         envelope = json.loads(stdout)

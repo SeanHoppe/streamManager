@@ -5,7 +5,7 @@ Covers:
   - L1: graph match >= 0.85
   - L2: graph match 0.60–0.84 -> Haiku
   - L3: default / cli / no-match -> Haiku
-  - L4: alignment / ambiguous BLOCK / HITL synthesis -> Sonnet
+  - L4: FR-OG-7 alignment -> Sonnet
   - BRIDGE_L2_MODEL / BRIDGE_L4_MODEL env-var overrides
   - ConvergenceMonitor below threshold (no alert)
   - ConvergenceMonitor above threshold (alert fires when total >= 5 and rate > 20%)
@@ -64,17 +64,6 @@ def test_route_alignment_returns_l4_sonnet():
     r = route("cli", 0.50, requires_alignment=True)
     assert r.layer == ModelLayer.L4
     assert r.model_id == L4_MODEL_DEFAULT
-
-
-def test_route_ambiguous_block_returns_l4_haiku_with_sonnet_fallback():
-    # v1.7 P2: ambiguous BLOCK rides the Haiku fastpath with a Sonnet
-    # fallback. Layer is still L4; primary model is Haiku; fallback_model_id
-    # is Sonnet. The L4 sub-band wins priority over the L1 graph match
-    # at confidence 0.50, same as v1.6.
-    r = route("graph", 0.50, is_ambiguous_block=True)
-    assert r.layer == ModelLayer.L4
-    assert r.model_id == L2_MODEL_DEFAULT
-    assert r.fallback_model_id == L4_MODEL_DEFAULT
 
 
 # ── 7: env var overrides ──────────────────────────────────────────────

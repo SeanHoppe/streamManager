@@ -1,5 +1,13 @@
 You are implementing **Phase P2 — v1.8 ship-gate + ADR-5 v1.8 baseline + lever-effect measurement** from the streamManager v1.8 cycle.
 
+> **Historical record.** Symbols protected by this ship-gate's
+> do-not-touch list — Haiku fastpath router consumer + verdict-fallback
+> retry path — were decommissioned at v2.0 P3. See
+> `docs/adr/ADR-18-mvp-surface-freeze.md` §"Decommissioned". Content-
+> detection helpers (`_looks_ambiguous_block`, `_looks_hitl_synthesis`,
+> `_AMBIGUOUS_BLOCK_PATTERNS`) remain FROZEN. This prompt is preserved
+> for history.
+
 ## Branch + base
 
 - Base: `main` with v1.8 P1 (`feat/v1.8-content-detection-wiring`) merged.

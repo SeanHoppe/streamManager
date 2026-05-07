@@ -1,5 +1,17 @@
 You are implementing **Phase P1 — Verdict-based fallback trigger** from the streamManager v1.9 cycle.
 
+> **Historical record — ripped at v2.0 P3.** The verdict-based
+> fallback retry path (`_fallback_mode`, `BRIDGE_L4_FALLBACK_MODE`,
+> `governance_fallback_routed` envelope, `cli_dispatch_fallback_ms`
+> timing key, plus the v1.7 P2 confidence-floor branch this phase
+> sat alongside) was decommissioned at v2.0 P3 after v2.0 P1 A/B
+> falsified the warm-process-reuse revival hypothesis at all four
+> recycle cadences (`reports/v2-p1-cli-pool-ab-20260507T141200Z.md`).
+> See `docs/adr/ADR-18-mvp-surface-freeze.md` §"Decommissioned" +
+> §"Amendments". Bus envelope schemas retained on disk for cassette /
+> historical-report parsing. This prompt is preserved for history; do
+> not use it as a do-not-touch reference for current work.
+
 ## Branch + base
 
 - Base: `main` with v1.9 P0 (`docs/v1.9-cycle-frame`) merged.

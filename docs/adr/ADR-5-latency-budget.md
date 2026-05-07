@@ -903,6 +903,33 @@ ACCEPTED as v1.9 budget.
 
 ACCEPTED as v2.0 P1 lever-effect entry. v2.0 P3 disposition (rip both levers) follows directly from this falsification.
 
+## v2.0 P3 lever-effect entry — Haiku fastpath rip + verdict-fallback rip
+
+- **Date**: 2026-05-07
+- **Cycle**: v2.0 P3 (consolidation)
+- **Authority**: ADR-18 Rule 2 (DORMANT-3 mandatory rip) + Rule 2 §"What counts as a strike" (anticipatory rip on falsified revival probe).
+- **Inputs**: `reports/v2-p1-cli-pool-ab-20260507T141200Z.md` (fallback fire rate 0% at all four cli_pool worker-recycle cadences; warm-process-reuse revival hypothesis falsified).
+
+### Levers ripped
+
+| Lever | Wired in | Dormant cycles | Disposition |
+|---|---|---|---|
+| Haiku fastpath router (read of `is_ambiguous_block` / `is_hitl_synthesis` at pre-CLI dispatch site; `RoutingDecision.fallback_model_id`; `model_router.route()` L4 sub-band logic) | v1.7 P2 | v1.7, v1.8, v1.9 | RIPPED at v2.0 P3 (DORMANT-3 mandatory). Content-detection helpers (`_looks_ambiguous_block`, `_looks_hitl_synthesis`, `_AMBIGUOUS_BLOCK_PATTERNS`) preserved as FROZEN per ADR-18 §"Initial classification" v1.8 P1 row. |
+| Confidence-floor + verdict-based fallback (`cli_governance.py` retry trigger, `_fallback_confidence_floor()`, `_fallback_mode()`, `BRIDGE_L4_FALLBACK_*` env constants, `governance_fallback_routed` + `governance_envelope_missing_confidence` envelope emission, `cli_dispatch_fallback_ms` timing key) | v1.7 / v1.8 / v1.9 P1 | v1.8, v1.9 | RIPPED at v2.0 P3 (DORMANT-2 + P1 falsification → anticipatory rip authority). Bus envelope schemas retained on disk (append-only history) for cassette + historical-report parsing. ADR-18 §"Amendments" authorises the first-ever subtractive change to `engine._last_phase_timings_ms` for the `cli_dispatch_fallback_ms` key removal. |
+
+### Wired lever ledger after P3
+
+`WIRED_LEVER_LEDGER_COUNT` in ADR-18 drops 2 → 0. `tools/soak_driver.py`
+`WIRED_LEVER_LEDGER` becomes the empty dict; the post-soak summary
+emits the inert-gate line. The DORMANT-N gate stays in the soak driver
+schema so future lever introductions inherit the cycle-discipline rule.
+
+### Status
+
+ACCEPTED as v2.0 P3 lever-effect entry. v2.0 P4 ship-gate measures
+the post-rip baseline; soak report omits `cli_dispatch_fallback_ms`
+key cleanly per the ADR-18 amendment.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
