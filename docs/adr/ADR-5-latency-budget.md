@@ -880,7 +880,7 @@ ACCEPTED as v1.9 budget.
 
 | Arm | recycle | overall p95 | ALLOW p95 | `cli_pool_send_ms` p95 | `cli_dispatch_fallback_ms` p95 | fire rate |
 |---|---|---|---|---|---|---|
-| A | unset (status-quo, ≈ 50) | 7.887 s | 4.17 s | 4147 ms | 0.00 ms | 0% |
+| A | unset (status-quo, ≈ 50) | 7.887 s | 4.17 s | 4165 ms | 0.00 ms | 0% |
 | B | N=1 | 10.610 s | 6.84 s | 6799 ms | 0.00 ms | 0% |
 | C | N=5 | 9.918 s | 6.10 s | 6069 ms | 0.00 ms | 0% |
 | D | N=10 | 10.452 s | 6.24 s | 6239 ms | 0.00 ms | 0% |
