@@ -63,7 +63,13 @@ Trainer outputs are PROPOSALS only — never written back to gov config in v10.1
 2. **`rl/bandit.py`** — Beta-Bernoulli Thompson sampler over the 9-bin L4 threshold action space:
 
    - **Action space**: L4 threshold ∈ {0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90} (9 bins).
-   - **Prior**: per-arm `Beta(α₀, β₀)` with `α₀ + β₀ = 20` (moderately informative). Mean centered on the production-baseline arm: that arm gets `Beta(14, 6)` (mean 0.70 = optimistic prior on baseline); other arms get `Beta(10, 10)` (uniform prior, no baseline assumption).
+   - **Prior**: per-arm `Beta(α₀, β₀)` with `α₀ + β₀ = 20` invariant (moderately informative). Mild ε-tilt around the production-baseline arm:
+
+     | Arm distance from baseline | Prior |
+     |---|---|
+     | 0 (baseline arm) | `Beta(14, 6)` (mean 0.70) |
+     | ±1 step | `Beta(11, 9)` (mean ~0.55) |
+     | ±2 or more | `Beta(10, 10)` (uniform) |
    - `update(arm: int, reward: int)` — increments α or β.
    - `sample(rng: np.random.Generator) -> int` — draws one sample from each arm's posterior, returns argmax.
    - `posterior_ci_width(arm: int, level: float = 0.95) -> float` — width of the 95 % credible interval for the named arm.
@@ -90,10 +96,17 @@ Trainer outputs are PROPOSALS only — never written back to gov config in v10.1
    - Runs 1 sampling + update pass per episode (offline replay; not online).
    - Computes `feasible_action_set(...)` over the 9 binned candidates.
    - Writes proposals (top-3 feasible by posterior mean) + manifest.
-   - **Exit code 0** if a feasible candidate other than baseline has higher posterior mean AND posterior CI ≤ 0.10. **Exit code 2** if no candidate beats baseline (= retain baseline). **Exit code 1** on any error.
+   - Exit codes (unix-convention: 0 = success):
+
+     | Exit | Meaning |
+     |---|---|
+     | 0 | Trainer ran cleanly; baseline retained (no feasible candidate beats baseline). Default success. |
+     | 10 | Trainer found a feasible candidate that beats baseline AND posterior CI ≤ 0.10 → proposal manifest ready for P5 shadow. |
+     | 1 | Trainer error (DB read fail, manifest write fail, etc.). |
 
 5. **Tests** — `tests/test_rl_bandit.py`:
    - `test_baseline_warm_start_prior` — initial best arm is the baseline arm (production threshold).
+   - `test_epsilon_tilted_prior` — initial posterior mean by distance from baseline matches the ε-tilt table: 0=0.70, ±1=~0.55, ±2+=0.50.
    - `test_update_concentrates_posterior` — feeding 200 successes on one arm shrinks its CI below 0.10.
    - `test_promotion_gate_requires_both_n_and_ci` — n=199 → False even if CI ≤ 0.10; n=200 + CI=0.15 → False; n=200 + CI=0.10 → True.
    - `test_thompson_does_not_sample_outside_action_space` — every draw ∈ 0..8.
@@ -127,11 +140,12 @@ P4 net add ≤ 700 lines (highest cap of any v10 phase because the math is conce
 - [ ] `tests/test_rl_{bandit,constraints,manifest}.py` created
 - [ ] Promotion gate requires BOTH n ≥ 200 AND posterior CI ≤ 0.10; tests cover both
 - [ ] CMDP filter is the gate, NOT a reward penalty; test asserts no penalty term in `rl.bandit`
-- [ ] Trainer is pure numpy / scipy / sqlite3; ZERO `subprocess` / `claude` / `anthropic` imports
+- [ ] Trainer module (`rl/bandit.py`, `rl/constraints.py`, `rl/manifest.py`, `rl/cli/train.py`) imports ZERO `subprocess` / `anthropic` directly. Subprocess invocation is permitted ONLY via `rl.validate.validate(...)` at P3 stage 3 (cassette replay). Test `test_trainer_no_direct_subprocess_imports` asserts AST-level absence of `subprocess` / `anthropic` imports in the four trainer files.
 - [ ] Sample manifest produced from a real `rl_episodes.db` snapshot; attach to PR
 - [ ] LOC budget ≤ 700 net add
 - [ ] All v1.7–v2.0 + v10 P1–P3 tests green
 - [ ] Single PR against `main`
-- [ ] Conventional commit prefix `rl:`
+- [ ] Conventional commit prefix `feat(rl):`
+- [ ] Exit codes follow unix convention: test `test_exit_codes_0_no_lift_10_promote_1_error` asserts (0=baseline retained, 10=promote, 1=error)
 
 Report back when PR is open with: PR URL, diff stat, file list, sample manifest path, sample proposals JSON, CLI exit code on a known-stable v2.0 baseline (sanity: must be exit 2 = retain baseline if no real lift detected).

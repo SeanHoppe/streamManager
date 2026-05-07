@@ -56,7 +56,7 @@ Implement v10.0 episode logging. Pure data collection, zero policy effect. Per t
        confidence          REAL NOT NULL,
        hitl_override       INTEGER,         -- nullable: 0/1/NULL
        latency_ms          REAL NOT NULL,
-       fr_og_7_pass        INTEGER NOT NULL,-- 0/1
+       fr_og_7_pass        INTEGER,         -- nullable: 1=pass, 0=fail, NULL=no ground-truth signal (live/cassette)
        budget_violation    INTEGER NOT NULL,-- 0/1
        source              TEXT NOT NULL,   -- soak|cassette|probe|golden|review|live
        cycle_tag           TEXT,            -- e.g. v2.0-shipgate-soak-20260520T...
@@ -80,23 +80,24 @@ Implement v10.0 episode logging. Pure data collection, zero policy effect. Per t
    - `trigger_factor: int`
    - `learn_mode_bias_hint: float`
 
-   Function is deterministic and pure — no I/O, no clock reads (caller supplies `now_utc`). Regex helpers re-use `_DESTRUCTIVE_PATTERNS` indirectly via a small adapter (do NOT import the symbol directly — re-declare equivalent patterns in `rl/state_features.py` and add a unit test that asserts pattern-set parity at least on the P1a probe corpus).
+   Function is deterministic and pure — no I/O, no clock reads (caller supplies `now_utc`). Regex helpers are defined locally in `rl/state_features.py` (canonical destructive-content patterns; v10-owned). NO import from FROZEN modules. The pattern parity test compares ONLY against the v1.9 P1a probe corpus outcome distribution (≥ 90 % BLOCK on the wrapped corpus); there is no cross-module symbol parity to assert.
 
 3. **`rl/episode_logger.py`** — dedicated writer. Subscribes to `governance_decision` bus envelopes; for each envelope:
    - resolve `state_features` via `rl.state_features.extract`,
    - look up matching `hitl_overrides` row (best-effort; NULL if absent),
    - read `_last_phase_timings_ms.get('cli_pool_send_ms')` for latency,
-   - read `requires_alignment` outcome to determine `fr_og_7_pass` (1 if alignment-required AND verdict matches golden expectation, else fall back to 1 by default — only golden-replay episodes have known ground-truth),
+   - read `requires_alignment` outcome to determine `fr_og_7_pass`: `1` only on golden-replay episodes where verdict matches golden expected; `0` only on confirmed regression; `NULL` on live and cassette episodes (no ground-truth signal). Trainer downstream MUST treat `fr_og_7_pass IS NULL` as "no signal", not as "pass".
    - insert into `rl_episodes.db` with `action_propensity=1.0` and `source='live'` for live envelopes; ingest from cassette / probe / golden runs uses explicit source tags via a dedicated CLI (`python -m rl.episode_logger ingest --source cassette --file ...`).
 
-   Writer is a SINGLE process. Multiple SM instances writing concurrently must serialize via a file lock on `rl_episodes.db.lock`. WAL mode required.
+   Writer is a SINGLE process. WAL mode required. Multiple SM instances are NOT supported in v10.0; SQLite WAL provides single-writer multi-reader semantics. (If multi-instance SM lands later, revisit with explicit IPC, not file locks.)
 
 4. **`rl/__init__.py`** — package marker; `__all__ = []` (do NOT re-export anything; consumers import explicit submodules).
 
 5. **Tests** — `tests/test_rl_episode_logger.py` and `tests/test_rl_state_features.py`:
    - `test_extract_returns_design_doc_keys` — feature dict has exactly the v10 design-doc keys, no extras.
    - `test_extract_is_pure` — same input → same output across 100 calls.
-   - `test_destructive_pattern_parity` — `regex_destructive_match` agrees with `_DESTRUCTIVE_PATTERNS` on the v1.9 P1a probe corpus (27 wrapped + 27 bare prompts).
+   - `test_destructive_pattern_parity` — `regex_destructive_match` agrees with the v1.9 P1a probe corpus outcome distribution (≥ 90 % match on wrapped + bare prompts).
+   - `test_logger_fr_og_7_pass_null_on_live` — live envelopes (no `requires_alignment` signal) insert with `fr_og_7_pass IS NULL`; golden-replay envelopes insert with `fr_og_7_pass=1` on match, `0` on regression.
    - `test_logger_inserts_one_row_per_envelope` — feed N synthetic `governance_decision` envelopes → N rows in DB.
    - `test_logger_unique_constraint` — duplicate `(session_id, trace_id)` raises `IntegrityError` (defends against bus-replay double-insert).
    - `test_logger_wal_mode` — `PRAGMA journal_mode` returns `wal` after init.
@@ -129,6 +130,6 @@ Per ADR-18 Rule 3, P1 net add ≤ 500 lines of code (tests excluded but scrutini
 - [ ] All v1.7–v2.0 tests green
 - [ ] LOC budget ≤ 500 net add (excl. tests + schema.sql)
 - [ ] Single PR against `main`
-- [ ] Conventional commit prefix `rl:`
+- [ ] Conventional commit prefix `feat(rl):`
 
 Report back when PR is open with: PR URL, diff stat, file list, post-P1 soak report path, logging-overhead measurement.

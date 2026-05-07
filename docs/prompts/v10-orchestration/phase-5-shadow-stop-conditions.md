@@ -74,7 +74,7 @@ Pre-registered means: pick once, before data collection, and write into the form
      PRAGMA journal_mode=WAL;
      ```
 
-   - **Non-invasion invariant**: `on_governance_decision` MUST be wall-clock-bounded (≤ 50 ms p95) and MUST NOT block the bus. If candidate evaluation exceeds budget, drop the shadow record and emit `rl_shadow_dropped` envelope. Production NEVER waits on shadow.
+   - **Non-invasion invariant**: `on_governance_decision` MUST be wall-clock-bounded (≤ 50 ms p95; budget cited from ADR-5 §"v10 shadow overhead", to be added when P5 lands) and MUST NOT block the bus. If candidate evaluation exceeds budget, drop the shadow record and emit `rl_shadow_dropped` envelope. Production NEVER waits on shadow.
 
 2. **`rl/stop_conditions.py`** — pre-registered ship-criteria checker:
 
@@ -87,8 +87,9 @@ Pre-registered means: pick once, before data collection, and write into the form
    - All-criteria-PASS = signal that v10.3 writeback can be opened (a separate human-gated review, NOT auto-promotion).
 
 3. **`rl/cli/shadow.py`** — CLI: `python -m rl.cli.shadow --proposal rl_proposals/<UTC>Z.json --soak-tier 3 [--soak-args "..."]`:
-   - Spawns `tools/soak_driver.py --cli-pool-size 2` (or operator's args) as a subprocess.
-   - Subscribes to its bus (using existing message-bus subscriber surfaces; do NOT add new bus subscribers in core).
+   - Spawns `tools/soak_driver.py --cli-pool-size 2 --shadow-recorder rl_shadow.db [--shadow-proposal <path>]` as a subprocess.
+   - The `--shadow-recorder` flag is a NEW soak_driver CLI surface (added in P5 OR a P5 predecessor sub-phase IF soak_driver is FROZEN). The soak driver, running in-process with the bus, invokes `rl.shadow.ShadowRecorder.on_governance_decision` for each envelope.
+   - **Open question for P0**: if `tools/soak_driver.py` is on the FROZEN list (per ADR-18), P5 cannot add a CLI flag. In that case shadow recording must use a sidecar JSONL-tail strategy (read soak's bus log file as it appends), with the recorder written to `rl_shadow.db` post-run, NOT live. Resolve this in P0 formal design before P5 merge.
    - Records shadow episodes to `rl_shadow.db` with `soak_run_id = <soak start UTC>`.
    - On soak completion: writes `reports/v10-shadow-<UTC>Z.md` summarising agreement rate, candidate-vs-production reward, FR-OG-7 row outcomes, HITL agreement.
 
@@ -139,7 +140,7 @@ P5 net add ≤ 600 lines. Shadow recorder + criteria checker + CLIs are all smal
 - [ ] LOC budget ≤ 600 net add
 - [ ] All v1.7–v2.0 + v10 P1–P4 tests green
 - [ ] Single PR against `main`
-- [ ] Conventional commit prefix `rl:`
+- [ ] Conventional commit prefix `feat(rl):`
 
 Report back when PR is open with: PR URL, diff stat, file list, shadow-soak report path, criteria-check report path, post-P5 production-verdict-byte-identity confirmation.
 

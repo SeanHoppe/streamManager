@@ -26,7 +26,7 @@ NO edits to gov code, no edits to FROZEN cassette / golden formats. Adapters are
 Pre-flight grep:
 
 ```
-grep -nE 'BRIDGE_L4_FALLBACK|requires_alignment|FR_OG_7|_DESTRUCTIVE_PATTERNS' src/stream_manager
+grep -nE 'BRIDGE_L4_FALLBACK|requires_alignment|_check_fr_og7|og7_check' src/stream_manager
 ```
 
 Must return non-empty (FROZEN symbols still present).
@@ -48,13 +48,12 @@ Per the v10 design review §"Issue #2 — Data-source bias", soaks are 100 % ALL
 2. **`rl/sources/probe.py`** — function `iter_episodes(corpus_path: Path) -> Iterator[Episode]` over `reports/p1a-corpus-haiku-verdicts-*.md` linked corpus (or `tools/p1a_haiku_probe.py`'s output JSONL):
    - 27 wrapped + 27 bare destructive prompts.
    - `source='probe'`, `cycle_tag='p1a-<UTC>'`.
-   - Recorded verdict is the Haiku probe verdict (high-quality minority signal: ~96–100 % BLOCK on this corpus per v1.9 P1a outcome).
+   - Recorded verdict is the Haiku probe verdict (high-quality minority signal; outcome distribution per `reports/p1a-corpus-haiku-verdicts-<UTC>.md`).
    - `hitl_override = 1` (BLOCK is the human-aligned outcome on destructive content; the probe is functionally a labeled minority class).
 
 3. **`rl/sources/golden.py`** — function `iter_episodes() -> Iterator[Episode]` over `tools/alignment_eval.py` golden rows (n=32, includes FR-OG-7 rows):
    - `source='golden'`, `cycle_tag='alignment-golden'`.
-   - Recorded verdict is the golden expected verdict.
-   - `hitl_override = 1` always (golden is by definition the human-aligned label).
+   - Recorded verdict is the golden expected verdict. `hitl_override = NULL` (golden is a labelled-expected signal, NOT a HITL signal; mixing the two inflates HITL agreement downstream). Ground truth is carried via the `verdict` column itself + `source='golden'` discriminator.
    - `fr_og_7_pass = 1` if the row is not an FR-OG-7 row OR if the recorded verdict matches the FR-OG-7 expected verdict.
    - **Holdout rule**: golden rows are NEVER added to the training set. They appear only in the validation set (P3). This source adapter is invoked ONLY by P3 OPE harness, never by P2 training-set assembly. Add an explicit assertion to the augmenter that golden episodes are not added to training output.
 
@@ -79,11 +78,12 @@ Per the v10 design review §"Issue #2 — Data-source bias", soaks are 100 % ALL
      - `test_cassette_episode_fields_complete` — every yielded `Episode` has all v10 schema fields.
 
    - `tests/test_rl_sources_probe.py`:
-     - `test_probe_corpus_block_dominant` — ≥ 90 % verdict='BLOCK' on the wrapped corpus.
+     - `test_probe_corpus_block_dominant` — ≥ 90 % verdict='BLOCK' on the wrapped corpus (provenance: `reports/p1a-corpus-haiku-verdicts-<UTC>.md`; cite path in test docstring).
      - `test_probe_episode_hitl_override_set` — all yielded episodes have `hitl_override=1`.
 
    - `tests/test_rl_sources_golden.py`:
      - `test_golden_size` — exactly 32 episodes.
+     - `test_golden_hitl_override_is_null` — every yielded golden episode has `hitl_override IS NULL` (golden is a labelled-expected signal, not a HITL signal).
      - `test_golden_holdout_assertion_in_augmenter` — calling `assemble_training_set` with golden source enabled raises.
 
    - `tests/test_rl_corpus_augment.py`:
@@ -115,6 +115,6 @@ P2 net add ≤ 500 lines. Source adapters are small by construction (≤ 100 lin
 - [ ] All v1.7–v2.0 tests green
 - [ ] LOC budget ≤ 500 net add
 - [ ] Single PR against `main`
-- [ ] Conventional commit prefix `rl:`
+- [ ] Conventional commit prefix `feat(rl):`
 
 Report back when PR is open with: PR URL, diff stat, file list, sample class-balance log from a real `rl_episodes.db` snapshot.
