@@ -141,3 +141,90 @@ The categorizer is a separate worker process. The verdict path reads patterns; i
 - Memory: `feedback_cli_over_sdk.md` — CLI subprocess as the LLM backend.
 - ADR-5 — governance latency budget (must remain unaffected).
 - ADR-9 — HITL as a switchable mode (Learn Mode bias never bypasses it).
+
+---
+
+## 7. `learn_sources` config (v1.9 P3 — append-only)
+
+v1.3's ingest pipeline was hard-wired to the Desktop session JSONL. The
+v1.9 P3 expansion adds a configurable list of *external* JSONL sources
+so SM can learn from oversight-agent dialogue (certPortal Dave / Jen /
+Jason / Matt / Oliver / Michael) without polluting Desktop-attributed
+patterns. The advisory bias surface (§"Bias reader") is unchanged —
+this is a write-side extension only.
+
+### 7.1 Format
+
+A list of `{path_glob, label}` dicts, one entry per labelled source.
+Loaded from the `BRIDGE_LEARN_SOURCES` env var (JSON-encoded). Default
+is the empty list — opt-in per source. When unset or empty, no
+`learn_mode.py` workers spin up and the existing Desktop session ingest
+path runs unchanged.
+
+```json
+[
+  {"path_glob": "/path/to/oversight/sessions/*.jsonl",
+   "label": "certportal-oversight"}
+]
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `path_glob` | str | Resolved with `pathlib.Path.glob`. Absolute or relative. |
+| `label` | str | Attribution tag (used as `metadata.source_label` and on `hitl_overrides.source_label`). |
+
+### 7.2 Self-monitor guard
+
+Every glob expansion (not just at config load time) is filtered through
+two checks per memory note `feedback_no_self_monitor.md`:
+
+1. **Exact-path match** — paths resolving to
+   `~/.claude/sessions/<SM_OWN_SESSION_ID>.jsonl` are rejected.
+2. **Path-segment match** — paths whose resolved components contain
+   `stream_manager` (case-insensitive) are rejected.
+
+A rejected path is logged at WARNING level with the
+`learn_sources: rejecting path …` prefix. The guard never raises —
+other sources in the same config are unaffected, and a single bad
+source cannot interrupt the ingest loop. The check runs at every
+expansion so a self-monitor file appearing under a watched glob *after*
+config load is still rejected.
+
+### 7.3 Label propagation
+
+Each emitted envelope (`desktop_prompt` / `user_reply`) carries
+`metadata.source_label = <label>`. The categoriser is unchanged — the
+label is metadata, not a routing modifier. When an override is recorded
+for a tagged turn via `learn_mode.record_override_with_source_label`,
+the label lands on the new nullable `hitl_overrides.source_label`
+column (additive migration, idempotent).
+
+Desktop session turns continue to use `MessageBus.annotate_decision`
+directly; their `source_label` stays NULL. Existing `hitl_overrides`
+rows are unaffected by the migration.
+
+### 7.4 Source isolation
+
+Each configured source runs on its own tail thread with an independent
+envelope queue. The categoriser processes one turn at a time regardless
+of source — there is no cross-source biasing. Sources A and B can carry
+different labels into the same `hitl_overrides` table without
+contaminating each other's categorisation outcomes.
+
+### 7.5 No new bus envelope types
+
+P3 does not introduce any new envelope `type=`. Source turns ride the
+existing `desktop_prompt` / `user_reply` types with the new
+`source_label` metadata field. Cassette + soak machinery is unaffected
+(memory: `feedback_cassette_must_cover_new_envelopes.md`).
+
+### 7.6 References
+
+- `src/stream_manager/learn_mode.py` — implementation.
+- `tests/test_learn_mode_sources.py` — eight scenarios covering empty
+  default, label tagging, self-monitor guard (path + segment + no-raise),
+  two-source isolation, column migration, Desktop NULL invariant.
+- `docs/use-cases/uc-01-external-session-monitoring.md` §AC-2 —
+  acceptance criteria.
+- Memory: `feedback_no_self_monitor.md`,
+  `feedback_cassette_must_cover_new_envelopes.md`.
