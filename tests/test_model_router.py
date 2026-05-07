@@ -5,7 +5,7 @@ Covers:
   - L1: graph match >= 0.85
   - L2: graph match 0.60–0.84 -> Haiku
   - L3: default / cli / no-match -> Haiku
-  - L4: alignment / ambiguous BLOCK / HITL synthesis -> Sonnet
+  - L4: FR-OG-7 alignment -> Sonnet
   - BRIDGE_L2_MODEL / BRIDGE_L4_MODEL env-var overrides
   - ConvergenceMonitor below threshold (no alert)
   - ConvergenceMonitor above threshold (alert fires when total >= 5 and rate > 20%)

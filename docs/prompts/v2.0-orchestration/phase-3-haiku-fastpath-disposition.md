@@ -35,7 +35,7 @@ No A/B branching in this prompt; both rips land in the same PR.
 - `src/stream_manager/cli_governance.py` — verdict-fallback retry
   branch; `BRIDGE_L4_FALLBACK_*` constants; envelope emission sites
 - `src/stream_manager/model_router.py` — `RoutingDecision.fallback_model_id`
-- `src/stream_manager/engine.py` — `_last_phase_timings_ms` dict
+- `src/stream_manager/governance.py` — `_last_phase_timings_ms` dict (sole owner; setdefault sites at `_zero_cli_residue_keys` + `_maybe_cli_evaluate` early-return)
 - `src/stream_manager/cli_pool.py` — UNCHANGED in P3
 - `tools/soak_driver.py` — `_ALLOW_PHASE_ORDER` if it lists
   `cli_dispatch_fallback_ms`
@@ -100,9 +100,11 @@ allowances + restrictions:
      constants
    - `governance_fallback_routed` envelope emission
    - `governance_envelope_missing_confidence` envelope emission
-2. `src/stream_manager/engine.py` — remove `cli_dispatch_fallback_ms`
-   key from `_last_phase_timings_ms`. Update
-   `tools/soak_driver.py` `_ALLOW_PHASE_ORDER` if it lists the key.
+2. `src/stream_manager/governance.py` — remove `cli_dispatch_fallback_ms`
+   key from `_last_phase_timings_ms` setdefault sites
+   (`_zero_cli_residue_keys` and the `_maybe_cli_evaluate` early-return
+   path). Update `tools/soak_driver.py` `_ALLOW_PHASE_ORDER` if it
+   lists the key.
 3. Bus envelope schemas — keep on disk (append-only history). Stop
    emitting in code only.
 4. Tests: remove fallback-specific tests

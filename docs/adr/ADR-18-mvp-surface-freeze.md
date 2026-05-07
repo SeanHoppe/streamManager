@@ -59,7 +59,7 @@ Initial classification at the v2.0 P0 cycle frame:
 | Module / surface | State | Notes |
 |---|---|---|
 | `cli_pool` (`CliPool`, `CliWorker`, `CliWorker.send`, `.bridge/cli-pool.pids`) | FROZEN | v1.1 Task J. Already on do-not-touch list. v2.0 P1b A/B uses optional kwargs only. |
-| `bus` envelope schemas (`governance_fallback_routed`, `governance_envelope_missing_confidence`, `governance_call`, lifecycle envelopes) | FROZEN | Metadata-only extensions. `governance_fallback_routed` + `governance_envelope_missing_confidence` no longer emitted (lever ripped at v2.0 P3); schemas retained on disk for historical/cassette reads. |
+| `bus` envelope schemas (`governance_call`, lifecycle envelopes) | FROZEN | Metadata-only extensions. (`governance_fallback_routed` + `governance_envelope_missing_confidence` schemas decommissioned at v2.0 P3 — see §"Decommissioned".) |
 | `governance._evaluate_inner_core` content-detection helpers (`_looks_ambiguous_block`, `_looks_hitl_synthesis`, `_AMBIGUOUS_BLOCK_PATTERNS`) | FROZEN | v1.8 P1. Pattern list extends only; flag semantics fixed. Reusable by future work even though current consumer was ripped at v2.0 P3. |
 | `model_router.py` band priority + `RoutingDecision` field set | FROZEN | NFR-M1-M5. Extend bands within, never reorder. (`fallback_model_id` field ripped at v2.0 P3 with the Haiku fastpath consumer; see §"Decommissioned".) |
 | `LifecycleBridge` + `/api/lifecycle/jobs` + dashboard lifecycle pane | FROZEN | v1.2 Task C. |
@@ -255,11 +255,11 @@ flip).
 
 ## Amendments
 
-### 2026-05-07 — v2.0 P3: subtractive change to `engine._last_phase_timings_ms`
+### 2026-05-07 — v2.0 P3: subtractive change to `_last_phase_timings_ms`
 
 First-ever removal from the `_last_phase_timings_ms` FROZEN dict in
-`src/stream_manager/governance.py` and `src/stream_manager/engine.py`
-(Rule 1). The `cli_dispatch_fallback_ms` key is removed alongside the
+`src/stream_manager/governance.py` (Rule 1). The
+`cli_dispatch_fallback_ms` key is removed alongside the
 verdict-fallback retry path rip authorised under Rule 2 §"What counts
 as a strike" (P1 A/B falsification at
 `reports/v2-p1-cli-pool-ab-20260507T141200Z.md`).
