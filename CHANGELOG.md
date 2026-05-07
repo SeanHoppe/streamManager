@@ -67,13 +67,17 @@ Highlights:
     `cli_dispatch_fallback_ms` key removed; precedent: subtractive
     timing-key change is allowed ONLY when the originating lever is
     ripped under Rule 2.
-  - Net LOC delta in same PR: −1123 lines vs `a7d0666` (target ≤ 0
-    per ADR-18 Rule 3; ~−700 P3 estimate exceeded).
+  - Net LOC delta after P3 PR alone: −1123 lines vs `a7d0666`
+    (target ≤ 0 per ADR-18 Rule 3; ~−700 P3 estimate exceeded).
+    Post-P4 the cumulative cycle delta lands at −1031 (P4 added
+    ~92 LOC for `WIRED_LEVER_LEDGER` codification + drift test).
 - **v2.0 P4 ship-gate** (this entry) — 32.2-min Tier 3 soak with
   `--cli-pool-size 2` (`reports/soak-20260507T174051Z.md`). Verdict
-  PASS; overall p95 9.115 s (improvement vs v1.9 14.96 s); RSS drift
-  +0.73 MB. Per-band p95: ALLOW 6.70 s, L2/L3 9.63 s, L4 17.70 s,
-  LM 14.12 s (LM watch closes a 3rd consecutive cycle, now 4th).
+  PASS; overall p95 9.115 s (improvement vs v1.9 11.064 s, −1.95 s);
+  RSS drift +0.73 MB. Per-band p95: ALLOW 6.70 s (vs v1.9 8.54 s),
+  L2/L3 9.63 s (vs v1.9 15.09 s), L4 17.70 s (vs v1.9 17.40 s,
+  +0.30 s within small-n oscillation band), LM 14.12 s (vs v1.9
+  15.11 s; LM watch closes 4th consecutive cycle).
   Soak summary emits the `WIRED_LEVER_LEDGER` inert-gate line:
   `Lever ledger: 0 wired levers — DORMANT-N gate inert`.
   Drift-detection test `tests/test_dormant_ledger_consistency.py`

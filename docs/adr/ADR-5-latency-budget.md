@@ -947,27 +947,34 @@ key cleanly per the ADR-18 amendment.
 | Metric        | v1.9 baseline | v2.0 ship-gate | Delta         |
 |---------------|---------------|----------------|---------------|
 | count         |  60           |  60            |  0            |
-| p50 wall      |  3.94 s       |  3.72 s        |  −0.22 s      |
-| p95 wall      | 14.96 s       |  9.12 s        |  −5.84 s      |
-| max wall      | 21.49 s       | 19.10 s        |  −2.39 s      |
-| mean wall     |  3.79 s       |  3.24 s        |  −0.55 s      |
+| p50 wall      |  3.787 s      |  3.718 s       |  −0.07 s      |
+| p95 wall      | 11.064 s      |  9.115 s       |  −1.95 s      |
+| max wall      | 18.548 s      | 19.097 s       |  +0.55 s      |
+| mean wall     |  3.804 s      |  3.236 s       |  −0.57 s      |
 
 p95 improvement vs v1.9 is meaningful but n=60 leaves the per-band
-tails sample-size-bound — see §"Caveats". Comparison source:
-v1.9 ship-gate row at §"v1.9 ship-gate baseline / Latency targets".
+tails sample-size-bound — see §"Caveats". Max regressed +0.55 s on
+a single tail event (n=60, max ≈ p98+); not statistically meaningful
+at this sample size. Comparison source: v1.9 ship-gate row at
+§"v1.9 ship-gate baseline / Latency targets".
 
 ### Per-band split
 
 | Path                 |   n  | v1.9 p95   | v2.0 p95   | Delta        |
 |----------------------|------|------------|------------|--------------|
-| ALLOW (routine)      |  49  |  6.98 s    |  6.70 s    |  −0.28 s     |
-| L2/L3 escalation     |   7  | 11.10 s    |  9.63 s    |  −1.47 s     |
-| L4 alignment         |   4  | 18.10 s    | 17.70 s    |  −0.40 s     |
-| LM (categorize)      |  10  | 18.60 s    | 14.12 s    |  −4.48 s     |
+| ALLOW (routine)      |  49  |  8.54 s    |  6.70 s    |  −1.84 s     |
+| L2/L3 escalation     |   7  | 15.09 s    |  9.63 s    |  −5.46 s     |
+| L4 alignment         |   4  | 17.40 s    | 17.70 s    |  +0.30 s     |
+| LM (categorize)      |  10  | 15.11 s    | 14.12 s    |  −0.99 s     |
 
-L4 alignment p95 stays in the structural-floor band described at
-§"v1.4 ship-gate baseline / Caveats" (Sonnet alignment + FR-OG-7
-synthesis bound by network + token output, not pool transport).
+L4 alignment p95 +0.30 s is within the v1.7→v1.8→v1.9 small-n
+oscillation band (n=4, p95 = max). L2/L3 −5.46 s is the largest
+band improvement; same n=7 small-sample caveat. LM −0.99 s closes
+the v1.6 LM-watch band a 4th consecutive cycle (now well below
+the 18 s ceiling). L4 alignment stays in the structural-floor band
+described at §"v1.4 ship-gate baseline / Caveats" (Sonnet alignment
++ FR-OG-7 synthesis bound by network + token output, not pool
+transport).
 
 ### ALLOW _evaluate_inner CLI residue breakout (v1.6 — 5 rows post-P3)
 
@@ -1011,10 +1018,13 @@ matches dict on every CI run.
 ### LOC delta vs v1.9.0 (`a7d0666`)
 
 `git --no-pager diff a7d0666..HEAD --stat -- src tests tools dashboard`
-end row: `11 files changed, 123 insertions(+), 1246 deletions(-)`.
-**Net: −1123 LOC.** ADR-18 Rule 3 budget (consolidation cycle ≤ 0
-net add) cleared by ~−1123. P3 estimate was ~−700; final beat target
-by ~60%.
+end row (post-P4 ship-gate code additions):
+`12 files changed, 215 insertions(+), 1246 deletions(-)`.
+**Net: −1031 LOC.** ADR-18 Rule 3 budget (consolidation cycle ≤ 0
+net add) cleared by ~−1031. The P4 ship-gate commit added ~92 LOC
+on top of P3's ~−1123 snapshot (`WIRED_LEVER_LEDGER` constant +
+`_format_lever_ledger()` helper + drift-detection test). P3 estimate
+was ~−700; final still beats target by ~47%.
 
 ### Lever-effect ledger update
 
