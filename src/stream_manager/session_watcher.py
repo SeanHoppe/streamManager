@@ -490,6 +490,12 @@ class SessionWatcher:
                     existing.last_seen = now_iso
                     if existing.state == "exited":
                         # Session re-appeared; treat as a new registration.
+                        # Refresh pid/cwd/entrypoint so subsequent liveness
+                        # sweeps probe the live process, not the prior dead
+                        # one (PR #102 review fix).
+                        existing.pid = pid
+                        existing.cwd = cwd
+                        existing.entrypoint = entrypoint
                         existing.state = "active"
                         existing.registered_at = now_iso
                         emit = True

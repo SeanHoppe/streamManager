@@ -249,6 +249,67 @@ def test_no_duplicate_registration(tmp_path: Path) -> None:
     assert ENVELOPE_EXITED not in bus.types()
 
 
+def test_re_register_updates_pid_and_metadata(tmp_path: Path) -> None:
+    """PR #102 review fix: re-registration after exit refreshes pid/cwd/entrypoint.
+
+    Without the fix, a re-appearing sessionId retains the dead PID's
+    SessionRecord, so the next liveness sweep probes the dead pid and
+    emits a spurious external_session_exited envelope.
+    """
+    sessions_dir = tmp_path / "sessions"
+    bus = _StubBus()
+    pid_alive = _PidController()
+    pid_alive.alive.add(3001)
+    watcher = _make_watcher(
+        bus=bus, sessions_dir=sessions_dir, pid_alive=pid_alive
+    )
+
+    # 1) Register with pid=3001.
+    _write_session_file(
+        sessions_dir,
+        pid=3001,
+        session_id="sess-recur",
+        cwd="/tmp/old-cwd",
+        entrypoint="claude -p old",
+    )
+    watcher.poll_once()
+    assert bus.types().count(ENVELOPE_REGISTERED) == 1
+
+    # 2) PID dies; sweep emits exited.
+    pid_alive.alive.discard(3001)
+    watcher.poll_once()
+    assert bus.types().count(ENVELOPE_EXITED) == 1
+
+    # 3) Same sessionId reappears with NEW pid + new cwd/entrypoint.
+    pid_alive.alive.add(3002)
+    _write_session_file(
+        sessions_dir,
+        pid=3002,
+        session_id="sess-recur",
+        cwd="/tmp/new-cwd",
+        entrypoint="claude -p new",
+    )
+    watcher.poll_once()
+
+    # Re-registration emits ENVELOPE_REGISTERED with NEW metadata.
+    registered_meta = bus.metadata_for(ENVELOPE_REGISTERED)
+    assert len(registered_meta) == 2
+    assert registered_meta[-1]["pid"] == 3002
+    assert registered_meta[-1]["cwd"] == "/tmp/new-cwd"
+    assert registered_meta[-1]["entrypoint"] == "claude -p new"
+
+    # SessionRecord reflects the live process.
+    snapshot = watcher.list_active_sessions()
+    assert len(snapshot) == 1
+    assert snapshot[0]["pid"] == 3002
+    assert snapshot[0]["state"] == "active"
+
+    # 4) One more poll: liveness sweep checks NEW pid (alive). No spurious
+    # exited emission on the old pid.
+    watcher.poll_once()
+    assert bus.types().count(ENVELOPE_EXITED) == 1  # still 1 — no spurious second exit
+
+
 def test_missing_fields_skipped(tmp_path: Path) -> None:
     """Session JSON missing required fields → no envelope, no exception."""
     sessions_dir = tmp_path / "sessions"
