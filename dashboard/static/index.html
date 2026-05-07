@@ -2395,6 +2395,186 @@ html[data-view="events"]  .view-group[data-view="events"]  { display:flex; }
 </div><!-- /view-scroll -->
 </div><!-- /view-group events -->
 
+<!-- ── v1.9 P2: EXTERNAL SESSIONS + BG TASKS PANEL ─────────────────── -->
+<div class="view-group" data-view="external">
+<div class="view-scroll">
+
+  <section class="ext-sessions-panel" id="extSessionsPanel">
+    <h3 class="ext-panel-title">[ EXTERNAL CLAUDE SESSIONS ]</h3>
+    <table class="ext-sessions-table" id="extSessionsTable">
+      <thead>
+        <tr>
+          <th>state</th>
+          <th>sessionId</th>
+          <th>cwd</th>
+          <th>entrypoint</th>
+          <th>last seen</th>
+        </tr>
+      </thead>
+      <tbody id="extSessionsBody">
+        <tr class="ext-empty"><td colspan="5">No external sessions registered.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="bg-tasks-panel" id="bgTasksPanel">
+    <h3 class="ext-panel-title">[ PENDING BACKGROUND TOKENS ]</h3>
+    <table class="bg-tasks-table" id="bgTasksTable">
+      <thead>
+        <tr>
+          <th>taskId</th>
+          <th>output</th>
+          <th>session</th>
+          <th>age</th>
+          <th>size (B)</th>
+        </tr>
+      </thead>
+      <tbody id="bgTasksBody">
+        <tr class="ext-empty"><td colspan="5">No pending background tokens.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</div><!-- /view-scroll -->
+</div><!-- /view-group external -->
+
+<script>
+// v1.9 P2: external sessions + bg tasks dashboard polling.
+// Read-only panels rendered from the SessionWatcher daemon thread via
+// /api/sessions/external (5s) and /api/sessions/bg-tasks (30s).
+(function(){
+  const sessBody = document.getElementById('extSessionsBody');
+  const taskBody = document.getElementById('bgTasksBody');
+  if (!sessBody || !taskBody) return;
+
+  function trunc(s, n){ s = String(s||''); return s.length > n ? s.slice(0,n) + '…' : s; }
+  function basename(p){
+    p = String(p||'');
+    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+    return i >= 0 ? p.slice(i+1) : p;
+  }
+  function relTime(iso){
+    if (!iso) return '—';
+    try {
+      const t = new Date(iso).getTime();
+      const dt = (Date.now() - t) / 1000;
+      if (!isFinite(dt) || dt < 0) return '—';
+      if (dt < 60) return Math.floor(dt) + 's';
+      if (dt < 3600) return Math.floor(dt/60) + 'm';
+      if (dt < 86400) return Math.floor(dt/3600) + 'h';
+      return Math.floor(dt/86400) + 'd';
+    } catch (e) { return '—'; }
+  }
+  function stateGlyph(s){
+    if (s === 'active') return '🟢 active';
+    if (s === 'exited') return '🔴 exited';
+    return s || '—';
+  }
+
+  async function fetchExternalSessions(){
+    try {
+      const r = await fetch('/api/sessions/external', {cache:'no-store'});
+      if (!r.ok) return;
+      const data = await r.json();
+      renderSessions(data.sessions || []);
+    } catch(e){ /* swallow — panel stays at last good state */ }
+  }
+  function renderSessions(rows){
+    if (!rows.length){
+      sessBody.innerHTML = '<tr class="ext-empty"><td colspan="5">No external sessions registered.</td></tr>';
+      return;
+    }
+    const html = rows.map(s => {
+      const sid = trunc(s.sessionId, 12);
+      const cwd = trunc(basename(s.cwd), 24);
+      const ep = trunc(basename(s.entrypoint), 24);
+      const last = relTime(s.last_seen);
+      return `<tr title="${s.sessionId}\n${s.cwd}\npid=${s.pid}\n${s.entrypoint}">
+        <td>${stateGlyph(s.state)}</td>
+        <td>${sid}</td>
+        <td>${cwd}</td>
+        <td>${ep}</td>
+        <td>${last}</td>
+      </tr>`;
+    }).join('');
+    sessBody.innerHTML = html;
+  }
+
+  async function fetchBgTasks(){
+    try {
+      const r = await fetch('/api/sessions/bg-tasks', {cache:'no-store'});
+      if (!r.ok) return;
+      const data = await r.json();
+      renderTasks(data.tasks || []);
+    } catch(e){ /* swallow */ }
+  }
+  function renderTasks(rows){
+    if (!rows.length){
+      taskBody.innerHTML = '<tr class="ext-empty"><td colspan="5">No pending background tokens.</td></tr>';
+      return;
+    }
+    const html = rows.map(t => {
+      const tid = trunc(t.taskId, 12);
+      const out = trunc(basename(t.output_path), 28);
+      const sess = trunc(t.originating_session, 12);
+      const age = relTime(t.start_time);
+      const size = (t.last_size_bytes || 0);
+      return `<tr title="${t.taskId}\n${t.output_path}\nsession=${t.originating_session}">
+        <td>${tid}</td>
+        <td>${out}</td>
+        <td>${sess}</td>
+        <td>${age}</td>
+        <td>${size}</td>
+      </tr>`;
+    }).join('');
+    taskBody.innerHTML = html;
+  }
+
+  // Initial load + periodic refresh.
+  fetchExternalSessions();
+  fetchBgTasks();
+  setInterval(fetchExternalSessions, 5000);
+  setInterval(fetchBgTasks, 30000);
+})();
+</script>
+<style>
+/* v1.9 P2: external sessions + bg task panels */
+.view-group[data-view="external"] .view-scroll{ padding:14px 16px; }
+.ext-sessions-panel, .bg-tasks-panel{
+  margin-bottom:18px;
+  border:1px solid var(--c-border, rgba(255,255,255,.12));
+  border-radius:6px;
+  padding:8px 10px;
+  background:rgba(0,0,0,.18);
+}
+.ext-panel-title{
+  font-family:var(--ff-mono, monospace);
+  font-size:11px;
+  letter-spacing:.04em;
+  margin:0 0 6px;
+  opacity:.78;
+}
+.ext-sessions-table, .bg-tasks-table{
+  width:100%;
+  border-collapse:collapse;
+  font-family:var(--ff-mono, monospace);
+  font-size:12px;
+}
+.ext-sessions-table th, .bg-tasks-table th,
+.ext-sessions-table td, .bg-tasks-table td{
+  padding:4px 6px;
+  border-bottom:1px solid var(--c-border, rgba(255,255,255,.06));
+  text-align:left;
+  vertical-align:top;
+}
+.ext-sessions-table th, .bg-tasks-table th{
+  font-weight:600;
+  opacity:.7;
+}
+.ext-empty td{ opacity:.55; font-style:italic; }
+html[data-view="external"] .view-group[data-view="external"]{ display:flex; }
+</style>
+
 </div><!-- /view-layout -->
 
   <!-- ── SETTINGS PANEL ─────────────────────────────────── -->
