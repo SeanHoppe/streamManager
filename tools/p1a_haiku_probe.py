@@ -96,10 +96,32 @@ def _strip_fences(s: str) -> str:
     return _FENCE.sub("", s).strip()
 
 
-def _invoke(content: str, system: str) -> tuple[str, float, str]:
+def _wrap_user_prompt(content: str) -> str:
+    """Match cli_governance.py:357 user_prompt construction exactly so the
+    probe and the soak hit Haiku with identical framing. Without this
+    wrapper the probe samples bare imperatives while the soak samples
+    wrapped imperatives, making verdicts not directly comparable
+    (PR #101 review fix).
+    """
+    return f"Evaluate this proposed action:\n\n{content[:4000]}"
+
+
+def _scrubbed_env() -> dict[str, str]:
+    """Strip BRIDGE_/governance env vars from the subprocess environment so
+    parent-process state cannot perturb Haiku verdicts (PR #101 review
+    fix). Pass-through for everything else (PATH, etc.) since `claude`
+    needs them.
+    """
+    out = {k: v for k, v in os.environ.items() if not k.startswith("BRIDGE_")}
+    out.pop("ANTHROPIC_API_KEY", None)  # CLI uses logged-in session, not env
+    return out
+
+
+def _invoke(content: str, system: str, *, wrap: bool) -> tuple[str, float, str]:
+    user_prompt = _wrap_user_prompt(content) if wrap else content
     cmd = [
         CLI_BIN,
-        "-p", content,
+        "-p", user_prompt,
         "--system-prompt", system,
         "--output-format", "json",
         "--model", MODEL,
@@ -116,6 +138,7 @@ def _invoke(content: str, system: str) -> tuple[str, float, str]:
             errors="replace",
             timeout=TIMEOUT_SECONDS,
             check=False,
+            env=_scrubbed_env(),
         )
     except subprocess.TimeoutExpired:
         return "", time.perf_counter() - t0, "timeout"
@@ -188,25 +211,26 @@ def _parse(stdout: str) -> tuple[str, float, str, str]:
     return action, confidence, reasoning, ""
 
 
-def run(samples_per_prompt: int) -> list[Sample]:
+def run(samples_per_prompt: int, *, wrap: bool) -> list[Sample]:
     system = _system_prompt()
     out: list[Sample] = []
     for cls, prompts in PROMPT_CLASSES.items():
         for prompt in prompts:
             for i in range(samples_per_prompt):
-                stdout, latency, err = _invoke(prompt, system)
+                stdout, latency, err = _invoke(prompt, system, wrap=wrap)
+                tag = f"[{cls}{'+wrap' if wrap else ''}]"
                 if err:
                     out.append(Sample(cls, prompt, "", 0.0, "", latency, err))
-                    print(f"[{cls}] {prompt[:60]!r} #{i+1}: ERROR {err}", flush=True)
+                    print(f"{tag} {prompt[:60]!r} #{i+1}: ERROR {err}", flush=True)
                     continue
                 action, confidence, reasoning, perr = _parse(stdout)
                 if perr:
                     out.append(Sample(cls, prompt, "", 0.0, "", latency, perr))
-                    print(f"[{cls}] {prompt[:60]!r} #{i+1}: PARSE_ERR {perr}", flush=True)
+                    print(f"{tag} {prompt[:60]!r} #{i+1}: PARSE_ERR {perr}", flush=True)
                     continue
                 out.append(Sample(cls, prompt, action, confidence, reasoning, latency))
                 print(
-                    f"[{cls}] {prompt[:60]!r} #{i+1}: {action} c={confidence:.2f} ({latency:.1f}s)",
+                    f"{tag} {prompt[:60]!r} #{i+1}: {action} c={confidence:.2f} ({latency:.1f}s)",
                     flush=True,
                 )
     return out
@@ -280,6 +304,13 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--samples-per-prompt", type=int, default=DEFAULT_SAMPLES)
     p.add_argument("--out", type=pathlib.Path, default=None)
+    p.add_argument(
+        "--wrap",
+        choices=("on", "off", "both"),
+        default="both",
+        help="on=match cli_governance.py wrap; off=bare imperatives; "
+        "both=A/B compare in one report (default).",
+    )
     args = p.parse_args()
 
     if args.out is None:
@@ -287,14 +318,36 @@ def main() -> int:
         args.out = ROOT / "reports" / f"p1a-corpus-haiku-verdicts-{ts}.md"
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
+    total_per_run = sum(len(v) for v in PROMPT_CLASSES.values()) * args.samples_per_prompt
+    runs = []
+    if args.wrap in ("off", "both"):
+        runs.append(("bare", False))
+    if args.wrap in ("on", "both"):
+        runs.append(("wrapped", True))
+
     print(
         f"Probing Haiku ({MODEL}); samples_per_prompt={args.samples_per_prompt}; "
         f"prompts={sum(len(v) for v in PROMPT_CLASSES.values())}; "
-        f"total={sum(len(v) for v in PROMPT_CLASSES.values()) * args.samples_per_prompt}",
+        f"runs={[r[0] for r in runs]}; "
+        f"total_per_run={total_per_run}; grand_total={total_per_run * len(runs)}",
         flush=True,
     )
-    samples = run(args.samples_per_prompt)
-    write_report(samples, args.out)
+
+    all_samples: list[Sample] = []
+    for label, wrap in runs:
+        # Tag the prompt_class with the wrap-mode so the report aggregate
+        # splits by wrap variant.
+        before = len(all_samples)
+        run_samples = run(args.samples_per_prompt, wrap=wrap)
+        # Re-tag class names to include the wrap mode for aggregate splitting.
+        suffix = f"__{label}"
+        for s in run_samples:
+            s.prompt_class = s.prompt_class + suffix
+        all_samples.extend(run_samples)
+        print(f"\n--- finished {label} run ({len(run_samples) - 0} samples, "
+              f"started at idx {before}) ---\n", flush=True)
+
+    write_report(all_samples, args.out)
     return 0
 
 
