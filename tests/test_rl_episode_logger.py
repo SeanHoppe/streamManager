@@ -162,3 +162,20 @@ def test_logger_rejects_unknown_source(tmp_path: Path) -> None:
     with EpisodeLogger(db) as logger:
         with pytest.raises(ValueError):
             logger.record_decision(_envelope(), source="unknown")
+
+
+def test_ingest_skips_malformed_json_lines(tmp_path: Path) -> None:
+    db = tmp_path / "rl_episodes.db"
+    cassette = tmp_path / "soak_cassette_20260507T120000Z.jsonl"
+    with cassette.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps(_envelope(trace_id="trace-0")) + "\n")
+        fh.write("{ this is not valid json\n")
+        fh.write("\n")  # blank line — also skipped
+        fh.write(json.dumps(_envelope(trace_id="trace-1")) + "\n")
+
+    inserted = _ingest_jsonl(db, cassette, source="cassette", cycle_tag=None)
+    assert inserted == 2
+
+    conn = sqlite3.connect(str(db))
+    count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    assert count == 2

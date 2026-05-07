@@ -17,7 +17,6 @@ import json
 import os
 import sqlite3
 import sys
-import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -164,7 +163,13 @@ def _ingest_jsonl(
                 line = line.strip()
                 if not line:
                     continue
-                envelope = json.loads(line)
+                try:
+                    envelope = json.loads(line)
+                except json.JSONDecodeError:
+                    # Malformed line — skip silently (matches the
+                    # IntegrityError + SelfMonitorRefusal pattern: do
+                    # not crash a bulk ingest on one bad row).
+                    continue
                 try:
                     logger.record_decision(
                         envelope,
