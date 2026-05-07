@@ -6,6 +6,92 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-05-07
+
+Tagged ship of the v2.0 consolidation cycle. See `docs/v2.1-backlog.md`
+for the seed list and `docs/adr/ADR-5-latency-budget.md` §"v2.0
+ship-gate baseline" for the P4 numbers.
+
+**ADR-18 minted — cycle-discipline rules now in force for v2.1+.**
+Five rules: (1) FROZEN/EVOLVING/EXPERIMENTAL surface freeze, (2)
+DORMANT-N falsify-before-extend (cumulative dormant cycle counter
+drives WARN/BLOCK signals), (3) consolidation-cycle LOC budget
+(deletion-positive net delta required), (4) phase budget hard cap
+per cycle, (5) backlog hard cap. See
+`docs/adr/ADR-18-mvp-surface-freeze.md`.
+
+**ADR-17 amendment — Tier 1.5 smoke soak + trigger matrix.** Binary
+gate (pool warmed + clean shutdown) for fast-feedback verification
+between Tier 1 unit tests and the full Tier 3 ship-gate soak.
+
+Highlights:
+
+- **v2.0 P0 cycle frame**
+  ([PR #105](https://github.com/SeanHoppe/streamManager/pull/105)) —
+  ADR-18 minted; consolidation cycle scoped against v1.9.0 baseline
+  (`a7d0666`). DORMANT-3 disposition triggered for Haiku fastpath
+  router; DORMANT-2 lever flagged for falsify-before-extend.
+- **v2.0 P1 cli_pool worker A/B**
+  ([PR #114](https://github.com/SeanHoppe/streamManager/pull/114)) —
+  exercised `worker_recycle_every_n` ∈ {None, 1, 5, 10} to test the
+  warm-process-reuse revival hypothesis for the verdict-fallback lever.
+  **Falsified.** All four cadences produced 0% fallback fire rate;
+  arm B (every-turn recycle) regressed ALLOW p95 ~+2 s without
+  trading for fire rate. Per ADR-18 Rule 2 §"What counts as a strike",
+  falsification grants anticipatory rip authority for the
+  verdict-fallback lever in the same cycle. Source:
+  `reports/v2-p1-cli-pool-ab-20260507T141200Z.md`.
+- **v2.0 P2 Tier 1.5 codification**
+  ([PR #113](https://github.com/SeanHoppe/streamManager/pull/113)) —
+  ADR-17 amendment + soak-trigger matrix codifying the Tier 1.5 smoke
+  soak as a pre-Tier-3 sanity gate.
+- **v2.0 P3 lever rips — Haiku fastpath + verdict-fallback**
+  ([PR #119](https://github.com/SeanHoppe/streamManager/pull/119)) —
+  both wired levers removed in single PR:
+  - **Haiku fastpath router** (DORMANT-3 mandatory rip): unread
+    `is_ambiguous_block` / `is_hitl_synthesis` consumer at the pre-CLI
+    dispatch site, `RoutingDecision.fallback_model_id` field, and
+    `model_router.route()` L4 sub-band logic deleted. FROZEN
+    content-detection helpers (`_looks_ambiguous_block`,
+    `_looks_hitl_synthesis`, `_AMBIGUOUS_BLOCK_PATTERNS`) preserved.
+  - **Verdict-fallback retry path** (DORMANT-2 + P1 anticipatory
+    rip authority): `cli_governance.py` retry-trigger branches,
+    `_fallback_confidence_floor()`, `_fallback_mode()`,
+    `BRIDGE_L4_FALLBACK_*` env constants, `governance_fallback_routed`
+    + `governance_envelope_missing_confidence` envelope emission, and
+    `cli_dispatch_fallback_ms` instrumentation key all removed. Bus
+    envelope schemas retained on disk for cassette + historical-report
+    parsing.
+  - **ADR-18 §"Amendments" entry — first-ever subtractive change to
+    `engine._last_phase_timings_ms`** (FROZEN dict, ADR-18 Rule 1).
+    `cli_dispatch_fallback_ms` key removed; precedent: subtractive
+    timing-key change is allowed ONLY when the originating lever is
+    ripped under Rule 2.
+  - Net LOC delta in same PR: −1123 lines vs `a7d0666` (target ≤ 0
+    per ADR-18 Rule 3; ~−700 P3 estimate exceeded).
+- **v2.0 P4 ship-gate** (this entry) — 32.2-min Tier 3 soak with
+  `--cli-pool-size 2` (`reports/soak-20260507T174051Z.md`). Verdict
+  PASS; overall p95 9.115 s (improvement vs v1.9 14.96 s); RSS drift
+  +0.73 MB. Per-band p95: ALLOW 6.70 s, L2/L3 9.63 s, L4 17.70 s,
+  LM 14.12 s (LM watch closes a 3rd consecutive cycle, now 4th).
+  Soak summary emits the `WIRED_LEVER_LEDGER` inert-gate line:
+  `Lever ledger: 0 wired levers — DORMANT-N gate inert`.
+  Drift-detection test `tests/test_dormant_ledger_consistency.py`
+  asserts ADR-18 HTML comment matches the `tools/soak_driver` dict
+  on every CI run.
+
+**Lever-effect outcome — ledger empty.** v1.7-vintage Haiku fastpath
++ v1.7/v1.8/v1.9 verdict-fallback removed; `WIRED_LEVER_LEDGER_COUNT`
+2 → 0. The DORMANT-N gate stays in the soak driver schema so future
+re-introductions inherit the cycle-discipline rule.
+
+**Open investigation carried into v2.1**: the gap between P1a
+fresh-process Haiku BLOCK (100% on wrapped destructive corpus) and
+soak ALLOW (100% on the same corpus). Likely investigation:
+instrument `cli_governance.py` request-build path to confirm
+wrapping equivalence between fresh-process probe and soak driver.
+Out of scope for v2.0 per ADR-18 Rule 4 (phase cap).
+
 ## [1.9.0] — 2026-05-07
 
 Tagged ship of the v1.9 cycle. See `docs/v2.0-backlog.md` for the seed
