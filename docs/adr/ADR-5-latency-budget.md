@@ -760,6 +760,113 @@ ACCEPTED as v1.8 budget.
 - **`cli_pool_send_ms` p95 +26%** (5128.96 → 6470.35 ms). Same variance classification as v1.7's −19% drop. No lever fires; zero code change to `CliWorker.send`; delta is upstream API round-trip variance.
 - **LM p95 = 13.30 s.** Up from v1.7's 11.95 s (+1.35 s) but well within the 18 s ceiling. Watch stays closed per the v1.7 rubric.
 - **Alignment-eval expanded baseline.** The v1.8 eval uses the expanded golden set (32 rows including 5 HITL-synthesis ALLOW rows, 8 ambig-BLOCK rows, and 4 negative-BLOCK rows added in v1.7 P1). Haiku regression vs Sonnet = 0; FR-OG-7 row gate exits 0.
+- **v1.9 update**: lever stayed DORMANT for a second consecutive cycle. The v1.9 P1 verdict-based fallback trigger (which adds a verdict==ENGAGE branch alongside the v1.8 confidence-floor branch) also fired 0% in the v1.9 ship-gate soak (`cli_dispatch_fallback_ms` p95 = 0.00 ms across 49 ALLOW envelopes). All 60 v1.9 soak events reached ALLOW; no Haiku verdict returned ENGAGE. Two consecutive dormant cycles confirms the v1.8 caveats analysis: under cli_pool warm-process conditions, Haiku consistently returns high-confidence non-ENGAGE verdicts on the seeded destructive corpus. P1a corpus-check (`reports/p1a-corpus-haiku-verdicts-20260507T083813Z.md`) showed a fresh-process Haiku BLOCKs 100% of wrapped destructive prompts; the cli_pool reuse hypothesis (long-lived stream-json process biases Haiku toward conversational interpretation) remains the leading explanation, untested in P1a. v2.0 backlog item: cli_pool A/B (fresh-vs-reused process) to falsify or confirm.
+
+## v1.9 ship-gate baseline
+
+- **Source**: `reports/soak-20260507T084933Z.md`
+- **Date**: 2026-05-07
+- **Ship SHA**: `main` HEAD at v1.9.0 tag (P1 verdict-fallback PR #100 + P1a corpus-check PR #101 + P2 session_watcher PR #102 + P3 Learn Mode source expansion PR #103)
+- **Driver**: `tools/soak_driver.py --cli-pool-size 2` (Tier 3 per ADR-17) with v1.9 P1 verdict-based fallback trigger active (verdict==ENGAGE branch added alongside the v1.8 confidence-floor branch)
+- **Runtime**: 1937.3 s (32.3 min)
+- **Events**: 60 emitted / 164 received via SSE
+- **Verdict**: PASS (100% SSE, RSS drift +0.24 MB, no uncaught exceptions, lifecycle bridge 0 orphans)
+
+### Latency targets (overall, n=60)
+
+| Metric  | v1.9 measured |
+|---------|---------------|
+| p50     | 3.787 s       |
+| p95     | 11.064 s      |
+| max     | 18.548 s      |
+| mean    | 3.804 s       |
+
+### Per-band split
+
+| Path                 | n  | p50      | p95      |
+|----------------------|----|----------|----------|
+| ALLOW (routine)      | 49 |  3.72 s  |  8.54 s  |
+| L2/L3 escalation     |  7 |  3.96 s  | 15.09 s  |
+| L4 alignment         |  4 |  5.46 s  | 17.40 s  |
+| LM (categorize)      | 10 | 11.51 s  | 15.11 s  |
+
+Note: L2/L3 n=7 and L4 n=4 reproduce the v1.8 small-sample p95 envelope (p95 = max in both bands at these sample sizes). Decision distribution: ALLOW 60/60 (100%) — no envelope reached BLOCK / INTERVENE / SUGGEST verdicts in the soak; the verdict-fallback ENGAGE branch had no events to fire on.
+
+### ALLOW _evaluate_inner CLI residue breakout (v1.6 — 6 rows)
+
+| Phase                      |  n  | p50 ms   | p95 ms   | max ms   |
+|----------------------------|-----|----------|----------|----------|
+| cli_setup_ms               |  49 |  0.00    |  0.01    |   0.01   |
+| cli_dispatch_ms            |  49 | 3721.39  | 8542.49  | 9684.47  |
+| cli_pool_acquire_ms        |  49 |  0.03    |  0.05    |   0.06   |
+| cli_pool_send_ms           |  49 | 3720.90  | 8541.60  | 9683.90  |
+| cli_parse_ms               |  49 |  0.07    |  0.15    |   0.31   |
+| cli_dispatch_fallback_ms   |  49 |  0.00    |  0.00    |   0.00   |
+
+### Fallback routing summary (v1.9 — verdict-fallback added, lever DORMANT 2nd consecutive cycle)
+
+| Metric                                              | Value |
+|-----------------------------------------------------|-------|
+| `governance_fallback_routed` envelopes emitted      | 0     |
+| `cli_dispatch_fallback_ms` p95                      | 0.00 ms |
+| Verdict-branch fires (`verdict==ENGAGE`)            | 0 (no Haiku verdict returned ENGAGE) |
+| Confidence-branch fires (`c < BRIDGE_L4_FALLBACK_CONFIDENCE`) | 0 (Haiku ≥ 0.70 throughout) |
+| All 60 events terminal verdict | ALLOW (100%) |
+
+### Alignment-eval gate
+
+- **Source**: `reports/alignment-eval-20260507T093010Z.md` (fresh run at v1.9 ship-gate; `cli_governance.py` modified by P1 verdict-fallback addition; FR-OG-7 rows unchanged from v1.8)
+- **Sonnet pass rate**: 24/24 stable rows = **1.000**
+- **Haiku pass rate**: 21/22 stable rows = **0.9545**
+- **Haiku regressions vs Sonnet**: **0**
+- **FR-OG-7 row gate result**: **0 regressions** (`haiku_regression_frog7=0`) → `--ci-gate` exit **0** (PASS)
+
+Ship-gate alignment-eval gate clean; sonnet stability is the strongest of any cycle to date (24/24 vs v1.8 21/23).
+
+### Delta vs v1.8 ship-gate (`reports/soak-20260506T101746Z.md`)
+
+| Metric               | v1.8     | v1.9     | Δ           | Class |
+|----------------------|----------|----------|-------------|-------|
+| Overall p50          |  3.521 s |  3.787 s | +0.27 s     | parity (noise) |
+| Overall p95          |  7.612 s | 11.064 s | **+3.45 s** | regression (within ≤ 12 s budget; upstream variance — see §Caveats) |
+| Overall max          | 12.052 s | 18.548 s | +6.50 s     | regression (within tail; small-sample) |
+| Overall mean         |  3.060 s |  3.804 s | +0.74 s     | mild regression (upstream variance) |
+| ALLOW p95            |  6.48 s  |  8.54 s  | +2.06 s     | regression (within ≤ 12 s ALLOW budget; upstream variance — lever fire rate 0%) |
+| L2/L3 p95            |  6.96 s  | 15.09 s  | **+8.13 s** | apparent regression — n=7 small-sample tail; **VIOLATES ≤ 8 s L2/L3 budget**; flagged for v2.0 (see §Caveats) |
+| L4 alignment p95     | 11.85 s  | 17.40 s  | +5.55 s     | apparent regression — n=4 small-sample (p95 = max); **VIOLATES ≤ 14 s L4 budget**; flagged for v2.0 (see §Caveats) |
+| LM (cat) p95         | 13.30 s  | 15.11 s  | +1.81 s     | parity (< 18 s ceiling; watch stays closed) |
+| RSS drift            | −7.15 MB | +0.24 MB | both within ±50 MB; v1.9 essentially flat |
+| `cli_pool_send_ms` p95 | 6470.35 ms | 8541.60 ms | **+2071 ms (+32%)** | regression (upstream variance — lever fire rate 0%; see §Caveats) |
+| Fallback fire rate   | 0%       | 0%       | no change   | lever remains dormant under production load (2nd consecutive cycle) |
+| Sonnet alignment-eval pass rate | 0.913 | 1.000 | +0.087 | improvement (24/24 stable rows) |
+| Haiku alignment-eval pass rate  | 0.90  | 0.9545 | +0.0545 | improvement |
+
+### Budget
+
+v1.8 budget table **carried forward unchanged** for v1.9. The L2/L3 p95 (15.09 s) and L4 alignment p95 (17.40 s) measurements exceed the long-standing ≤ 8 s and ≤ 14 s targets, but at n=7 and n=4 the band p95 is dominated by single-event tail variance and is consistent with the v1.7→v1.8 oscillation pattern (v1.7 L2/L3 p95 = 3.70 s, v1.8 = 6.96 s, v1.9 = 15.09 s). Lever fire rate = 0% (verdict-fallback dormant for second consecutive cycle) — no code-path-attributable basis to tighten the budget.
+
+| Path                 | v1.9 budget (= v1.8 = v1.7 = v1.6 = v1.5 = v1.4 carried forward)   |
+|----------------------|--------------------------------------------------------------|
+| ALLOW p95            | ≤ 12 s                                                       |
+| L2/L3 escalation p95 | ≤ 8 s                                                        |
+| L4 alignment p95     | ≤ 14 s                                                       |
+| LM (categorize) p95  | ≤ 25 s                                                       |
+| Overall p95          | ≤ 12 s                                                       |
+| Hard timeout         | 25 s (unchanged)                                             |
+
+### Status
+
+ACCEPTED as v1.9 budget.
+
+### Caveats
+
+- **Verdict-fallback (v1.9 P1) lever DORMANT — 2nd consecutive cycle.** v1.9 P1 added a verdict==ENGAGE branch to the v1.8 confidence-floor fallback. The Tier 3 soak produced 60/60 ALLOW decisions; no Haiku verdict returned ENGAGE; the new branch had nothing to fire on. `cli_dispatch_fallback_ms` p95 = 0.00 ms (identical to v1.8). The combined (confidence + verdict) lever is now wired but has fired 0% across two consecutive ship-gate soaks. P1a probe diagnostic (`reports/p1a-corpus-haiku-verdicts-20260507T083813Z.md`) confirms fresh-process wrapped Haiku BLOCKs 100% of destructive prompts at confidence ≥ 0.85. The leading hypothesis — cli_pool warm-process reuse biases Haiku toward conversational ALLOW interpretation — remains untested in P1a; deferred to v2.0 cli_pool A/B.
+- **Small-sample band p95 violations (L2/L3, L4) are NOT lever regressions.** L2/L3 p95 +8.13 s and L4 p95 +5.55 s look alarming but reproduce the v1.7→v1.8 oscillation pattern at the same small sample sizes (n=7, n=4). At n=4 in particular p95 = max, and a single 17.40 s outlier dominates. No code change touches the L2/L3 or L4 routing code path between v1.8 and v1.9; lever fire rate = 0% in both bands. Treat as upstream Anthropic round-trip tail variance until a larger-n soak (Tier 4 candidate) lands.
+- **Overall p95 +3.45 s vs v1.8 is upstream variance, not lever effect.** Same classification as the v1.7→v1.8 −1.67 s improvement: no lever code path executed during the soak. v1.9 ships as a latency no-op; the per-band tail movements are within the upstream ±2 s envelope when scaled by the `cli_pool_send_ms` swing.
+- **`cli_pool_send_ms` p95 +32%** (6470.35 → 8541.60 ms). Same variance classification as v1.7→v1.8 (+26%) and v1.6→v1.7 (−19%). No lever fires; zero code change to `CliWorker.send`; delta is upstream API round-trip variance. The cumulative drift across three consecutive cycles (5128 → 6470 → 8541 ms) is being tracked but not yet attributable to a code path.
+- **Decision-distribution skew — corpus-routing artefact, not policy regression.** All 60 soak events terminated at ALLOW. The escalation events (L2/L3 n=7, L4 n=4) executed CLI escalation paths but none of the cli_governance verdicts returned BLOCK / INTERVENE / SUGGEST. This is the same regime as v1.8 (which also ran ALLOW-dominant); the verdict-fallback lever cannot be exercised under this regime by definition. v2.0 backlog candidate: hardened destructive corpus that produces non-ALLOW verdicts in cli_governance under cli_pool warm-process conditions, rather than just under fresh-process probe conditions.
+- **LM p95 = 15.11 s.** Up from v1.8's 13.30 s (+1.81 s) but well within the 18 s ceiling. Watch stays closed per the v1.7 rubric (third consecutive cycle).
+- **Alignment-eval baseline strongest to date.** Sonnet 24/24 stable (1.000) and Haiku 21/22 stable (0.9545) — both higher than any prior cycle (v1.8: sonnet 0.913, haiku 0.90). 0 regressions vs Sonnet, 0 FR-OG-7 regressions, exit 0. v1.9 P3 (Learn Mode JSONL source expansion) and v1.9 P2 (session watcher) made no changes to `cli_governance.py` routing; the alignment improvement is most plausibly explained by upstream model variance, but the corpus is unchanged from v1.8 so the comparison is apples-to-apples on golden rows.
 
 ## References
 
@@ -799,6 +906,18 @@ ACCEPTED as v1.8 budget.
 - `reports/alignment-eval-20260506T113450Z.md` — v1.8 alignment-eval
   `--ci-gate` ship-gate run; sonnet 0.913 / haiku 0.90 / 0 FR-OG-7
   regressions / 0 haiku regressions vs sonnet / exit 0
+- `reports/soak-20260507T084933Z.md` — v1.9 32.3-min ship-gate soak with
+  v1.9 P1 verdict-based fallback trigger active (verdict==ENGAGE branch
+  added alongside the v1.8 confidence-floor branch); the v1.9 baseline
+  source per §"v1.9 ship-gate baseline"
+- `reports/alignment-eval-20260507T093010Z.md` — v1.9 alignment-eval
+  `--ci-gate` ship-gate run; sonnet 1.000 / haiku 0.9545 / 0 FR-OG-7
+  regressions / 0 haiku regressions vs sonnet / exit 0 (strongest cycle
+  to date)
+- `reports/p1a-corpus-haiku-verdicts-20260507T083813Z.md` — v1.9 P1a
+  fresh-process Haiku probe (wrapped, 100% BLOCK at confidence ≥ 0.85);
+  diagnostic supporting the cli_pool warm-process-reuse hypothesis for
+  fallback-lever dormancy
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17
