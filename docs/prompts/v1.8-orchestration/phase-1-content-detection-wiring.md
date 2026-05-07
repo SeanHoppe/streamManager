@@ -1,5 +1,15 @@
 You are implementing **Phase P1 — Content-detection wiring** from the streamManager v1.8 cycle.
 
+> **Historical record — partially ripped at v2.0 P3.** The pre-CLI
+> dispatch-site consumer of `is_ambiguous_block` / `is_hitl_synthesis`
+> (the route() kwargs) was decommissioned at v2.0 P3 — see
+> `docs/adr/ADR-18-mvp-surface-freeze.md` §"Decommissioned".
+> Content-detection helpers (`_looks_ambiguous_block`,
+> `_looks_hitl_synthesis`, `_AMBIGUOUS_BLOCK_PATTERNS`) wired by this
+> phase remain FROZEN per ADR-18 §"Initial classification" and may be
+> reused by future work. This prompt is preserved for history; do not
+> use it as a do-not-touch reference for current work.
+
 ## Branch + base
 
 - Base: `main` with v1.8 P0 (`docs/v1.8-cycle-frame`) merged.

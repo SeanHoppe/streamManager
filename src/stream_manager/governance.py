@@ -474,13 +474,9 @@ class GovernanceEngine:
         if og7 is not None:
             # Route the override decision into a layer for cost accounting
             # and convergence monitoring, just like the normal codepath.
-            is_ambiguous_block = (
-                og7.action == "BLOCK" and og7.confidence < 0.85
-            )
             self._last_routing = route(
                 source=og7.source,
                 confidence=og7.confidence,
-                is_ambiguous_block=is_ambiguous_block,
             )
             # v1.6 P1: FR-OG-7 hit does NOT traverse the CLI — pre-populate
             # the five residue keys with 0.0 so soak rows stay dense.
@@ -544,15 +540,10 @@ class GovernanceEngine:
             decision = self._apply_profile_constraints(decision, profile, msg.content)
 
         # Phase 4 / NFR-M1-M3: classify the final decision into a routing
-        # layer for cost accounting + convergence monitoring. is_ambiguous_block
-        # is derived here (caller does not need to compute it).
-        is_ambiguous_block = (
-            decision.action == "BLOCK" and decision.confidence < 0.85
-        )
+        # layer for cost accounting + convergence monitoring.
         self._last_routing = route(
             source=decision.source,
             confidence=decision.confidence,
-            is_ambiguous_block=is_ambiguous_block,
         )
         sub_timings["routing_dispatch"] = (_pc() - _t) * 1000.0
         # v1.6 P1: ensure all five CLI residue keys are present on the
@@ -581,9 +572,6 @@ class GovernanceEngine:
         branches (FR-OG-7 hit, FR-AR-6 blocked-op, precheck-hit,
         graph-high-confidence-hit, default ALLOW with no CLI).
 
-        v1.7 P2 adds `cli_dispatch_fallback_ms` (Haiku→Sonnet fallback
-        wall-clock; 0.0 unless the L4 sub-band fires the retry).
-
         Soak rows must be dense across all branches so percentile math
         is honest about the precheck-hit ratio (ADR-5 v1.5 §"Caveats").
         Uses setdefault so a CLI-traversed branch that already populated
@@ -594,7 +582,6 @@ class GovernanceEngine:
         sub.setdefault("cli_pool_acquire_ms", 0.0)
         sub.setdefault("cli_pool_send_ms", 0.0)
         sub.setdefault("cli_parse_ms", 0.0)
-        sub.setdefault("cli_dispatch_fallback_ms", 0.0)
 
     def _apply_profile_constraints(
         self,
@@ -1030,29 +1017,15 @@ class GovernanceEngine:
             self.maturity is not None
             and _looks_alignment_action(msg.content)
         )
-        # v1.7 P2: pre_routing carries an optional fallback_model_id —
-        # None for FR-OG-7 alignment (Sonnet only) and for the v1.7 default
-        # state, Sonnet when the L4 sub-band picks the Haiku fastpath.
-        # v1.8 P1: is_ambiguous_block / is_hitl_synthesis are now computed
-        # from content + HITL state. Routing precedence (alignment beats
-        # the sub-band) is enforced inside `model_router.route()` — flags
-        # are passed raw, no call-site precedence check.
-        pre_is_ambiguous_block = _looks_ambiguous_block(msg.content)
-        pre_is_hitl_synthesis = _looks_hitl_synthesis(
-            msg.content, self.hitl, self._desktop_pause_active
-        )
         pre_routing = route(
             source="cli",
             confidence=0.0,
             requires_alignment=pre_requires_alignment,
-            is_ambiguous_block=pre_is_ambiguous_block,
-            is_hitl_synthesis=pre_is_hitl_synthesis,
         )
         cli_model_id = pre_routing.model_id or get_l2_model()
         cli_decision = self._maybe_cli_evaluate(
             cli_content,
             cli_model_id,
-            fallback_model_id=pre_routing.fallback_model_id,
         )
         if cli_decision is not None:
             decision = self._apply_mode(
@@ -1088,7 +1061,6 @@ class GovernanceEngine:
         self,
         content: str,
         model_id: str | None = None,
-        fallback_model_id: str | None = None,
     ):
         # v1.6 P1: residue-level wall-clock instrumentation. cli_setup_ms
         # spans entry → just before CliGovernor.evaluate(...) (covers
@@ -1096,8 +1068,7 @@ class GovernanceEngine:
         # build on first call). The four CLI-side keys
         # (cli_dispatch_ms / cli_pool_acquire_ms / cli_pool_send_ms /
         # cli_parse_ms) are populated by CliGovernor.evaluate when we
-        # thread `sub_timings=sub` through. v1.7 P2 adds
-        # `cli_dispatch_fallback_ms` populated by the same path.
+        # thread `sub_timings=sub` through.
         from time import perf_counter as _pc
         _t_setup_start = _pc()
         # `_sub_timings_in_flight` is set by _evaluate_inner before this
@@ -1120,7 +1091,6 @@ class GovernanceEngine:
             sub.setdefault("cli_pool_acquire_ms", 0.0)
             sub.setdefault("cli_pool_send_ms", 0.0)
             sub.setdefault("cli_parse_ms", 0.0)
-            sub.setdefault("cli_dispatch_fallback_ms", 0.0)
             return None
         if self._cli_governor is None:
             # Phase 7: thread bus + session_id through so CliGovernor can
@@ -1144,7 +1114,6 @@ class GovernanceEngine:
             content,
             model_id=chosen,
             sub_timings=sub,
-            fallback_model_id=fallback_model_id,
         )
 
     def _apply_mode(self, decision: GovDecision) -> GovDecision:

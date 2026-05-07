@@ -1,5 +1,12 @@
 You are implementing **Phase P4 — v1.9 ship-gate + ADR-5 v1.9 baseline + lever-effect measurement** from the streamManager v1.9 cycle.
 
+> **Historical record.** Symbols protected by this ship-gate's
+> do-not-touch list — verdict-fallback retry path + Haiku fastpath
+> router consumer — were decommissioned at v2.0 P3 after the v2.0 P1
+> A/B falsified the warm-process-reuse revival hypothesis. See
+> `docs/adr/ADR-18-mvp-surface-freeze.md` §"Decommissioned" +
+> §"Amendments". This prompt is preserved for history.
+
 ## Branch + base
 
 - Base: `main` with v1.9 P1 + P2 + P3 all merged.

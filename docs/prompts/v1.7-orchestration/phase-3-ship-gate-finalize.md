@@ -1,5 +1,12 @@
 You are implementing **Phase P3 — v1.7 ship-gate + ADR-5 v1.7 baseline + LM watch resolution** from the streamManager v1.7 cycle.
 
+> **Historical record.** Symbols protected by this ship-gate's
+> do-not-touch list — Haiku fastpath router + verdict-fallback retry
+> path — were decommissioned at v2.0 P3. See
+> `docs/adr/ADR-18-mvp-surface-freeze.md` §"Decommissioned" for the
+> current authoritative FROZEN list. This prompt is preserved for
+> history.
+
 ## Branch + base
 
 - Base: `main` with P2 (`feat/v1.7-haiku-fastpath-router`) merged.

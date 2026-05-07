@@ -1,5 +1,17 @@
 You are implementing **Phase P2 — Haiku fastpath router** from the streamManager v1.7 cycle.
 
+> **Historical record — ripped at v2.0 P3.** The Haiku fastpath router
+> wired by this phase (`is_ambiguous_block` / `is_hitl_synthesis`
+> `route()` consumer, `RoutingDecision.fallback_model_id`,
+> `BRIDGE_L4_FALLBACK_*` constants, `cli_dispatch_fallback_ms` timing
+> key, `governance_fallback_routed` envelope emission,
+> `_fallback_confidence_floor`) was decommissioned at v2.0 P3 — see
+> `docs/adr/ADR-18-mvp-surface-freeze.md` §"Decommissioned".
+> Content-detection helpers (`_looks_ambiguous_block`,
+> `_looks_hitl_synthesis`, `_AMBIGUOUS_BLOCK_PATTERNS`) remain FROZEN
+> per ADR-18 §"Initial classification". This prompt is preserved for
+> history; do not use it as a do-not-touch reference for current work.
+
 ## Branch + base
 
 - Base: `main` with P1 (`feat/v1.7-alignment-eval-harness`) merged AND green baseline committed.
