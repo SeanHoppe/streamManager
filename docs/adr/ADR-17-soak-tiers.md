@@ -113,6 +113,87 @@ on legacy CI runs without Sonnet quota.
 
 See `docs/v1.3-soak-lm-extension.md` for the full design + DOD.
 
+## v2.0 Tier 1.5 amendment — smoke soak (per-PR; pool-warmup gate)
+
+**Status:** Additive amendment; ratified 2026-05-07 with v2.0 P2.
+
+A fast-soak variant sits between Tier 1 (replay, 0 quota) and Tier 3
+(32 min, full ship-gate). Tier 1.5 is a **parameter set**, not a new
+flag — `tools/soak_driver.py` flag surface is unchanged.
+
+### Invocation
+
+```
+python tools/soak_driver.py --cli-pool-size 2 --total-events 6 --total-seconds 120
+```
+
+- Wall-clock: ~90 s.
+- Token cost: ~6 real `claude -p` calls (Haiku at typical L4 alignment
+  band; mix may shift if `_L2_L3_TRIGGER` corpus selects different
+  bands).
+- Real CLI calls only — does NOT use `--cli-replay`. Tier 1 covers
+  cassette-replay regression. Tier 1.5 covers real-CLI plumbing +
+  pool-warmup regression, at a fraction of Tier 3 cost.
+
+### Gate semantics
+
+**Binary gate** — pool warmed AND clean shutdown.
+
+- PASS criteria: `cli_pool_send_ms` p95 finite (i.e. pool warmed at
+  least one worker), driver exits 0, no panics in soak summary.
+- Tier 1.5 is **NOT** a latency gate. Numbers do NOT feed ADR-5.
+  ADR-5 absolute latency targets come from Tier 3 only (per the
+  Cassette warning above; same rule applies here).
+- Tier 1.5 is **NOT** an alignment gate. Alignment-eval `--ci-gate` is
+  separate (run at ship-gate per Tier 3 DOD).
+
+### Position relative to other tiers
+
+| Tier | Cost | Purpose | Feeds ADR-5? |
+|---|---|---|---|
+| Tier 1 (replay) | 0 quota | Cassette plumbing regression | No |
+| **Tier 1.5 (smoke)** | **~6 calls** | **Real-CLI plumbing + pool-warmup, per-PR** | **No** |
+| Tier 2 (cassette record) | ~60 Haiku calls | Cassette baseline refresh | No |
+| Tier 3 (ship-gate) | ~60 calls | Absolute latency source-of-truth | **Yes** |
+
+### Token-reduction estimate
+
+If a typical cycle has 5 hot-path PRs that touch `cli_pool` /
+`cli_governance` / `governance` / `model_router` (the four
+Tier-1.5-required surfaces — see `docs/soak-trigger-matrix.md`):
+
+- Tier 3 on every hot-path PR: 5 × 60 = **300 calls / cycle**.
+- Tier 1.5 on every hot-path PR: 5 × 6 = **30 calls / cycle**.
+- Reduction: **~90%** (~270 calls saved per cycle vs Tier-3-on-every-PR
+  baseline).
+
+Vs status quo (no gate, regression caught only at ship-gate), Tier 1.5
+costs ~30 calls / cycle to catch plumbing breakage one merge earlier.
+
+### Cassette compatibility
+
+Tier 1.5 hits real `claude -p` (just at smaller scale), not replay.
+It is not a cassette consumer. Per
+`feedback_cassette_must_cover_new_envelopes.md`, the cassette
+recorder + replay path must cover every new envelope **type** the
+soak emits — Tier 1.5 introduces no new envelope types (it runs the
+same `engine.evaluate` loop as Tier 3 with smaller `--total-events`),
+so no `cassette_record.py` extension is required.
+
+### Trigger matrix
+
+PR-touch-path → required tier mapping lives in
+`docs/soak-trigger-matrix.md`. v2.0 P2 codifies the matrix as
+**advisory** (operator-driven). CI gate enforcement is a v2.1
+backlog candidate if the matrix proves stable in v2.0.
+
+### Mint-new-tier rule
+
+A Tier 4 (large-n smoke for tail-variance triage, flagged in v1.9
+ship-gate as a v2.0 backlog candidate) is NOT minted in this
+amendment. Codify Tier 1.5 only; Tier 4 lives in v2.1 backlog per
+ADR-18 Rule 4 (phase budget at cap).
+
 ## DOD checklist
 
 - `tools/soak_driver.py --cli-replay <path>` runs without `claude` on PATH.
