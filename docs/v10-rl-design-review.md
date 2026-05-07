@@ -63,9 +63,10 @@ terms. Penalty-term encoding is gameable; constraint violation rejects
 the action.
 
 **v10 application**: seed D5 already does this for FR-OG-7
-(constraint-violating episodes are rejected from the training set, not
-penalised). Extend the same treatment to two more constraints
-(issue #5):
+(constraint-violating CANDIDATES are rejected from the action set
+BEFORE Thompson sampling, not penalised in the reward; constraint-violating
+EPISODES remain in the log for observability). Extend the same treatment
+to two more constraints (issue #5):
 
 | Constraint | Floor | Source signal |
 |---|---|---|
@@ -171,8 +172,9 @@ arm's reward shrinks below δ at:
 n ≥ k · ceil( p̂(1-p̂) · (1.96/δ)^2 )
 ```
 
-For L4 (k = 9 bins on [0.5, 0.95] step 0.05), δ = 0.05, p̂ ≈ 0.5
-worst case → n ≥ 9 · 384 = 3456 *if* exploration is uniform.
+For L4 (k = 9 bins on [0.50, 0.90] step 0.05), δ = 0.05, p̂ ≈ 0.5
+worst case → n ≥ 9 · 385 = 3465 *if* exploration is uniform.
+(Arithmetic: `0.25 · (1.96/0.05)² = 384.16` → ceil = 385 → `9 · 385 = 3465`.)
 Thompson sampling concentrates exploration on near-optimal arms, which
 empirically reduces this by ~5×, putting the realistic gate at
 ~200–700 episodes.

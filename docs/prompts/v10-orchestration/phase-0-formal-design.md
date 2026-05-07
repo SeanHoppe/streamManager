@@ -8,6 +8,10 @@ You are implementing **Phase P0 — Formal v10 design doc** for the streamManage
 - Predecessor docs (read first; never inline):
   - `docs/v10-rl-companion-discussion.md` — discussion artefact.
   - `docs/v10-rl-design-seed.md` — D1–D7 resolutions (cherry-pick from `4be19ad` if not on `main`).
+  - Pre-flight reachability check before cherry-pick:
+    ```
+    git cat-file -e 4be19ad 2>/dev/null || { echo "STOP: 4be19ad not reachable. Operator must push claude/v10-rl-design-seed branch first."; exit 1; }
+    ```
   - `docs/v10-rl-design-review.md` — best-practices review + 5-issue treatment table.
 
 ## ⚠️ CRITICAL: Do-not-touch guard
@@ -43,7 +47,7 @@ Promote the seed (`docs/v10-rl-design-seed.md`) plus the design review (`docs/v1
      - `routing_band: int` (L1–L4)
      - `trigger_factor: int` (output of `classify_trigger_factor`)
      - `learn_mode_bias_hint: float` (current `bias_consult` advisory output)
-   - **Action space** (v10.1): L4 confidence threshold ∈ {0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95}. 9 bins (the seed says 9 — count the open interval).
+   - **Action space** (v10.1): L4 confidence threshold ∈ {0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90}. 9 bins (closed interval [0.50, 0.90], step 0.05). 0.95 dropped as degenerate near-noop arm.
    - **Reward formula**:
      ```
      reward_stage_A = 1 if HITL_agreement(action) else 0
@@ -55,7 +59,13 @@ Promote the seed (`docs/v10-rl-design-seed.md`) plus the design review (`docs/v1
      2. HITL agreement < baseline − 2 % on logged subset.
      3. Alignment-eval pass rate < baseline pass rate.
      Constraint violations are NOT encoded as reward penalties.
-   - **Posterior family**: Beta-Bernoulli per arm (binned discrete action space). Prior: Beta(α₀, β₀) centered on the current production threshold; α₀ + β₀ = 20 (moderately informative prior, ε-neighbourhood-shaped warm start per seed D6 and predecessor issue #2).
+   - **Posterior family**: Beta-Bernoulli per arm (binned discrete action space). Prior: Beta(α₀, β₀) per arm; `α₀ + β₀ = 20` invariant (moderately informative). Mild ε-tilt around the production-baseline arm per seed D6 (ε-neighbourhood principle):
+
+     | Arm distance from baseline | Prior |
+     |---|---|
+     | 0 (baseline arm) | `Beta(14, 6)` (mean 0.70) |
+     | ±1 step | `Beta(11, 9)` (mean ~0.55) |
+     | ±2 or more | `Beta(10, 10)` (uniform) |
    - **Cadence** (per seed D7): on-demand → weekly post-stability. Weekly slot pre-registered (e.g. Sunday 02:00 local).
    - **Phase ledger** P0 → P5 (this file → phases 1–5; mirror v1.x phase-block format).
    - **Stop conditions table** — copy from `docs/v10-rl-design-review.md` §"Issue #4". Pre-registered.
@@ -63,7 +73,7 @@ Promote the seed (`docs/v10-rl-design-seed.md`) plus the design review (`docs/v1
 
 2. **`docs/v10-task-plan.md`** — phase ledger covering P0–P5 with do-not-touch list. Mirror `docs/v2.0-task-plan.md` format.
 
-3. **`docs/prompts/v10-orchestration/phase-{0,1,2,3,4,5}-*.md`** — 6 orchestration prompts (this file is P0; P1–P5 already minted in design-review pass — verify they exist; if any missing, STOP and ask for re-mint).
+3. **`docs/prompts/v10-orchestration/phase-{0,1,2,3,4,5}-*.md`** — 6 orchestration prompts (this file is P0). P1–P5 prompts MUST already exist on `main` (landed via #106). If absent, P0 is being run before #106 merge — STOP and merge #106 first.
 
 4. **No `rl/` subdirectory yet.** P0 is docs only. Code lands in P1.
 
@@ -73,12 +83,14 @@ Each phase block in the task plan stands alone — copy-pasteable verbatim into 
 
 ## DOD
 
-- [ ] `docs/v10-rl-design.md` created with all 8 sections above
+- [ ] `docs/v10-rl-design.md` created with all 12 sections above
 - [ ] `docs/v10-task-plan.md` created with P0–P5 phase blocks + do-not-touch list (ADR-18 FROZEN list as-is)
 - [ ] `docs/prompts/v10-orchestration/phase-{0..5}-*.md` exist (6 files); P1–P5 reviewed for currency against design doc
+- [ ] Cassette p95 + action-dist thresholds adopted from P3 OR explicitly marked advisory
+- [ ] Shadow recording strategy resolved: in-process subscriber via soak_driver flag (if soak_driver editable) OR sidecar JSONL-tail (if FROZEN)
 - [ ] PR scope is docs-only — `git --no-pager diff origin/main..HEAD --stat -- src tests tools dashboard` empty
 - [ ] Single PR against `main`
-- [ ] Conventional commit prefix `rl:` (NOT `feat:` / `docs:`) so v10 commits filter cleanly per seed D1
+- [ ] Conventional commit prefix `docs(rl):` (so v10 commits filter cleanly per seed D1: `git log --grep="(rl)"`)
 
 ## Mint-new-phase rule
 

@@ -49,7 +49,7 @@ Stages 1–4 land in P3. Stage 5 is harness-driven from P5 (a separate phase cov
 
    - `ips_estimate(episodes: list[Episode], target_policy: Callable[[State], Action]) -> tuple[float, float]`
      - Standard inverse-propensity-score estimate with Hájek normalisation. Returns (mean, half-width-95-CI).
-     - Production policy at v10.0 is deterministic → `action_propensity = 1.0` for live episodes; this means IPS reduces to direct method on the support and is undefined off-support. Handle off-support gracefully: clip propensity weights to [0.01, 100] and emit warning.
+     - Production policy at v10.0 is deterministic → `action_propensity = 1.0` for live episodes; this means IPS reduces to direct method on the support and is undefined off-support. Handle off-support gracefully: clip propensity weights to `[0.01, 100]` and emit `rl_ips_clipped` warning envelope. NOTE: off-support arises only when `target_policy(state) ≠ production_action`. Off-support fraction MUST be reported in the validation report.
    - `doubly_robust_estimate(episodes: list[Episode], target_policy: Callable, q_model: Callable[[State, Action], float]) -> tuple[float, float]`
      - DR estimator combining IPS and a fitted Q-model. `q_model` is a simple Ridge regressor over (state_features, action) → reward; fit on episodes, evaluate on held-out folds.
    - `cross_validated_dr(episodes, target_policy, k_folds: int = 5) -> tuple[float, float]`
@@ -76,6 +76,8 @@ Stages 1–4 land in P3. Stage 5 is harness-driven from P5 (a separate phase cov
      - Run `tools/soak_driver.py --cli-replay tests/fixtures/soak_cassette_<latest>.jsonl` with `BRIDGE_L4_FALLBACK_CONFIDENCE=<candidate L4 threshold>` env override (read-only env injection — NO edit to soak_driver).
      - Parse the resulting report; extract `cassette p95`, fallback fire rate, action distribution.
      - Reject if cassette p95 regresses > 10 % vs baseline cassette p95 OR if action distribution shifts > 20 % (stages-1–4 are about reward; stage 3 also catches plumbing regressions per ADR-17).
+
+     **Provenance**: these two thresholds (cassette p95 ≤ 10 % regress, action-dist ≤ 20 % shift) are P3-local heuristics, NOT pre-registered ship criteria. They MUST be promoted into `docs/v10-rl-design.md` §"v10 ship criteria" by P0 before P3 merge OR demoted to "advisory" with explicit acknowledgement in the validation report.
 
    - **Stage 4 — adversarial synthetic**:
      - Load `rl.sources.review.iter_episodes()` + `rl.sources.probe.iter_episodes()`.
@@ -126,6 +128,6 @@ P3 net add ≤ 600 lines (slightly higher cap because OPE math is dense; stage c
 - [ ] LOC budget ≤ 600 net add
 - [ ] All v1.7–v2.0 tests green
 - [ ] Single PR against `main`
-- [ ] Conventional commit prefix `rl:`
+- [ ] Conventional commit prefix `feat(rl):`
 
 Report back when PR is open with: PR URL, diff stat, file list, sample validation report from running the CLI on the current production thresholds against themselves (sanity: must PASS all 4 stages).

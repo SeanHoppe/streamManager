@@ -1109,3 +1109,35 @@ force for v2.1+ per ADR-18.
 - `docs/v1.1-task-plan.md` — Task I (hydrator lazy-init), Task J (warm-pool)
 - Project memory: `project_cli_migration` (api_governance → cli_governance)
 - `REQUIREMENTS.md` §5.1 NFR-P (aligned with this ADR)
+
+---
+
+## §v10 logging overhead (added v10 P1)
+
+**Status**: budget definition only at v10 P1 land. Measurement is
+deferred to a post-merge Tier 3 soak; the bundle PR's task-plan
+records a placeholder. Once measured, this section is updated with
+the realised insert-per-decision overhead.
+
+**Budget**:
+
+- **Target**: ≤ 5 ms p95 per `EpisodeLogger.record_decision` call
+  (envelope dict → SQLite row, including `state_features.extract` +
+  `INSERT`).
+- **Hard ceiling**: ≤ 10 ms p95. If the post-merge soak measures
+  overhead above this ceiling, the writer is on the hot path and
+  must be offloaded to a queue + dedicated thread BEFORE next
+  promotion gate.
+
+**Source signal**: post-merge Tier 3 soak with v10 logging enabled vs
+disabled, comparing `cli_dispatch_ms` p95. The phase-1 invariant is
+±5 % unchanged.
+
+**Cross-reference**: `docs/v10-rl-design.md` §3 (state-feature schema)
++ §9 (phase ledger). Logger source: `rl/episode_logger.py`
+(`EpisodeLogger.record_decision`).
+
+**Carve-out vs ADR-18 surface freeze**: this section is an additive
+doc-only edit per ADR-18 §"Doc-edit carve-outs"; the latency-budget
+ADR remains EVOLVING for additive subsections that record measured
+overhead introduced by EVOLVING surfaces (the v10 RL track).
