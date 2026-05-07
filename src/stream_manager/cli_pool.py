@@ -381,15 +381,29 @@ class CliPool:
         spawn_fn: SpawnFn | None = None,
         pid_root: Path | None = None,
         calls_per_recycle: int = CALLS_PER_RECYCLE,
+        worker_recycle_every_n: int | None = None,
     ) -> None:
+        # ``worker_recycle_every_n`` (v2.0 P1): when set, overrides
+        # ``calls_per_recycle`` with a smaller per-worker call budget so
+        # the pool tests the warm-process-bias hypothesis (per-turn
+        # isolation A/B). Default ``None`` preserves byte-identical v1.9
+        # behaviour. ``CliWorker.send`` signature is unchanged; the
+        # recycle decision lives at release time in ``_release``.
         if size < 1:
             raise ValueError("size must be >= 1")
+        if worker_recycle_every_n is not None and worker_recycle_every_n < 1:
+            raise ValueError("worker_recycle_every_n must be >= 1 when set")
         self._size = size
         self._model = model or DEFAULT_MODEL
         self._system_prompt = system_prompt
         self._spawn_fn: SpawnFn = spawn_fn or _default_spawn
         self._pid_root = pid_root
-        self._calls_per_recycle = calls_per_recycle
+        self._calls_per_recycle = (
+            worker_recycle_every_n
+            if worker_recycle_every_n is not None
+            else calls_per_recycle
+        )
+        self._worker_recycle_every_n = worker_recycle_every_n
         self._available: "queue.Queue[CliWorker]" = queue.Queue()
         self._all: list[CliWorker] = []
         self._lock = threading.Lock()

@@ -341,6 +341,65 @@ def test_size_validation() -> None:
         CliPool(size=0)
 
 
+# ── v2.0 P1: worker_recycle_every_n A/B kwarg ──────────────────────────
+
+def test_worker_recycle_every_n_none_is_status_quo(tmp_path: Path) -> None:
+    """Default ``None`` preserves byte-identical v1.9 behaviour: the pool's
+    ``_calls_per_recycle`` falls back to module-level CALLS_PER_RECYCLE.
+    """
+    spawn = _make_spawn()
+    pool = CliPool(size=1, spawn_fn=spawn, pid_root=tmp_path)
+    pool.warmup()
+    try:
+        assert pool._calls_per_recycle == cli_pool.CALLS_PER_RECYCLE  # noqa: SLF001
+        assert pool._worker_recycle_every_n is None  # noqa: SLF001
+        first_pid = pool._all[0].pid  # noqa: SLF001
+        # 5 sends should not trigger recycle (CALLS_PER_RECYCLE = 50).
+        for _ in range(5):
+            with pool.acquire() as w:
+                w.send("x")
+        with pool.acquire() as w:
+            assert w.pid == first_pid  # same worker reused
+        assert len(spawn.spawned) == 1  # type: ignore[attr-defined]
+    finally:
+        pool.shutdown()
+
+
+@pytest.mark.parametrize("n", [1, 5])
+def test_worker_recycle_every_n_respawns_after_n_sends(tmp_path: Path, n: int) -> None:
+    """When ``worker_recycle_every_n`` is set to N, the pool recycles each
+    worker after exactly N successful sends (matching the existing
+    calls-per-recycle contract).
+    """
+    spawn = _make_spawn()
+    pool = CliPool(
+        size=1, spawn_fn=spawn, pid_root=tmp_path, worker_recycle_every_n=n
+    )
+    pool.warmup()
+    try:
+        assert pool._calls_per_recycle == n  # noqa: SLF001
+        assert pool._worker_recycle_every_n == n  # noqa: SLF001
+        first_pid = pool._all[0].pid  # noqa: SLF001
+        # Send N times: at release after the Nth call, the worker hits the
+        # recycle threshold and is replaced.
+        for _ in range(n):
+            with pool.acquire() as w:
+                w.send("x")
+        with pool.acquire() as w:
+            assert w.pid != first_pid  # fresh worker
+        # Two workers spawned: original + post-recycle replacement.
+        assert len(spawn.spawned) == 2  # type: ignore[attr-defined]
+    finally:
+        pool.shutdown()
+
+
+def test_worker_recycle_every_n_validates_positive() -> None:
+    with pytest.raises(ValueError):
+        CliPool(size=1, worker_recycle_every_n=0)
+    with pytest.raises(ValueError):
+        CliPool(size=1, worker_recycle_every_n=-1)
+
+
 # ── Real-CLI smoke (skipped when claude is not on PATH) ─────────────────
 
 requires_cli = pytest.mark.skipif(

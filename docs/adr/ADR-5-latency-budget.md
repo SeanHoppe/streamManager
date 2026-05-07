@@ -868,6 +868,41 @@ ACCEPTED as v1.9 budget.
 - **LM p95 = 15.11 s.** Up from v1.8's 13.30 s (+1.81 s) but well within the 18 s ceiling. Watch stays closed per the v1.7 rubric (third consecutive cycle).
 - **Alignment-eval baseline strongest to date.** Sonnet 24/24 stable (1.000) and Haiku 21/22 stable (0.9545) — both higher than any prior cycle (v1.8: sonnet 0.913, haiku 0.90). 0 regressions vs Sonnet, 0 FR-OG-7 regressions, exit 0. v1.9 P3 (Learn Mode JSONL source expansion) and v1.9 P2 (session watcher) made no changes to `cli_governance.py` routing; the alignment improvement is most plausibly explained by upstream model variance, but the corpus is unchanged from v1.8 so the comparison is apples-to-apples on golden rows.
 
+## v2.0 P1 lever-effect entry — cli_pool worker A/B (revival probe, falsified)
+
+- **Source**: `reports/v2-p1-cli-pool-ab-20260507T141200Z.md` + four per-arm reports under `reports/soak-arm-{A,B,C,D}-*.md`
+- **Date**: 2026-05-07
+- **Driver**: `tools/soak_driver.py --cli-pool-size 2 --worker-recycle-every-n {unset|1|5|10}` (Tier 3 cadence, four-arm matrix)
+- **Probe scope**: revival probe for the DORMANT-2 verdict-fallback lever per ADR-18 Rule 2. Tests the v1.9 hypothesis that cli_pool warm-process reuse biases Haiku toward conversational ALLOW interpretation on later destructive prompts.
+- **Result**: **0% fallback fire rate at every cadence** (status-quo, N=1, N=5, N=10). Hypothesis falsified.
+
+### Per-arm summary
+
+| Arm | recycle | overall p95 | ALLOW p95 | `cli_pool_send_ms` p95 | `cli_dispatch_fallback_ms` p95 | fire rate |
+|---|---|---|---|---|---|---|
+| A | unset (status-quo, ≈ 50) | 7.887 s | 4.17 s | 4165 ms | 0.00 ms | 0% |
+| B | N=1 | 10.610 s | 6.84 s | 6799 ms | 0.00 ms | 0% |
+| C | N=5 | 9.918 s | 6.10 s | 6069 ms | 0.00 ms | 0% |
+| D | N=10 | 10.452 s | 6.24 s | 6239 ms | 0.00 ms | 0% |
+
+### Lever ledger update
+
+| Lever | Wired in | Dormant cycles | Pre-v2.0 status | Post-v2.0 P1 status |
+|---|---|---|---|---|
+| Haiku fastpath router (read of `is_ambiguous_block` / `is_hitl_synthesis` at pre-CLI dispatch site) | v1.7 P2 | v1.7, v1.8, v1.9 | DORMANT-3 — BLOCK | unchanged (no revival probe applicable; Haiku-fastpath dormancy is not pool-state-dependent) — **scheduled for rip in v2.0 P3** |
+| Confidence-floor + verdict-based fallback (`cli_governance.py` retry trigger) | v1.7 / v1.8 / v1.9 P1 | v1.8, v1.9 | DORMANT-2 — WARN | DORMANT-2 by counter rules (A/B is not a Tier 3 strike) — **anticipatory rip authority granted under ADR-18 Rule 2 §"What counts as a strike"; scheduled for rip in v2.0 P3** |
+
+### Findings
+
+- **cli_pool warm-process reuse is NOT the cause of fallback-lever dormancy.** If reuse were the cause, every-turn recycle (arm B) would have revived the lever. It did not.
+- **Recycle worsens ALLOW p95 by ~2 s without trading for any fire rate.** Spawn overhead at fresh-worker cold-start exceeds `RESPONSE_TIMEOUT_S = 25 s` on this hardware, triggering per-call subprocess degrades in `cli_governance.py:442`. Per-call degrades complete the request via `subprocess.run` and the soak still PASSes, but the verdict-fallback lever is gated on Haiku verdict / confidence (not on cli_pool transport health), so the per-call degrade never trips the lever counter.
+- **Status-quo reuse is the latency-correct default.** `CliPool.__init__` default stays `None` permanently per ADR-18 Rule 1 FROZEN signature. The `worker_recycle_every_n` kwarg stays as opt-in harness for future operator-driven probes; not promoted to default.
+- **Open investigation lever (deferred to v2.1 backlog)**: the gap between P1a fresh-process Haiku BLOCK (100% at confidence ≥ 0.85, wrapped corpus) and soak ALLOW (100%, soak driver corpus). Likely investigation: instrument `cli_governance.py` request-build path to confirm wrapping equivalence between fresh-process probe and soak driver. Out of scope for v2.0 (phase budget capped at 3 per ADR-18 Rule 4).
+
+### Status
+
+ACCEPTED as v2.0 P1 lever-effect entry. v2.0 P3 disposition (rip both levers) follows directly from this falsification.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
