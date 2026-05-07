@@ -6,6 +6,79 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-05-07
+
+Tagged ship of the v1.9 cycle. See `docs/v2.0-backlog.md` for the seed
+list and `docs/adr/ADR-5-latency-budget.md` §"v1.9 ship-gate baseline"
+for the P4 numbers.
+
+Highlights:
+
+- **Verdict-based fallback trigger**
+  ([PR #100](https://github.com/SeanHoppe/streamManager/pull/100), P1) — adds a `verdict==ENGAGE` branch to the v1.8
+  confidence-floor fallback in `cli_governance.py`. Combined trigger now
+  fires when **either** Haiku confidence drops below
+  `BRIDGE_L4_FALLBACK_CONFIDENCE` **or** Haiku returns ENGAGE verdict.
+  v1.7 byte-identical-when-disabled invariant preserved
+  (`BRIDGE_L4_FALLBACK_MODE=off`).
+- **P1a corpus-check diagnostic**
+  ([PR #101](https://github.com/SeanHoppe/streamManager/pull/101), P1a) — `tools/p1a_haiku_probe.py` added to
+  diagnose v1.8/v1.9 fallback-lever dormancy via fresh-process Haiku
+  probe. Wrapped probe (matching `cli_governance.py:357` user-prompt
+  wrapper) BLOCKs 100% of destructive corpus at confidence ≥ 0.85;
+  bare probe BLOCKs 96%. Confirms the soak corpus IS adequate to
+  trigger non-ALLOW verdicts, isolating the dormancy cause to cli_pool
+  warm-process reuse (untested in P1a; v2.0 cli_pool A/B item seeded).
+  Includes `_scrubbed_env` to strip BRIDGE_*/ANTHROPIC_API_KEY env
+  inheritance and `_wrap_user_prompt` for soak-parity wrapping.
+- **External session watcher + bg task token registry**
+  ([PR #102](https://github.com/SeanHoppe/streamManager/pull/102), P2) — `src/stream_manager/session_watcher.py` polls
+  `~/.claude/sessions/` for live Claude Code CLI sessions and tracks
+  PID + cwd + entrypoint metadata. Re-registration after exit refreshes
+  pid/cwd/entrypoint (PR #102 review fix). Foundation for the v2.0
+  cross-session learning seam (per
+  `project_sync_comms` memory). Test coverage:
+  `tests/test_session_watcher.py` including
+  `test_re_register_updates_pid_and_metadata`.
+- **Learn Mode JSONL source expansion + self-monitor guard**
+  ([PR #103](https://github.com/SeanHoppe/streamManager/pull/103), P3) — Learn Mode (v1.3) extended to ingest
+  Desktop↔user dialogue from a wider source set including the new
+  session-watcher pool. Self-monitor guard prevents Learn Mode from
+  ever ingesting its own JSONL/bus events (per `feedback_no_self_monitor`
+  memory rule). Advisory bias only; never overrides safety verdicts.
+- **v1.9 ship-gate** (this entry, P4) — 32.3-min Tier 3 soak with
+  `--cli-pool-size 2` (`reports/soak-20260507T084933Z.md`). Verdict
+  PASS; overall p95 11.064 s (budget ≤ 12 s); RSS drift +0.24 MB.
+  Alignment-eval `--ci-gate` exit 0; sonnet 1.000 / haiku 0.9545 /
+  0 FR-OG-7 regressions / 0 haiku regressions vs sonnet
+  (`reports/alignment-eval-20260507T093010Z.md`) — strongest alignment
+  cycle to date.
+
+**Lever-effect outcome — DORMANT for second consecutive cycle.** The
+v1.9 P1 verdict-fallback addition fired 0% in the ship-gate soak.
+60/60 events terminated at ALLOW; no Haiku verdict returned ENGAGE;
+the new branch had nothing to fire on. `cli_dispatch_fallback_ms` p95
+= 0.00 ms (identical to v1.8). The combined (confidence + verdict)
+lever is wired but has fired 0% across two consecutive ship-gate
+soaks. P1a probe diagnostic confirmed fresh-process wrapped Haiku
+BLOCKs 100% of destructive prompts at confidence ≥ 0.85, isolating
+the dormancy cause to cli_pool warm-process reuse (the leading
+hypothesis, untested in P1a). v2.0 cli_pool A/B (fresh-vs-reused
+process) is the next investigation lever. See
+`docs/adr/ADR-5-latency-budget.md` §"v1.9 ship-gate baseline" §Caveats
+and `docs/v2.0-backlog.md` for the next-cycle plan.
+
+**Per-band p95 small-sample tail violations.** L2/L3 p95 (15.09 s, n=7)
+exceeds the ≤ 8 s budget and L4 alignment p95 (17.40 s, n=4) exceeds
+the ≤ 14 s budget; at these sample sizes p95 ≈ max and a single tail
+event dominates. No code path touched between v1.8 and v1.9 in either
+band; lever fire rate = 0%. Reproduces the v1.7→v1.8 oscillation
+pattern. Treated as upstream Anthropic round-trip variance pending a
+larger-n soak (Tier 4 candidate in v2.0 backlog).
+
+**LM (categorize) p95 = 15.11 s** (v1.8: 13.30 s, +1.81 s). Within the
+18 s ceiling; LM watch stays closed (third consecutive cycle).
+
 ## [1.8.0] — 2026-05-06
 
 Tagged ship of the v1.8 cycle. See `docs/v1.9-backlog.md` for the seed

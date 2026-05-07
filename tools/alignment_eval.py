@@ -106,7 +106,7 @@ def evaluate_row(governor: CliGovernor, prompt: str, model_id: str, runs: int) -
 def render_report(rows: list[dict], results: dict, runs: int,
                   control_model: str, candidate_model: str) -> str:
     lines: list[str] = []
-    lines.append("# v1.7 P1 alignment-eval baseline")
+    lines.append("# alignment-eval report")
     lines.append("")
     lines.append(f"- generated: {_utc_stamp()}")
     lines.append(f"- runs per row per model: {runs}")
