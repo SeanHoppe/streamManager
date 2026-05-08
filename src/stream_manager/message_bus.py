@@ -720,8 +720,11 @@ class MessageBus:
         """Write a single provenance_assertions row. Returns False on
         replay (probe_id UNIQUE conflict); True on first write.
 
-        Replay protection runs in the same DB transaction as the insert
-        via `INSERT ... ON CONFLICT(probe_id) DO NOTHING` semantics. The
+        Replay protection is atomic at the SQLite UNIQUE constraint
+        level. The bus runs in autocommit mode (`isolation_level=None`,
+        L222), so each INSERT commits immediately and the
+        ``ON CONFLICT(probe_id) DO NOTHING`` clause guarantees no
+        duplicate row writes regardless of caller-side concurrency. The
         caller (dashboard `/api/sm-probe/ack` POST handler) translates
         False to HTTP 409.
         """

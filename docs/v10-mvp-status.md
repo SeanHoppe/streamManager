@@ -24,7 +24,7 @@ Close the streamManager governance loop with a **deterministic-Python contextual
 
 ## 2. Phase ledger — status snapshot
 
-| Phase | Scope | Status | PR | LOC budget | %tcomplete |
+| Phase | Scope | Status | PR | LOC budget | % complete |
 |---|---|---|---|---:|---:|
 | **P0** | Formal design (`docs/v10-rl-design.md`) + task plan | ✅ SHIPPED | seed PR #106 | docs only | 100 |
 | **P0a** | Seed reconcile (16 doc fixes) | ✅ SHIPPED | (bundled w/ P0) | docs only | 100 |
