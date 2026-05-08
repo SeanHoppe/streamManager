@@ -5,11 +5,13 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
+from stream_manager import desktop_commands
 from stream_manager import message_bus as _msg_bus
 from stream_manager.agent_registry import AgentProfile, AgentRegistry
 from stream_manager.cli_governance import CliGovernor
@@ -1233,6 +1235,70 @@ class GovernanceEngine:
             )
         except Exception:
             log.exception("cross-session: queue_hitl failed")
+
+    # ── v2.1 P1 (FR-PPP) — Provenance Probe Protocol emit ─────────────
+    #
+    # Peer to `_maybe_emit_cross_session_hitl` above (HITL queue entry
+    # with `trigger_reason="audit_probe"` per phase-1 §3, §4). Public
+    # method: dashboard `/api/sm-probe?force=1` handler invokes this;
+    # soak driver `--ppp-auto-probe` (Option B per issue #128) writes
+    # the envelope directly via `bus.write_envelope` and does NOT call
+    # this site (no HITL row needed for unattended soak probes).
+    def emit_audit_probe(
+        self,
+        candidate_streams: list[_msg_bus.AuditProbeCandidate],
+        ttl_seconds: int = 1800,
+    ) -> tuple[str, int]:
+        """Emit an `audit.probe` envelope + HITL row asking the operator
+        to identify the JSONL stream currently being driven (FR-PPP-1).
+
+        Returns ``(probe_id, hitl_row_id)``. ``probe_id`` is the
+        cryptographic correlation key signed in the envelope (HMAC seam
+        reuses ``desktop_command`` secret of record per issue #128 §A1);
+        ``hitl_row_id`` is the dashboard handle for resolving the HITL
+        question. Operator's signed ack lands in
+        ``provenance_assertions`` via `/api/sm-probe/ack` POST.
+        """
+        if self.bus is None or not self.session_id:
+            raise RuntimeError(
+                "emit_audit_probe requires bus + session_id"
+            )
+
+        probe_id = uuid.uuid4().hex
+        issued_at = time.time()
+        envelope = _msg_bus.AuditProbeEnvelope(
+            probe_id=probe_id,
+            candidate_streams=list(candidate_streams),
+            ttl_seconds=int(ttl_seconds),
+            issued_at=issued_at,
+            hmac_sig="",
+        )
+        envelope.hmac_sig = desktop_commands.sign(
+            envelope.signing_payload()
+        )
+
+        anchor = _msg_bus.Message.new(
+            session_id=self.session_id,
+            type="audit_probe",
+            direction="internal",
+            content=probe_id,
+            metadata={
+                "probe_id": probe_id,
+                "candidate_count": len(envelope.candidate_streams),
+                "ttl_seconds": int(ttl_seconds),
+            },
+        )
+        self.bus.publish(anchor)
+        pending_id = self.bus.queue_hitl(
+            message_id=anchor.id,
+            proposed_action="audit_probe",
+            proposed_confidence=0.0,
+            trigger_reason="audit_probe",
+        )
+
+        # Fan envelope to subscribers (dashboard SSE bridges to browser).
+        self.bus.write_envelope("audit.probe", envelope.to_dict())
+        return probe_id, pending_id
 
     def _update_mode(self) -> None:
         if len(self._eligible_window) < ROLLING_WINDOW:

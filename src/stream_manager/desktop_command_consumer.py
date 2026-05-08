@@ -115,6 +115,16 @@ def _default_executors() -> dict[str, Callable[[dict], None]]:
     def _noop_request_attention(args: dict) -> None:
         log.info("desktop_command request_attention stub: %r", args)
 
+    def _noop_audit_probe(args: dict) -> None:
+        # v2.1 P1 (FR-PPP): governed-side stub. Real probe surfacing
+        # happens dashboard-side via /api/sm-probe + the HITL panel
+        # row variant; operator's signed ack writes
+        # provenance_assertions via /api/sm-probe/ack POST. The
+        # consumer-side handler exists so the kind is recognized
+        # (otherwise the consumer rejects with error='unknown_kind'
+        # per the security model in this module's docstring).
+        log.info("desktop_command audit_probe stub: %r", args)
+
     return {
         "pause": _noop_pause,
         "foreground": _noop_foreground,
@@ -122,6 +132,7 @@ def _default_executors() -> dict[str, Callable[[dict], None]]:
         "audible_cue": _noop_audible,
         "surface_hitl": _noop_surface_hitl,
         "request_attention": _noop_request_attention,
+        "audit_probe": _noop_audit_probe,
     }
 
 
