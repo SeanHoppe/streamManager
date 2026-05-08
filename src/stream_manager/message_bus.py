@@ -232,7 +232,14 @@ SubscriberCallback = Callable[[Message], None]
 # Additive type definitions; not routed through `publish` (which writes
 # to the messages table). PPP envelopes ride the existing ADR-14 SSE
 # transport via the bus subscriber list and the dashboard SSE stream.
-@dataclass
+#
+# `frozen=True` on `AuditProbeCandidate` defends against the
+# sign-then-mutate footgun: HMAC sig is computed over the canonical-
+# encoded candidate list at envelope-build time; if the list members
+# were mutable, a caller could mutate `slug` / `jsonl_path` after sign
+# and the delivered envelope dict would diverge from the signed one
+# (verifier-side mismatch).
+@dataclass(frozen=True)
 class AuditProbeCandidate:
     slug: str
     jsonl_path: str
