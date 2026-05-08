@@ -39,6 +39,9 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# Claude Code local-only permission grants (per-worktree, not shared)
+.claude/settings.local.json
+
 # Replay reports (may contain transcript-derived path/file names).
 # The directory itself is tracked so `reports/axe-*` audit artifacts
 # (NFR-UI-1) commit. Specific noisy outputs are excluded by glob.
