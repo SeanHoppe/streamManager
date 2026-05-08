@@ -148,4 +148,4 @@ P4 net add ≤ 700 lines (highest cap of any v10 phase because the math is conce
 - [ ] Conventional commit prefix `feat(rl):`
 - [ ] Exit codes follow unix convention: test `test_exit_codes_0_no_lift_10_promote_1_error` asserts (0=baseline retained, 10=promote, 1=error)
 
-Report back when PR is open with: PR URL, diff stat, file list, sample manifest path, sample proposals JSON, CLI exit code on a known-stable v2.0 baseline (sanity: must be exit 2 = retain baseline if no real lift detected).
+Report back when PR is open with: PR URL, diff stat, file list, sample manifest path, sample proposals JSON, CLI exit code on a known-stable v2.0 baseline (sanity: must be exit 0 = retain baseline if no real lift detected, per the exit-code table above).
