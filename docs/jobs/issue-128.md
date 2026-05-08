@@ -42,7 +42,7 @@ Pick before P1 branch opens.
 - [x] Decision recorded — P1 prompt §6 + DOD updated, this job file updated (2026-05-08).
 - [x] §A1 HMAC secret distribution spec'd: reuse `desktop_command` HMAC seam (commit `595df23`).
 - [x] §A2 Browser no-subscriber contract: HTTP 503 + structured error.
-- [x] §A4 N/A — Option B chosen.
+- [~] §A4 (skipped — Option B path).
 - [ ] (P1 PR) `tools/soak_driver.py --ppp-auto-probe` direct bus write.
 - [ ] (P1 PR) Cassette: `audit.probe` + `audit.probe_ack` recorded same-PR.
 - [ ] (P1 PR) Test asserts browser 503 path on zero subscribers.
@@ -63,5 +63,5 @@ DONE 2026-05-08:
 - P1 prompt DOD updated.
 
 NEXT:
-- Mint `feat/v2.1-p1-ppp-stream-disambiguation` branch off main once v2.1 P0 PR merges.
+- Mint `feat/v2.1-p1-ppp-stream-disambiguation` branch off `origin/main` (#127 merged 2026-05-07 @ `07bc540`).
 - Implementation per P1 prompt.

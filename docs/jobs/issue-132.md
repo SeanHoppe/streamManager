@@ -21,7 +21,7 @@ Add CI guard.
 
 - [ ] A vs B decision recorded.
 - [ ] Implementation PR adds guard.
-- [ ] Backfill: existing kinds in `desktop_commands.py:45` allowlist verified (or marked exempt).
+- [ ] Backfill: existing kinds in `KIND_ALLOWLIST` (`desktop_commands.py:39-48`) verified (or marked exempt).
 - [ ] `feedback_cassette_must_cover_new_envelopes.md` updated → enforced rule.
 - [ ] Failure-path test: deliberately broken PR fails the guard locally.
 
@@ -33,6 +33,6 @@ Mint as v2.2 P0 task or standalone hardening PR — no full cycle frame needed.
 ## Refs
 
 - Memory `feedback_cassette_must_cover_new_envelopes.md`.
-- Allowlist source: `src/stream_manager/desktop_commands.py:45`.
+- Allowlist source: `KIND_ALLOWLIST` at `src/stream_manager/desktop_commands.py:39-48`.
 - Cassette: `tools/cassette_record.py`, `tools/soak_driver.py`.
 - Triggering incident: `project_v13_corrective.md`.
