@@ -224,23 +224,33 @@ disambiguation:
 6. **Auto-probe cadence** in `tools/soak_driver.py`:
 
    - New flag `--ppp-auto-probe` (default OFF in P1).
-   - When set, soak driver fires `/api/sm-probe?force=1` every
-     900 s of soak wall-clock. Tier 3 soak ≈ 1920 s ⇒ at least two
+   - When set, soak driver writes `audit.probe` envelope **directly
+     to the bus** via `MessageBus.write_envelope(...)` every 900 s
+     of soak wall-clock. Tier 3 soak ≈ 1920 s ⇒ at least two
      probes fire per soak; the second exercises the cache
      short-circuit (assertion from probe-1 must satisfy
      `force=0` reads at the dashboard until expiry).
    - Default flip to ON happens in P4 ship-gate (NOT P1).
-   - **Transport caveat (ABORT/CLARIFY before merge):** soak driver
-     today is process-direct (no HTTP coupling to dashboard).
-     Firing `/api/sm-probe` introduces a new dependency that the
-     dashboard process is up during Tier 3 soak. Verify or wire
-     via direct WAL write — see the open clarify-issue noted in
-     the v2.1 cycle frame "Cross-cutting risks" section. If the
-     dashboard is not guaranteed up, this deliverable becomes a
-     direct `MessageBus` writer that emits the `audit.probe`
-     envelope onto the bus without going through HTTP, and the
-     dashboard SSE stream becomes a pure consumer of the bus
-     event. Either path satisfies FR-PPP-1; pick at P1 kickoff.
+   - **Transport decision (recorded 2026-05-08, issue #128):
+     Option B — direct MessageBus writer.** Rationale: keeps Tier 3
+     soak's process-direct invariant intact; no dashboard-up
+     dependency at soak time. The `/api/sm-probe?force=1` HTTP path
+     is RETAINED for browser/operator-driven probes — it remains a
+     second writer onto the same bus. Two writers, one bus,
+     dashboard SSE consumes from the bus.
+   - **HMAC seam (issue #128 §A1):** both writers (soak driver +
+     dashboard `/api/sm-probe` handler) sign with the same secret
+     of record. Reuse the existing `desktop_command` HMAC seam
+     established at commit `595df23`
+     (`refactor(commands): inject HMAC secret explicitly, drop env
+     mutation`). Verifier-side `audit.probe_ack` validation stays
+     single-keyed.
+   - **Browser-path no-subscriber contract (issue #128 §A2):** if
+     an operator fires `POST /api/sm-probe?force=1` while zero
+     `audit.probe` subscribers exist on the bus, the dashboard
+     handler returns **HTTP 503 + structured error body**
+     (`{"error": "no_subscriber", "detail": "..."}`). No silent
+     fire-and-forget. Operator gets immediate signal.
 
 7. **Self-monitor candidate-list filter** (defense-in-depth):
 
@@ -381,9 +391,17 @@ non-additive line on a FROZEN row aborts the merge.
 - [ ] All 4 test files added; full pytest suite green
 - [ ] REQUIREMENTS.md FR-PPP-1..7 appended (FR-PPP-7 = replay
       single-use)
-- [ ] Probe transport choice (HTTP via `/api/sm-probe?force=1` vs
-      direct `MessageBus` writer) made explicit at P1 kickoff per
-      §6 caveat; both paths satisfy FR-PPP-1
+- [x] Probe transport choice resolved: **Option B — direct
+      `MessageBus` writer** (issue #128, decided 2026-05-08).
+      `tools/soak_driver.py --ppp-auto-probe` writes `audit.probe`
+      via `MessageBus.write_envelope(...)`; HTTP `/api/sm-probe`
+      retained for browser-driven probes.
+- [ ] HMAC seam reuses `desktop_command` secret of record (issue
+      #128 §A1; see commit `595df23`). Both writers sign
+      single-keyed.
+- [ ] Browser `/api/sm-probe?force=1` returns HTTP 503 +
+      structured error body when zero bus subscribers (issue #128
+      §A2). Test asserts the 503 path.
 - [ ] LOC budget ≤ 700 net add
 - [ ] Sub-cycle close-out diff guard run; FROZEN seams additive only
 - [ ] Cross-PR seam review (writer↔reader pairs) signed off
