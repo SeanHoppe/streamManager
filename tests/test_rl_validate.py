@@ -254,6 +254,10 @@ def test_no_live_cli_calls(tmp_path: Path):
         "PATH": str(scrubbed_dir),
         "PYTHONPATH": str(REPO_ROOT),
         "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+        "TEMP": os.environ.get("TEMP", ""),
+        "TMP": os.environ.get("TMP", ""),
+        "USERPROFILE": os.environ.get("USERPROFILE", ""),
+        "APPDATA": os.environ.get("APPDATA", ""),
     }
     proc = subprocess.run(
         [sys.executable, "-m", "rl.cli.validate",

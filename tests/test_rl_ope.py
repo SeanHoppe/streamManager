@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import uuid
 from pathlib import Path
 
 from rl.ope import (
@@ -27,7 +28,7 @@ def _ep(action: float = 0.75, propensity: float = 1.0, hitl: int | None = None,
     return Episode(
         ts_utc="2026-05-01T00:00:00+00:00",
         session_id="s",
-        trace_id=f"t-{id(())}-{action}-{propensity}-{hitl}-{reward_hint}",
+        trace_id=f"t-{uuid.uuid4().hex}",
         state_features={
             "latency_ms_last5_p95": 1000.0, "content_length": content_length,
             "regex_destructive_match": 0, "regex_alignment_match": 0,
@@ -69,6 +70,9 @@ def test_ips_clips_extreme_weights():
     res = ips_estimate(eps, _const_policy(0.75))
     assert res.clipped_count == 1
     assert math.isfinite(res.mean)
+    # Hájek-normalised IPS with single clipped weight → mean reduces to the
+    # underlying reward (default reward=1.0 for hitl=None).
+    assert math.isclose(res.mean, 1.0, abs_tol=1e-9)
 
 
 def test_ips_off_support_when_target_diverges():

@@ -20,7 +20,6 @@ from typing import Any
 
 from rl.ope import (
     State,
-    cross_validated_dr,
     ips_estimate,
     load_episodes_from_db,
 )
@@ -29,6 +28,7 @@ from rl.sources import probe as probe_src
 from rl.sources import review as review_src
 
 L4_THRESHOLD_KEY = "BRIDGE_L4_FALLBACK_CONFIDENCE"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass
@@ -129,11 +129,13 @@ def _stage_1_golden(
             regressions.append(str(row.get("id", "?")))
     passed = not regressions
     detail = (f"{fr_total} FR-OG-7 rows checked, 0 regressions" if passed
-              else f"{len(regressions)} FR-OG-7 regression(s): "
-                   f"{', '.join(regressions[:5])}")
+              else f"{len(regressions)} FR-OG-7 regression(s): {', '.join(regressions[:5])}")
     return StageResult("stage_1_golden", passed, detail, {
         "fr_og_7_total": fr_total, "regressions": regressions,
         "candidate_l4_threshold": cand_thr, "baseline_l4_threshold": base_thr,
+        "advisory": True,
+        "advisory_reason": ("BRIDGE_L4_FALLBACK_CONFIDENCE unwired; "
+                            "bin-distance heuristic not model_router.route replay"),
     })
 
 
@@ -153,19 +155,17 @@ def _stage_2_ips(
     if not episodes:
         return StageResult("stage_2_ips", True,
                            "no live/soak episodes; skipped (insufficient data)",
-                           {"n": 0, "skipped": True})
+                           {"n": 0, "skipped": True, "advisory_skipped": True})
     target, base_pol = _candidate_policy(candidate), _candidate_policy(baseline)
     ips_t = ips_estimate(episodes, target)
     ips_b = ips_estimate(episodes, base_pol)
-    dr_t = cross_validated_dr(episodes, target, k_folds=5, seed=candidate.seed)
     threshold = ips_b.mean - delta
     passed = ips_t.mean >= threshold
-    detail = (f"IPS(target)={ips_t.mean:.4f} vs IPS(baseline)-δ={threshold:.4f} "
-              f"(δ={delta:.3f}); DR(target)={dr_t.mean:.4f}")
+    detail = (f"IPS(target)={ips_t.mean:.4f} vs IPS(baseline)-δ={threshold:.4f} (δ={delta:.3f})")
     return StageResult("stage_2_ips", passed, detail, {
         "n": ips_t.n, "ips_target": ips_t.mean,
         "ips_target_ci_half": ips_t.half_width_95,
-        "ips_baseline": ips_b.mean, "dr_target": dr_t.mean,
+        "ips_baseline": ips_b.mean,
         "off_support_fraction": ips_t.off_support_fraction,
         "clipped_count": ips_t.clipped_count, "threshold": threshold,
     })
@@ -241,7 +241,7 @@ def _stage_3_cassette(
     in the report; promote to docs/v10-rl-design.md §"v10 ship criteria"
     before lifting the advisory tag."""
     if cassette_path is None:
-        fixtures = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+        fixtures = REPO_ROOT / "tests" / "fixtures"
         candidates = sorted(fixtures.glob("soak_cassette_*.jsonl"))
         if not candidates:
             return StageResult("stage_3_cassette", False,
@@ -250,6 +250,8 @@ def _stage_3_cassette(
         cassette_path = candidates[-1]
     cand_m = _replay_cassette(cassette_path, candidate.l4_threshold())
     base_m = _replay_cassette(cassette_path, baseline.l4_threshold())
+    _p = Path(cassette_path).resolve()
+    cassette_str = (_p.relative_to(REPO_ROOT).as_posix() if REPO_ROOT in _p.parents else _p.name)
     p95_regress = ((cand_m["p95_s"] - base_m["p95_s"]) / base_m["p95_s"]
                    if base_m["p95_s"] > 0 else 0.0)
     shift = _action_distribution_shift(cand_m["actions"], base_m["actions"])
@@ -259,7 +261,7 @@ def _stage_3_cassette(
               f"action TV-shift={shift*100:.1f}% "
               f"(cap {action_shift_cap*100:.0f}%, ADVISORY)")
     return StageResult("stage_3_cassette", passed, detail, {
-        "cassette": str(cassette_path),
+        "cassette": cassette_str,
         "candidate": cand_m, "baseline": base_m,
         "p95_regression_pct": p95_regress,
         "action_shift_tv": shift, "advisory_thresholds": True,
@@ -344,8 +346,10 @@ def render_markdown(report: ValidationReport) -> str:
         f"- delta: {report.delta:.3f}", "",
     ]
     for s in report.stages:
-        out.extend([f"## {s.name} — {'PASS' if s.passed else 'REJECT'}", "",
-                    s.detail, ""])
+        verdict = "PASS" if s.passed else "REJECT"
+        if s.passed and (s.metrics.get("advisory") or s.metrics.get("advisory_skipped")):
+            verdict = "PASS (ADVISORY)"
+        out.extend([f"## {s.name} — {verdict}", "", s.detail, ""])
         if s.metrics:
             out.extend(["```json",
                         json.dumps(s.metrics, indent=2, default=str, sort_keys=True),

@@ -54,7 +54,6 @@ def _state_of(ep: Episode) -> dict:
     return dict(_f(ep, "state_features", {}) or {})
 
 
-
 def _clip_weight(prop: float) -> tuple[float, bool]:
     raw = 1.0 / max(prop, 1e-12)
     if raw < _PROPENSITY_FLOOR:
@@ -103,6 +102,7 @@ def ips_estimate(
     denom = sum(weights)
     mean = sum(weighted_rewards) / denom if denom else 0.0
     if len(weights) > 1:
+        # TODO(v10.1): swap to ESS denom (Σw)²/Σw² when propensities go stochastic.
         var = sum(w * ((wr / w if w else 0.0) - mean) ** 2
                   for w, wr in zip(weights, weighted_rewards, strict=True)) / denom
         stderr = math.sqrt(var / len(weights))
@@ -148,25 +148,23 @@ def load_episodes_from_db(
     db_path: Path,
     *,
     sources: Iterable[str] = ("live", "soak"),
-    where_extra: str | None = None,
 ) -> list[dict]:
     """Pull episode rows from rl_episodes.db (read-only). Parses
     state_features_json into a dict; matches schema in rl/schema.sql."""
     db_path = Path(db_path)
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    uri = f"file:/{db_path.resolve().as_posix().lstrip('/')}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
-    src_in = ",".join(f"'{s}'" for s in sources)
+    placeholders = ",".join("?" for _ in sources)
     sql = (
         "SELECT episode_id, ts_utc, session_id, trace_id, state_features_json,"
         " action_taken, action_propensity, verdict, confidence, hitl_override,"
         " latency_ms, fr_og_7_pass, budget_violation, source, cycle_tag"
-        f" FROM episodes WHERE source IN ({src_in})"
+        f" FROM episodes WHERE source IN ({placeholders})"
     )
-    if where_extra:
-        sql += " AND " + where_extra
-    rows = conn.execute(sql).fetchall()
+    rows = conn.execute(sql, tuple(sources)).fetchall()
     conn.close()
     out: list[dict] = []
     for r in rows:

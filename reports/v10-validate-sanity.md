@@ -5,12 +5,14 @@
 - candidate L4 threshold: 0.750 | baseline L4 threshold: 0.750
 - delta: 0.020
 
-## stage_1_golden — PASS
+## stage_1_golden — PASS (ADVISORY)
 
 10 FR-OG-7 rows checked, 0 regressions
 
 ```json
 {
+  "advisory": true,
+  "advisory_reason": "BRIDGE_L4_FALLBACK_CONFIDENCE unwired; bin-distance heuristic not model_router.route replay",
   "baseline_l4_threshold": 0.75,
   "candidate_l4_threshold": 0.75,
   "fr_og_7_total": 10,
@@ -18,12 +20,13 @@
 }
 ```
 
-## stage_2_ips — PASS
+## stage_2_ips — PASS (ADVISORY)
 
 no live/soak episodes; skipped (insufficient data)
 
 ```json
 {
+  "advisory_skipped": true,
   "n": 0,
   "skipped": true
 }
@@ -57,7 +60,7 @@ p95 regress=0.0% (cap 10%, ADVISORY); action TV-shift=0.0% (cap 20%, ADVISORY)
     "p50_s": 4.6044025,
     "p95_s": 12.073726649999998
   },
-  "cassette": "C:\\Users\\SeanHoppe\\VS\\streamManager\\.claude\\worktrees\\suspicious-mclaren-bb20cf\\tests\\fixtures\\soak_cassette_latest.jsonl",
+  "cassette": "tests/fixtures/soak_cassette_latest.jsonl",
   "p95_regression_pct": 0.0
 }
 ```
