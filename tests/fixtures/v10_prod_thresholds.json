@@ -1,0 +1,8 @@
+{
+  "thresholds": {
+    "BRIDGE_L4_FALLBACK_CONFIDENCE": 0.75
+  },
+  "manifest_sha": "v2.0.0-prod-equivalent",
+  "seed": 0,
+  "_note": "v10 P3 sanity fixture: production-equivalent L4 fallback confidence threshold (0.75) inherited from v1.9 P1 verdict-fallback wiring + v2.0 ADR-18 surface freeze. No environment variable currently exposes this threshold in src/; the fixture captures the conceptual default for OPE harness self-test."
+}

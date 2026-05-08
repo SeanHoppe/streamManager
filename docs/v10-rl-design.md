@@ -117,6 +117,21 @@ These thresholds are pre-registered. They are NOT relaxed based on observed data
 
 Per P0a item E1, the P3 prompt introduces two thresholds (cassette p95 ≤ 10 % regress, action-dist ≤ 20 % shift) that are NOT in the pre-registered ship-criteria table above. Disposition: **advisory only** at v10.0–v10.2. They appear in the validation report as observability signals but do NOT gate ship promotion. Promotion remains controlled by the 6 criteria in the table above. Re-evaluation in v10.3 if cassette regression empirically correlates with shadow regression.
 
+### 10c. P3 stage-1 (golden) and stage-2 (IPS empty-DB) — ADVISORY pending L4-fallback wiring
+
+`BRIDGE_L4_FALLBACK_CONFIDENCE` is documented as the L4 fallback threshold but is not wired at any pre-CLI callsite in `src/` or `tools/` as of v10 P3 (parallel finding to P3 deviation #2 for stage 3). Consequences for the P3 validation gauntlet:
+
+- **Stage 1 (alignment-golden replay).** The implementation in `rl/validate.py:_verdict_under_threshold` is a bin-distance heuristic (sonnet-floor + Δ > 0.05 ⇒ ALLOW), NOT a `src/stream_manager/model_router.route` replay against the candidate threshold. Borderline non-bin-edge FR-OG-7 regressions will not trip it. Per ADR-18 Rule 1 (surface freeze), wiring `BRIDGE_L4_FALLBACK_CONFIDENCE` is out of scope for P3. Stage 1 is therefore tagged **ADVISORY** in the rendered report (`metrics["advisory"] = True`) and does not gate ship promotion in §10. Promotion is gated on the FR-OG-7 row in the table above ("every shadow"), which is satisfied by the production alignment-eval surface, not by P3 stage 1.
+- **Stage 2 (IPS over `rl_episodes.db`).** When the DB is empty (sanity validation, fresh clone, pre-data v10.0 ring), the stage skips with `passed=True` to honor the DOD requirement that "production thresholds vs themselves PASSes all 4 stages". The skip is annotated `metrics["advisory_skipped"] = True` and rendered as `PASS (ADVISORY)`. Once `rl_episodes.db` has ≥ 30 live/soak episodes (per §6 sample budget), the advisory tag drops automatically and the stage gates as designed.
+
+Promotion to non-advisory for stage 1 requires:
+
+1. Wiring `BRIDGE_L4_FALLBACK_CONFIDENCE` (or an equivalent threshold parameter) at the `model_router.route` callsite.
+2. Replacing `_verdict_under_threshold` with a `route()`-based replay that re-evaluates each golden row's recorded confidence against the candidate threshold.
+3. ADR-18 reclassification of the relevant `model_router` / `cli_governance` surface from FROZEN to EVOLVING for the duration of the wiring change.
+
+Tracked in [#124](https://github.com/SeanHoppe/streamManager/issues/124). The sibling P3 DR-estimator follow-up (deviation #1) is tracked in [#125](https://github.com/SeanHoppe/streamManager/issues/125).
+
 ### 10b. Shadow recording strategy — disposition
 
 Per P0a item G1, P5's `--shadow-recorder` flag on `tools/soak_driver.py` requires that surface to be EVOLVING (not FROZEN) under ADR-18. Current ADR-18 classification places `tools/soak_driver.py` in the EVOLVING bucket (the v2.0 P1 `worker_recycle_every_n` kwarg pass-through landed without amendment). Therefore:
