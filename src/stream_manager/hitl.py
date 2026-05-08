@@ -55,6 +55,7 @@ class TriggerReason(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     DESKTOP_PAUSE = "desktop_pause"
     CROSS_SESSION_FLAG = "cross_session_flag"
+    AUDIT_PROBE = "audit_probe"
 
 
 def dispatch_resolution(

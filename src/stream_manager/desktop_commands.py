@@ -44,6 +44,7 @@ KIND_ALLOWLIST = frozenset(
         "audible_cue",
         "surface_hitl",
         "request_attention",
+        "audit_probe",
     }
 )
 
