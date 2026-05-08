@@ -58,8 +58,9 @@ grep -nE 'audit_probe|audit\.probe|provenance_assertion' src/ tests/ tools/ dash
 ```
 
 Before P1 edits: zero hits except docs / task plan / phase-0
-prompt. After P1 edits: hits in the eleven files listed above and
-nowhere else.
+prompt. After P1 edits: hits in the fifteen files listed above
+(10 src/dashboard/tools + 4 test + REQUIREMENTS.md) and nowhere
+else.
 
 ## Task brief
 
@@ -93,9 +94,11 @@ disambiguation:
 1. **Envelope pair `audit.probe` / `audit.probe_ack`**:
 
    - `audit.probe` payload (TypedDict / dataclass at the existing
-     bus message-type definition site):
+     bus message-type definition site). `K = 5` candidate streams
+     by default; configurable via session config.
      ```python
      {
+         "probe_id": str,             # uuid4 hex; correlation handle
          "candidate_streams": [
              {
                  "slug": str,
@@ -104,27 +107,41 @@ disambiguation:
                  "last_event_ts": float,  # epoch seconds
                  "prompt_hash": str,
              },
-             # top-K, K = 5 default; configurable via session config
+             # ... up to K entries
          ],
-         "ttl_seconds": int,  # default 1800 (30 min)
+         "ttl_seconds": int,          # default 1800 (30 min)
+         "issued_at": float,          # epoch seconds
          "hmac_sig": str,
      }
      ```
    - `audit.probe_ack` payload:
      ```python
      {
+         "probe_id": str,             # MUST match the originating probe
          "selected_jsonl_path": str | None,  # None == "operator picked 'none'"
-         "signed_at": float,  # epoch seconds
+         "signed_at": float,          # epoch seconds
          "expires_at": float,
          "hmac_sig": str,
      }
      ```
-   - HMAC sig algorithm = SHA-256 over `(slug || jsonl_path ||
-     brain_id || last_event_ts || prompt_hash || ttl_seconds)`,
-     keyed by the existing shared secret resolved per OQ1
+   - HMAC sig algorithm = HMAC-SHA-256 over the canonical
+     JSON-encoded probe payload **with `hmac_sig` removed**, keyed
+     by the existing shared secret resolved per OQ1
      (env `SM_DESKTOP_SECRET` first → `.bridge/secret`
-     fallback). Reuse the secret-resolution helper from
-     `desktop_commands.py`; do NOT re-implement.
+     fallback). Canonicalisation: `json.dumps(..., sort_keys=True,
+     separators=(",", ":"))`. The `candidate_streams` list MUST be
+     fully covered by the sig (reordering or substituting any
+     candidate invalidates the sig). Reuse the secret-resolution
+     helper from `desktop_commands.py`; do NOT re-implement.
+   - `audit.probe_ack` sig is computed identically over the ack
+     payload with `hmac_sig` removed.
+   - **Replay protection:** `probe_id` is single-use. Server
+     rejects an ack for a `probe_id` that already has a
+     `provenance_assertions` row written; rejection is logged and
+     surfaces a 409 to the dashboard. The replay check is done
+     under the same DB transaction that writes the assertion (use
+     `INSERT ... ON CONFLICT(probe_id) DO NOTHING` semantics; see
+     §2 schema).
 
 2. **WAL `provenance_assertions` table** — additive migration in
    `message_bus.py`:
@@ -132,8 +149,9 @@ disambiguation:
    ```sql
    CREATE TABLE IF NOT EXISTS provenance_assertions (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
+       probe_id TEXT NOT NULL UNIQUE,  -- replay-protection key
        session_id TEXT NOT NULL,
-       jsonl_path TEXT,  -- NULL when operator selected "none"
+       jsonl_path TEXT,                -- NULL when operator selected "none"
        brain_id TEXT,
        prompt_hash TEXT,
        signed_at REAL NOT NULL,
@@ -141,11 +159,23 @@ disambiguation:
        hmac_sig TEXT NOT NULL
    );
    CREATE INDEX IF NOT EXISTS idx_provenance_session_active
-       ON provenance_assertions (session_id, expires_at DESC);
+       ON provenance_assertions (session_id, signed_at DESC);
    ```
 
    Migration runs on `MessageBus.__init__` next-startup; idempotent
    `IF NOT EXISTS`. No backfill; assertions accrue as probes fire.
+
+   **Active-row resolution:** the "current" assertion for a session
+   is the row with the largest `signed_at` whose `expires_at > NOW()`.
+   Multiple non-expired rows MAY coexist (e.g. operator answered
+   then revised); readers MUST take the latest by `signed_at`. The
+   `idx_provenance_session_active` index above is `signed_at DESC`
+   precisely for this query.
+
+   `probe_id UNIQUE` provides replay protection: a second ack for
+   the same `probe_id` is a constraint violation. Server catches
+   the violation, returns HTTP 409, and does NOT write a duplicate
+   row.
 
 3. **`audit_probe` HITL trigger reason** — extend
    `hitl.py:TriggerReason` enum:
@@ -161,12 +191,19 @@ disambiguation:
 
 4. **`/sm-probe` endpoint** in `dashboard/server.py`:
 
-   - `GET /api/sm-probe?session_id=X&force=0|1` — returns current
-     non-expired assertion, OR (if expired or `force=1`) fires new
-     `audit.probe` and returns 202 with the in-flight HITL row id.
+   - `GET /api/sm-probe?session_id=X&force=0|1` — returns the
+     latest-by-`signed_at` non-expired assertion for the session,
+     OR (if no row matches or `force=1`) fires new `audit.probe`
+     and returns 202 with the in-flight `probe_id` + HITL row id.
    - `POST /api/sm-probe/ack` — body =
-     `{hitl_row_id, selected_jsonl_path | null}`; validates HMAC
-     sig, writes `provenance_assertions` row, resolves HITL row.
+     `{probe_id, hitl_row_id, selected_jsonl_path | null,
+       hmac_sig}`; validates HMAC sig over the canonical-encoded
+     ack body (sans `hmac_sig`), writes `provenance_assertions`
+     row keyed by `probe_id` UNIQUE constraint, resolves HITL row.
+     Returns 409 if `probe_id` already has an assertion (replay
+     attempt). The `hitl_row_id` is the dashboard correlation
+     handle; `probe_id` is the cryptographic correlation key
+     covered by the sig.
    - HMAC sig validation reuses existing helper from
      `desktop_commands.py`; do NOT duplicate logic.
    - SSE stream entry for `audit.probe` envelope rides the existing
@@ -188,8 +225,22 @@ disambiguation:
 
    - New flag `--ppp-auto-probe` (default OFF in P1).
    - When set, soak driver fires `/api/sm-probe?force=1` every
-     1800 s of soak wall-clock.
+     900 s of soak wall-clock. Tier 3 soak ≈ 1920 s ⇒ at least two
+     probes fire per soak; the second exercises the cache
+     short-circuit (assertion from probe-1 must satisfy
+     `force=0` reads at the dashboard until expiry).
    - Default flip to ON happens in P4 ship-gate (NOT P1).
+   - **Transport caveat (ABORT/CLARIFY before merge):** soak driver
+     today is process-direct (no HTTP coupling to dashboard).
+     Firing `/api/sm-probe` introduces a new dependency that the
+     dashboard process is up during Tier 3 soak. Verify or wire
+     via direct WAL write — see the open clarify-issue noted in
+     the v2.1 cycle frame "Cross-cutting risks" section. If the
+     dashboard is not guaranteed up, this deliverable becomes a
+     direct `MessageBus` writer that emits the `audit.probe`
+     envelope onto the bus without going through HTTP, and the
+     dashboard SSE stream becomes a pure consumer of the bus
+     event. Either path satisfies FR-PPP-1; pick at P1 kickoff.
 
 7. **Self-monitor candidate-list filter** (defense-in-depth):
 
@@ -213,29 +264,45 @@ disambiguation:
        lossless.
      - `test_audit_probe_hmac_sig_round_trip` — sig validates;
        wrong key fails.
+     - `test_audit_probe_hmac_sig_covers_candidate_list` —
+       reordering or substituting any `candidate_streams` entry
+       invalidates the sig (defends against list-tamper attacks).
      - `test_audit_probe_ttl_expiry` — assertion past
        `expires_at` is rejected.
      - `test_audit_probe_ack_none_selection` —
        `selected_jsonl_path=None` writes a NULL row + valid sig.
+     - `test_audit_probe_replay_rejected` — second ack POST with
+       the same `probe_id` is rejected with HTTP 409; first
+       assertion row remains the only row for that probe_id.
 
    - `tests/test_audit_probe_hitl.py`:
      - `test_audit_probe_emits_hitl_row` —
        `/api/sm-probe?force=1` writes a `hitl_pending` row with
-       `trigger_reason="audit_probe"`.
+       `trigger_reason="audit_probe"` and an associated
+       `probe_id`.
      - `test_audit_probe_ack_resolves_hitl_row` — ack POST resolves
-       the HITL row + writes `provenance_assertions` row.
+       the HITL row + writes `provenance_assertions` row keyed by
+       `probe_id`.
      - `test_cached_assertion_skips_probe` —
        `/api/sm-probe?force=0` with non-expired assertion returns
        cached row, fires no probe.
+     - `test_latest_signed_at_wins_when_multiple_active` — two
+       non-expired assertions for the same `session_id` ⇒
+       `force=0` returns the row with the larger `signed_at`.
 
    - `tests/test_audit_probe_cassette.py`:
      - `test_cassette_captures_audit_probe_pair` — live capture +
        replay round-trips both envelopes.
 
    - `tests/test_audit_probe_self_monitor.py`:
-     - `test_candidate_list_excludes_sm_own_brain_id` — when SM's
-       own JSONL is in the watch set, `/api/sm-probe` candidate
-       list does NOT include it.
+     - `test_candidate_list_excludes_sm_own_brain_id` — inject a
+       SYNTHETIC candidate-list fixture containing an entry whose
+       `brain_id` equals SM's own brain_id; assert the filter
+       removes it from the `/api/sm-probe` response. Do NOT rely
+       on `session_watcher` already-excluding SM's brain (it does,
+       per `feedback_no_self_monitor.md`, but the test must be
+       regression-proof against future watcher changes that might
+       leak the SM brain through the candidate-list builder).
 
 10. **REQUIREMENTS.md** — append §"FR-PPP — Provenance Probe
     Protocol" with:
@@ -254,6 +321,11 @@ disambiguation:
       brain_id from the choices presented to the operator.
     - FR-PPP-6: PPP envelope schemas MUST be covered by the soak
       cassette in the same release that introduces them.
+    - FR-PPP-7: `audit.probe_ack` MUST be single-use per
+      `probe_id`. The server MUST reject a second ack for the
+      same `probe_id` (HTTP 409 at the `/api/sm-probe/ack`
+      endpoint; constraint violation at the WAL layer via the
+      `probe_id UNIQUE` index).
 
 ### LOC budget
 
@@ -307,7 +379,11 @@ non-additive line on a FROZEN row aborts the merge.
 - [ ] `--ppp-auto-probe` flag is opt-in (default OFF) in P1
 - [ ] Self-monitor candidate-list filter live (P3 will harden it)
 - [ ] All 4 test files added; full pytest suite green
-- [ ] REQUIREMENTS.md FR-PPP-1..6 appended
+- [ ] REQUIREMENTS.md FR-PPP-1..7 appended (FR-PPP-7 = replay
+      single-use)
+- [ ] Probe transport choice (HTTP via `/api/sm-probe?force=1` vs
+      direct `MessageBus` writer) made explicit at P1 kickoff per
+      §6 caveat; both paths satisfy FR-PPP-1
 - [ ] LOC budget ≤ 700 net add
 - [ ] Sub-cycle close-out diff guard run; FROZEN seams additive only
 - [ ] Cross-PR seam review (writer↔reader pairs) signed off
