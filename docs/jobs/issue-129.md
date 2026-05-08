@@ -36,7 +36,10 @@ Cycle ownership in `docs/v2.1-task-plan.md`.
   ```
   rg --type py 'brain_id|session_id|jsonl_path' src/ tools/ dashboard/ -l
   rg --type py 'subscribe|tail|watch' src/stream_manager/ -l
+  rg 'brain_id|session_id|jsonl_path' dashboard/static/ -l
   ```
+  Third grep covers HTML/JS surfaces (`dashboard/static/index.html`)
+  excluded by `--type py`.
 - [ ] §B3 tag-resolution rule: every `UNFILTERED` row carries `[harden in P3]` or `[intentionally out-of-scope: <reason>]`.
 - [ ] FROZEN + `[harden in P3]` → ADR-18 amendment line item in P3 prompt.
 - [ ] P3 prompt cites this doc as load-bearing scope.
