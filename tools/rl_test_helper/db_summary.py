@@ -34,8 +34,10 @@ class ShadowSummary:
 
 
 def _ro_connect(db_path: Path) -> sqlite3.Connection:
-    safe = quote(db_path.as_posix(), safe="/:")
-    return sqlite3.connect(f"file:{safe}?mode=ro", uri=True)
+    # Windows-correct file URI form: `file:/C:/...?mode=ro` (per SQLite spec).
+    # Mirrors rl/ope.py:load_episodes_from_db (PR #123 A3 fix).
+    safe = quote(db_path.resolve().as_posix().lstrip("/"), safe="/:")
+    return sqlite3.connect(f"file:/{safe}?mode=ro", uri=True)
 
 
 def _resolve_self_session_id(sm_self_session_id: str | None) -> str | None:
@@ -54,8 +56,10 @@ def summarise_episodes(db_path: Path, sm_self_session_id: str | None = None) -> 
     with closing(_ro_connect(db_path)) as conn:
         wal = _journal_mode(conn) == "wal"
         total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
-        by_source = dict(conn.execute("SELECT source, COUNT(*) FROM episodes GROUP BY source").fetchall())
-        by_verdict = dict(conn.execute("SELECT verdict, COUNT(*) FROM episodes GROUP BY verdict").fetchall())
+        by_source = dict(conn.execute(
+            "SELECT source, COUNT(*) FROM episodes GROUP BY source").fetchall())
+        by_verdict = dict(conn.execute(
+            "SELECT verdict, COUNT(*) FROM episodes GROUP BY verdict").fetchall())
         off_support = conn.execute(
             "SELECT COUNT(*) FROM episodes WHERE action_propensity != 1.0"
         ).fetchone()[0]
