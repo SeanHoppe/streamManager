@@ -130,7 +130,7 @@ Promotion to non-advisory for stage 1 requires:
 2. Replacing `_verdict_under_threshold` with a `route()`-based replay that re-evaluates each golden row's recorded confidence against the candidate threshold.
 3. ADR-18 reclassification of the relevant `model_router` / `cli_governance` surface from FROZEN to EVOLVING for the duration of the wiring change.
 
-This is a v10.x backlog item, tracked alongside the P3 DR estimator follow-up.
+Tracked in [#124](https://github.com/SeanHoppe/streamManager/issues/124). The sibling P3 DR-estimator follow-up (deviation #1) is tracked in [#125](https://github.com/SeanHoppe/streamManager/issues/125).
 
 ### 10b. Shadow recording strategy — disposition
 
