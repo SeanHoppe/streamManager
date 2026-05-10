@@ -385,7 +385,7 @@ class SessionWatcher:
         *,
         brain_id_filter: str | None = None,
         sm_brain_id: str | None = None,
-    ) -> list[object]:
+    ) -> list["AuditProbeCandidate"]:
         """Build frozen candidate list for FR-PPP-1 emit_audit_probe.
 
         Layer 1 uses ``sessionId`` as ``brain_id`` and empty
@@ -394,6 +394,10 @@ class SessionWatcher:
         ``sm_brain_id``: last-line drop of SM's own brain_id (primary
         guard is registration-time ``_is_self_session``).
         ``brain_id_filter``: prefix-include for self-monitor test.
+
+        Skips rows whose ``cwd`` produces an empty ``slug`` — those
+        would resolve to ``~/.claude/projects//<sid>.jsonl`` (broken
+        path, double-slash) and the operator can never pick them.
         """
         from stream_manager.message_bus import AuditProbeCandidate
         with self._lock:
@@ -402,13 +406,15 @@ class SessionWatcher:
                 for r in self._sessions.values()
                 if r.state == "active"
             ]
-        out: list[object] = []
+        out: list[AuditProbeCandidate] = []
         for session_id, cwd, last_seen in snapshot:
             if sm_brain_id and session_id == sm_brain_id:
                 continue
             if brain_id_filter and not session_id.startswith(brain_id_filter):
                 continue
             slug = (cwd or "").replace("\\", "-").replace("/", "-").strip("-")
+            if not slug:
+                continue
             jsonl_path = str(
                 Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
             )

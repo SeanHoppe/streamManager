@@ -14,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 
 import pytest
@@ -99,7 +100,7 @@ def test_candidate_is_frozen():
         slug="s", jsonl_path="/p", brain_id="b",
         last_event_ts=1.0, prompt_hash="",
     )
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         cand.slug = "MUTATED"  # type: ignore[misc]
 
 

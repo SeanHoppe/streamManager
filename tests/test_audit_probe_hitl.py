@@ -14,8 +14,6 @@ import importlib
 import sys
 import time
 
-import pytest
-
 from stream_manager.message_bus import AuditProbeCandidate, MessageBus
 from stream_manager.project_context import ProjectContextSnapshot
 

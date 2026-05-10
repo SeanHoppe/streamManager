@@ -1282,6 +1282,13 @@ class GovernanceEngine:
         (``"audit_probe"``); the SSE envelope type uses dot.case
         (``"audit.probe"``). Two identifiers, one concept — message
         anchors the HITL row, envelope rides ADR-14 SSE.
+
+        Threat model (FR-PPP-2 lock 2026-05-10): the HMAC sig binds
+        endpoint-integrity, not operator-attestation. The browser does
+        not hold the secret. Server-side signing on the ack path
+        proves "row written through legitimate endpoint" — defending
+        against direct WAL tampering, not impersonation between server
+        components. P2/P3 verifiers MUST treat the sig as such.
         """
         if self.bus is None or not self.session_id:
             raise RuntimeError(

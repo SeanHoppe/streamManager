@@ -923,9 +923,7 @@ async def api_sm_probe(session_id: str, force: int = 0):
     queued HITL row ``no_subscriber``. Branching on the return value
     avoids the TOCTOU race vs ``envelope_subscriber_count`` pre-check.
     """
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
-    if int(force) != 1:
+    if force != 1:
         raise HTTPException(
             status_code=400, detail="force=1 required (operator-initiated)"
         )
@@ -2389,7 +2387,7 @@ async def sse_events(
         # queue. The generator drains the queue each tick. unsubscribe
         # in `finally` is the only thing preventing a callback leak (the
         # callback closure pins the queue + request scope).
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         env_q: asyncio.Queue = asyncio.Queue(maxsize=256)
         bus = _get_bus()
 
