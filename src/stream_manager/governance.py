@@ -1276,6 +1276,12 @@ class GovernanceEngine:
         ``AuditProbeCandidate`` (immutable members), this defends
         against sign-then-mutate divergence between sign-time and
         write-time payloads.
+
+        Naming convention (mirrors `_maybe_emit_cross_session_hitl`):
+        the bus message ``Message.type`` uses snake_case
+        (``"audit_probe"``); the SSE envelope type uses dot.case
+        (``"audit.probe"``). Two identifiers, one concept — message
+        anchors the HITL row, envelope rides ADR-14 SSE.
         """
         if self.bus is None or not self.session_id:
             raise RuntimeError(

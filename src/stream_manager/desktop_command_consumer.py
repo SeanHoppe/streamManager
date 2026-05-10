@@ -116,13 +116,8 @@ def _default_executors() -> dict[str, Callable[[dict], None]]:
         log.info("desktop_command request_attention stub: %r", args)
 
     def _noop_audit_probe(args: dict) -> None:
-        # v2.1 P1 (FR-PPP): governed-side stub. Real probe surfacing
-        # happens dashboard-side via /api/sm-probe + the HITL panel
-        # row variant; operator's signed ack writes
-        # provenance_assertions via /api/sm-probe/ack POST. The
-        # consumer-side handler exists so the kind is recognized
-        # (otherwise the consumer rejects with error='unknown_kind'
-        # per the security model in this module's docstring).
+        # v2.1 P1 (FR-PPP): stub so the kind is recognized; real flow is
+        # dashboard-side (see `docs/v2.1-p1-scope.md` §4 M3).
         log.info("desktop_command audit_probe stub: %r", args)
 
     return {
