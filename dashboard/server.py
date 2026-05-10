@@ -910,6 +910,154 @@ async def api_hitl_annotate(request: Request):
     return {"ok": True, "decision_id": decision_id, "override_action": override_action}
 
 
+# ── v2.1 P1 (FR-PPP) — Provenance Probe Protocol endpoints ───────────
+
+
+@app.get("/api/sm-probe")
+async def api_sm_probe(session_id: str, force: int = 0):
+    """Emit `audit.probe` for ``session_id`` (FR-PPP-1).
+
+    ``force=1`` required (operator-initiated; prevents accidental
+    storms). 503 branch (issue #128 §A2) fires on
+    ``delivered_count == 0`` from ``emit_audit_probe`` and resolves the
+    queued HITL row ``no_subscriber``. Branching on the return value
+    avoids the TOCTOU race vs ``envelope_subscriber_count`` pre-check.
+    """
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    if int(force) != 1:
+        raise HTTPException(
+            status_code=400, detail="force=1 required (operator-initiated)"
+        )
+    _reject_sm_own(session_id)
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+
+    from stream_manager.session_watcher import get_session_watcher
+    watcher = get_session_watcher()
+    if watcher is None:
+        raise HTTPException(status_code=503, detail="session watcher inactive")
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip() or None
+    candidates = watcher.build_audit_probe_candidates(sm_brain_id=sm_own)
+    if not candidates:
+        raise HTTPException(status_code=400, detail="no candidate streams")
+
+    reg = _get_engine_registry()
+    if reg is None:
+        raise HTTPException(status_code=500, detail="engine registry unavailable")
+    try:
+        engine = reg.get_or_create(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        probe_id, hitl_id, delivered = engine.emit_audit_probe(candidates)
+    except Exception as exc:
+        log.exception("api_sm_probe: emit_audit_probe failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if delivered == 0:
+        try:
+            bus.resolve_hitl(hitl_id, "no_subscriber")
+        except Exception:
+            log.exception("api_sm_probe: resolve_hitl(no_subscriber) failed")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "no envelope subscribers",
+                "probe_id": probe_id,
+                "hitl_id": hitl_id,
+                "delivered": 0,
+            },
+        )
+
+    return {
+        "probe_id": probe_id,
+        "hitl_id": hitl_id,
+        "delivered": delivered,
+        "candidate_count": len(candidates),
+    }
+
+
+@app.post("/api/sm-probe/ack")
+async def api_sm_probe_ack(request: Request):
+    """Operator ack for an audit_probe HITL row (FR-PPP-1).
+
+    Body: {probe_id, hitl_id, session_id, selected_jsonl_path|null,
+    ttl_seconds?}. ``selected_jsonl_path is None`` = "none of the
+    above"; row still lands in ``provenance_assertions`` with
+    ``jsonl_path=NULL`` for P2 negative-control. HMAC seam reuses
+    ``desktop_commands.sign`` (issue #128 §A1).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    probe_id = body.get("probe_id")
+    hitl_id = body.get("hitl_id")
+    session_id = body.get("session_id")
+    selected = body.get("selected_jsonl_path")
+    ttl_seconds = int(body.get("ttl_seconds") or 1800)
+    if not isinstance(probe_id, str) or not probe_id:
+        raise HTTPException(status_code=400, detail="probe_id required")
+    if not isinstance(hitl_id, int):
+        raise HTTPException(status_code=400, detail="hitl_id must be int")
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    if selected is not None and not isinstance(selected, str):
+        raise HTTPException(status_code=400, detail="selected_jsonl_path must be string or null")
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+
+    from stream_manager import desktop_commands as _dc
+    signed_at = time.time()
+    expires_at = signed_at + ttl_seconds
+    sig_payload = {
+        "probe_id": probe_id,
+        "selected_jsonl_path": selected,
+        "signed_at": signed_at,
+        "expires_at": expires_at,
+    }
+    hmac_sig = _dc.sign(sig_payload)
+
+    written = bus.write_provenance_assertion(
+        probe_id=probe_id,
+        session_id=session_id,
+        jsonl_path=selected,
+        brain_id=None,
+        prompt_hash=None,
+        signed_at=signed_at,
+        expires_at=expires_at,
+        hmac_sig=hmac_sig,
+    )
+    if not written:
+        raise HTTPException(status_code=409, detail="probe_id replay")
+
+    try:
+        resolution = "approved" if selected else "overridden:none"
+        bus.resolve_hitl(hitl_id, resolution)
+    except Exception:
+        log.exception("api_sm_probe_ack: resolve_hitl failed")
+
+    ack_dict = {
+        "probe_id": probe_id,
+        "selected_jsonl_path": selected,
+        "signed_at": signed_at,
+        "expires_at": expires_at,
+        "hmac_sig": hmac_sig,
+    }
+    try:
+        bus.write_envelope("audit.probe_ack", ack_dict)
+    except Exception:
+        log.exception("api_sm_probe_ack: write_envelope failed")
+
+    return {"ok": True, "probe_id": probe_id, "written": True}
+
+
 # ── Task F: cross-session pattern endpoints ──────────────────────────
 
 
@@ -2235,6 +2383,28 @@ async def sse_events(
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
 
+        # FR-PPP-1: per-connection envelope subscriber. The bus invokes
+        # _env_cb from a worker thread; thread-safe-trampoline into the
+        # asyncio loop pushes (event_type, payload) onto the per-conn
+        # queue. The generator drains the queue each tick. unsubscribe
+        # in `finally` is the only thing preventing a callback leak (the
+        # callback closure pins the queue + request scope).
+        loop = asyncio.get_event_loop()
+        env_q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        bus = _get_bus()
+
+        def _env_cb(env_type: str, payload: dict) -> None:
+            try:
+                loop.call_soon_threadsafe(env_q.put_nowait, (env_type, payload))
+            except (RuntimeError, asyncio.QueueFull):
+                pass
+
+        if bus is not None:
+            try:
+                bus.subscribe_envelope(_env_cb)
+            except Exception:
+                log.exception("/events: subscribe_envelope failed")
+
         if resume_drid is not None and resume_mrid is not None:
             # Resume path: skip seed, replay strictly newer rows from cursor.
             last_rid = resume_drid
@@ -2296,43 +2466,64 @@ async def sse_events(
             "ORDER BY rowid ASC"
         )
 
-        while True:
-            if await request.is_disconnected():
-                break
-            # Mirror mode suppresses the decisions tail — only messages flow.
-            if not is_mirror:
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                # Mirror mode suppresses the decisions tail — only messages flow.
+                if not is_mirror:
+                    try:
+                        rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
+                        for row in rows:
+                            last_rid = row["rid"]
+                            yield (
+                                f"id: d{last_rid}:m{last_msg_rid}\n"
+                                f"data: {json.dumps(dict(row))}\n\n"
+                            )
+                    except Exception:
+                        pass
+                # Phase 6 §3/§7: forward ALL bus event types (not just HITL)
+                # so the dashboard event-log panel can render the full
+                # stream. Bus events use direction='internal' (user content
+                # uses 'inbound'); skip inbound rows so we don't duplicate
+                # the decisions feed and don't ship raw user input.
                 try:
-                    rows = conn.execute(_tail_sql(conn), (last_rid,)).fetchall()
-                    for row in rows:
-                        last_rid = row["rid"]
+                    msg_rows = conn.execute(
+                        msg_sql, (last_msg_rid, *msg_params_template),
+                    ).fetchall()
+                    for hr in msg_rows:
+                        last_msg_rid = hr["rid"]
+                        payload = dict(hr)
+                        payload["event_type"] = payload.pop("type")
                         yield (
                             f"id: d{last_rid}:m{last_msg_rid}\n"
-                            f"data: {json.dumps(dict(row))}\n\n"
+                            f"data: {json.dumps(payload)}\n\n"
                         )
                 except Exception:
                     pass
-            # Phase 6 §3/§7: forward ALL bus event types (not just HITL)
-            # so the dashboard event-log panel can render the full
-            # stream. Bus events use direction='internal' (user content
-            # uses 'inbound'); skip inbound rows so we don't duplicate
-            # the decisions feed and don't ship raw user input.
-            try:
-                msg_rows = conn.execute(
-                    msg_sql, (last_msg_rid, *msg_params_template),
-                ).fetchall()
-                for hr in msg_rows:
-                    last_msg_rid = hr["rid"]
-                    payload = dict(hr)
-                    payload["event_type"] = payload.pop("type")
+                # FR-PPP-1: drain envelope queue. Use a named SSE event
+                # so the browser binds via `addEventListener('audit.probe', ...)`
+                # rather than the default `message` handler.
+                while True:
+                    try:
+                        env_type, env_payload = env_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                     yield (
-                        f"id: d{last_rid}:m{last_msg_rid}\n"
-                        f"data: {json.dumps(payload)}\n\n"
+                        f"event: {env_type}\n"
+                        f"data: {json.dumps(env_payload)}\n\n"
                     )
+                await asyncio.sleep(0.5)
+        finally:
+            if bus is not None:
+                try:
+                    bus.unsubscribe_envelope(_env_cb)
+                except Exception:
+                    log.exception("/events: unsubscribe_envelope failed")
+            try:
+                conn.close()
             except Exception:
                 pass
-            await asyncio.sleep(0.5)
-
-        conn.close()
 
     return StreamingResponse(
         generate(),

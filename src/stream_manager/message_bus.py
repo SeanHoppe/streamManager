@@ -257,6 +257,12 @@ class AuditProbeCandidate:
         }
 
 
+# `AuditProbeEnvelope` is intentionally NOT `frozen=True`. The HMAC sig
+# is stamped onto the dataclass after construction (see
+# `governance.emit_audit_probe`: build → sign sans hmac_sig → assign
+# hmac_sig). Inner `AuditProbeCandidate` is frozen, which is what the
+# sign-then-mutate guard hinges on; mutating the outer envelope fields
+# post-sign would invalidate the sig and is caller-side discipline.
 @dataclass
 class AuditProbeEnvelope:
     probe_id: str
@@ -685,10 +691,25 @@ class MessageBus:
     def envelope_subscriber_count(self) -> int:
         """Return the number of registered envelope subscribers.
 
-        Used by the `/api/sm-probe?force=1` browser path to decide whether
-        a probe can be delivered (issue #128 §A2: 503 when zero subs).
+        Telemetry only. The `/api/sm-probe?force=1` 503 branch MUST NOT
+        pre-check this counter — TOCTOU. The handler branches on the
+        return value of `write_envelope` instead.
         """
         return len(self._envelope_subscribers)
+
+    def unsubscribe_envelope(self, callback: EnvelopeSubscriberCallback) -> None:
+        """Remove a previously-registered envelope subscriber.
+
+        Idempotent. The dashboard SSE handler registers one envelope
+        subscriber per browser connection and must call this in a
+        ``try/finally`` on disconnect — without it, browser disconnects
+        leak callbacks that hold references to the per-connection
+        ``asyncio.Queue`` and the FastAPI request scope.
+        """
+        try:
+            self._envelope_subscribers.remove(callback)
+        except ValueError:
+            pass
 
     def write_envelope(
         self, envelope_type: str, payload: dict[str, object]
