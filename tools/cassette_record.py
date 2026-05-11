@@ -353,6 +353,12 @@ def _record_ppp_envelopes(
     ).to_dict())
     bus.write_envelope("audit.probe_failure", failure_payload)
 
+    # v2.1 P3 — Layer 3 negative-control hallucination envelope. Rides
+    # the same `--skip-ppp-pump` opt-out per FR-PPP-14. Cassette also
+    # records the decoy registration row so soak replay covers the
+    # full Layer-3 surface (register → detect → envelope).
+    decoy_rows = _record_decoy_envelopes(bus, start_idx + 5, issued_at)
+
     return [
         {"idx": start_idx, "kind": "audit_probe", "envelope": env_payload},
         {"idx": start_idx + 1, "kind": "audit_probe_ack",
@@ -363,6 +369,52 @@ def _record_ppp_envelopes(
          "envelope": observed_payload},
         {"idx": start_idx + 4, "kind": "audit_probe_failure",
          "envelope": failure_payload},
+    ] + decoy_rows
+
+
+def _record_decoy_envelopes(
+    bus: MessageBus, start_idx: int, issued_at: float,
+) -> list[dict]:
+    """v2.1 P3 (FR-PPP-12..14) — Layer 3 negative-control cassette
+    coverage. Records ONE decoy registration row + ONE
+    `audit.hallucination_detected` envelope per cassette run.
+
+    Rides the same `--skip-ppp-pump` opt-out as Layers 1/2 — Layer 3
+    is part of the PPP pump, not a separate cassette section.
+    """
+    from stream_manager import desktop_commands
+    from stream_manager.message_bus import (
+        AuditHallucinationDetectedEnvelope,
+    )
+    probe_id = f"cassette-decoy-{start_idx}"
+    jsonl_path = f"/tmp/cassette-decoy-{start_idx}.jsonl"
+    reg_sig = desktop_commands.sign({
+        "probe_id": probe_id, "jsonl_path": jsonl_path,
+        "registered_at": float(issued_at),
+    })
+    bus.write_provenance_decoy(
+        probe_id=probe_id, jsonl_path=jsonl_path,
+        registered_at=issued_at, hmac_sig=reg_sig,
+    )
+    detected_at = issued_at + 5.0
+    halluc = AuditHallucinationDetectedEnvelope(
+        probe_id=probe_id, jsonl_path=jsonl_path,
+        detected_at=detected_at, hmac_sig="",
+    )
+    halluc_payload = halluc.to_dict()
+    halluc_payload["hmac_sig"] = desktop_commands.sign(
+        {k: v for k, v in halluc_payload.items() if k != "hmac_sig"}
+    )
+    bus.mark_decoy_triggered(probe_id=probe_id, triggered_at=detected_at)
+    bus.write_envelope(
+        "audit.hallucination_detected", halluc_payload,
+    )
+    return [
+        {"idx": start_idx, "kind": "audit_decoy_register",
+         "row": {"probe_id": probe_id, "jsonl_path": jsonl_path,
+                 "registered_at": issued_at, "hmac_sig": reg_sig}},
+        {"idx": start_idx + 1, "kind": "audit_hallucination_detected",
+         "envelope": halluc_payload},
     ]
 
 

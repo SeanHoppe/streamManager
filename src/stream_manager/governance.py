@@ -1443,6 +1443,113 @@ class GovernanceEngine:
             )
         return envelope_dict, delivered, requeued
 
+    # ── v2.1 P3 (FR-PPP) — Layer 3 negative-control peers ──────────────
+    #
+    # `register_decoy_stream` registers a synthetic JSONL path that is
+    # never written by SM. Peer to `emit_audit_canary` (registers
+    # observer state for a known probe). The decoy path lives in
+    # `provenance_decoys` (WAL); the HMAC sig binds endpoint-integrity
+    # per FR-PPP-2 — the row was written through the legitimate
+    # `/api/sm-decoy/register` endpoint.
+    #
+    # `emit_audit_hallucination_detected` fires when any code path
+    # (jsonl_tail / session_watcher / governance) reports activity on a
+    # registered decoy. Peer to `emit_audit_probe_failure`: server-stamped
+    # at detect time; single-emit invariant enforced by the bus writer
+    # (`mark_decoy_triggered` returns False on a subsequent stamp,
+    # causing this method to skip the envelope fan-out).
+    def register_decoy_stream(
+        self,
+        jsonl_path: str,
+    ) -> tuple[str, dict[str, object], bool]:
+        """Register a synthetic JSONL path that is never written.
+
+        Returns ``(probe_id, registration_dict, first_write)``.
+
+        - ``probe_id`` — fresh uuid hex; used as the correlation key in
+          downstream `audit.hallucination_detected` envelopes.
+        - ``registration_dict`` — wire shape: ``{probe_id, jsonl_path,
+          registered_at, hmac_sig}``. The dashboard endpoint surfaces
+          this to the operator (or auto-registration log).
+        - ``first_write`` — False when ``jsonl_path`` is already
+          registered (re-register no-op). The dashboard endpoint
+          responds with the existing row's metadata in that case.
+
+        Threat model (FR-PPP-2): the sig binds endpoint-integrity, not
+        confidentiality — anyone reading the WAL sees the synthetic
+        path. The integrity guarantee is that the row was written
+        through the legitimate endpoint with the `desktop_command`
+        secret of record (issue #128 §A1).
+        """
+        if self.bus is None:
+            raise RuntimeError(
+                "register_decoy_stream requires bus"
+            )
+        probe_id = uuid.uuid4().hex
+        registered_at = time.time()
+        sig_payload = {
+            "probe_id": probe_id,
+            "jsonl_path": jsonl_path,
+            "registered_at": float(registered_at),
+        }
+        sig = desktop_commands.sign(sig_payload)
+        first_write = self.bus.write_provenance_decoy(
+            probe_id=probe_id,
+            jsonl_path=jsonl_path,
+            registered_at=registered_at,
+            hmac_sig=sig,
+        )
+        return probe_id, {**sig_payload, "hmac_sig": sig}, first_write
+
+    def emit_audit_hallucination_detected(
+        self,
+        probe_id: str,
+        jsonl_path: str,
+    ) -> tuple[dict[str, object], int, bool]:
+        """Emit `audit.hallucination_detected` for a decoy-path match.
+
+        Returns ``(envelope_dict, delivered_count, first_emit)``.
+
+        Single-emit invariant: stamps `provenance_decoys.triggered_at`
+        FIRST via `bus.mark_decoy_triggered`. If that returns False
+        (second match on the same probe_id), this method skips the
+        envelope fan-out and returns ``(envelope_dict, 0, False)`` —
+        the envelope_dict is still constructed for the caller's audit
+        trail, but no SSE traffic is generated. This is the WAL-level
+        equivalent of the P2 pop-then-emit canary observer claim.
+        """
+        if self.bus is None:
+            raise RuntimeError(
+                "emit_audit_hallucination_detected requires bus"
+            )
+        detected_at = time.time()
+        envelope = _msg_bus.AuditHallucinationDetectedEnvelope(
+            probe_id=probe_id,
+            jsonl_path=jsonl_path,
+            detected_at=detected_at,
+            hmac_sig="",
+        )
+        envelope_dict = envelope.to_dict()
+        sig_payload = {
+            k: v for k, v in envelope_dict.items() if k != "hmac_sig"
+        }
+        sig = desktop_commands.sign(sig_payload)
+        envelope_dict["hmac_sig"] = sig
+        envelope.hmac_sig = sig
+
+        # Claim the single-emit slot at the WAL row BEFORE fanning to
+        # SSE subscribers. A second match between claim and fan-out is
+        # blocked at the row-update level (WHERE triggered_at IS NULL).
+        first_emit = self.bus.mark_decoy_triggered(
+            probe_id=probe_id, triggered_at=detected_at,
+        )
+        if not first_emit:
+            return envelope_dict, 0, False
+        delivered = self.bus.write_envelope(
+            "audit.hallucination_detected", envelope_dict
+        )
+        return envelope_dict, delivered, True
+
     def _update_mode(self) -> None:
         if len(self._eligible_window) < ROLLING_WINDOW:
             return
