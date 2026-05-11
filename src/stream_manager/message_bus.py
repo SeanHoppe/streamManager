@@ -934,6 +934,27 @@ class MessageBus:
             "hmac_sig": row[8],
         }
 
+    def mark_canary_confirmed(
+        self,
+        probe_id: str,
+        nonce: str,
+        confirmed_at: float,
+    ) -> bool:
+        """v2.1 P2 — record a Layer-2 canary echo on the assertion row.
+
+        Single-write-wins via WHERE canary_confirmed_at IS NULL: a
+        second observe of the same nonce (operator re-typed) does NOT
+        re-stamp the row. Returns True on first write, False on no-op.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE provenance_assertions "
+                "SET canary_nonce=?, canary_confirmed_at=? "
+                "WHERE probe_id=? AND canary_confirmed_at IS NULL",
+                (nonce, float(confirmed_at), probe_id),
+            )
+            return (cur.rowcount or 0) > 0
+
     def annotate_decision(
         self,
         decision_id: str,

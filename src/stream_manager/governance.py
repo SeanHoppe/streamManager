@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -1336,6 +1337,111 @@ class GovernanceEngine:
         # Fan envelope to subscribers (dashboard SSE bridges to browser).
         delivered = self.bus.write_envelope("audit.probe", envelope_dict)
         return probe_id, pending_id, delivered
+
+    # v2.1 P2 (FR-PPP) — Layer 2 canary echo peers to `emit_audit_probe`.
+    #
+    # `emit_audit_canary` stamps a fresh nonce on a known assertion's
+    # probe_id and fans `audit.canary_emit` to envelope subscribers. The
+    # `jsonl_tail._canary_registry` consumes the same probe_id+nonce on
+    # the observer side. Sig binds endpoint-integrity per FR-PPP-2 lock
+    # 2026-05-10; browser never holds the secret.
+    def emit_audit_canary(
+        self,
+        probe_id: str,
+        jsonl_path: str,
+        timeout_s: int = 10,
+    ) -> tuple[str, dict[str, object], int]:
+        """Emit an `audit.canary_emit` envelope after a Layer-1 ack.
+
+        Returns ``(nonce, envelope_dict, delivered_count)``.
+
+        - ``nonce`` — 16-byte hex (`secrets.token_hex(8)`); single-use,
+          observer clears the registry entry on match.
+        - ``envelope_dict`` — exact wire payload (signed sans
+          ``hmac_sig``, then re-stamped). Caller passes this to the
+          JSONL observer via `register_canary` so the registry key
+          matches what was signed.
+        - ``delivered_count`` — number of envelope subscribers that
+          received the canary. Caller (dashboard handler) MUST check
+          this and surface a 503 on ``delivered_count == 0`` per the
+          P1 §A2 pattern (no TOCTOU on `envelope_subscriber_count`).
+        """
+        if self.bus is None or not self.session_id:
+            raise RuntimeError(
+                "emit_audit_canary requires bus + session_id"
+            )
+        nonce = secrets.token_hex(8)
+        issued_at = time.time()
+        envelope = _msg_bus.AuditCanaryEmitEnvelope(
+            probe_id=probe_id,
+            jsonl_path=jsonl_path,
+            nonce=nonce,
+            issued_at=issued_at,
+            timeout_s=int(timeout_s),
+            hmac_sig="",
+        )
+        envelope_dict = envelope.to_dict()
+        sig_payload = {
+            k: v for k, v in envelope_dict.items() if k != "hmac_sig"
+        }
+        sig = desktop_commands.sign(sig_payload)
+        envelope_dict["hmac_sig"] = sig
+        envelope.hmac_sig = sig
+        delivered = self.bus.write_envelope(
+            "audit.canary_emit", envelope_dict
+        )
+        return nonce, envelope_dict, delivered
+
+    # Re-fires Layer-1 disambiguation HITL on canary timeout. The failure
+    # envelope is server-stamped here; the underlying `provenance_assertions`
+    # row is NOT mutated (per scope §3 row 4: failure surfaces via envelope
+    # only — keeps the assertions table a "confirmed" record). The R7
+    # infinite-loop mitigation (cap re-queue depth at 1) is enforced at the
+    # caller site — `jsonl_tail` sweep checks per-probe re-queue counter
+    # before invoking this; second consecutive failure surfaces a hard HITL
+    # warning instead of recursing into a fresh audit_probe.
+    def emit_audit_probe_failure(
+        self,
+        probe_id: str,
+        reason: str,
+        candidate_streams: list[_msg_bus.AuditProbeCandidate] | None = None,
+        ttl_seconds: int = 1800,
+    ) -> tuple[dict[str, object], int, int | None]:
+        """Emit `audit.probe_failure` and re-queue a Layer-1 HITL row.
+
+        Returns ``(failure_envelope_dict, failure_delivered_count,
+        requeued_hitl_row_id)`` where the last value is ``None`` when
+        ``candidate_streams`` is empty (sweep caller passes the latest
+        snapshot from the assertion's session).
+        """
+        if self.bus is None or not self.session_id:
+            raise RuntimeError(
+                "emit_audit_probe_failure requires bus + session_id"
+            )
+        failed_at = time.time()
+        envelope = _msg_bus.AuditProbeFailureEnvelope(
+            probe_id=probe_id,
+            reason=reason,
+            failed_at=failed_at,
+            hmac_sig="",
+        )
+        envelope_dict = envelope.to_dict()
+        sig_payload = {
+            k: v for k, v in envelope_dict.items() if k != "hmac_sig"
+        }
+        sig = desktop_commands.sign(sig_payload)
+        envelope_dict["hmac_sig"] = sig
+        envelope.hmac_sig = sig
+        delivered = self.bus.write_envelope(
+            "audit.probe_failure", envelope_dict
+        )
+        requeued: int | None = None
+        if candidate_streams:
+            _, requeued, _ = self.emit_audit_probe(
+                candidate_streams=candidate_streams,
+                ttl_seconds=int(ttl_seconds),
+            )
+        return envelope_dict, delivered, requeued
 
     def _update_mode(self) -> None:
         if len(self._eligible_window) < ROLLING_WINDOW:
