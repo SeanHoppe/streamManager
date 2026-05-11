@@ -280,6 +280,49 @@ def _record_lm_dialogue(
     return rows
 
 
+def _record_ppp_envelopes(
+    bus: MessageBus, session_id: str, start_idx: int,
+) -> list[dict]:
+    """v2.1 P1 (FR-PPP) Layer 1: synthesize one `audit.probe` + one
+    `audit.probe_ack` envelope pair. HMAC sigs reuse the
+    `desktop_command` secret (issue #128 §A1)."""
+    from stream_manager import desktop_commands
+    from stream_manager.message_bus import (
+        AuditProbeAckEnvelope, AuditProbeCandidate, AuditProbeEnvelope,
+    )
+    issued_at = time.time()
+    cand = AuditProbeCandidate(
+        slug="cassette", jsonl_path="/tmp/cassette.jsonl",
+        brain_id=session_id, last_event_ts=issued_at, prompt_hash="",
+    )
+    env = AuditProbeEnvelope(
+        probe_id=f"cassette-probe-{start_idx}",
+        candidate_streams=[cand], ttl_seconds=300,
+        issued_at=issued_at, hmac_sig="",
+    )
+    env_payload = env.to_dict()
+    env_payload["hmac_sig"] = desktop_commands.sign(
+        {k: v for k, v in env_payload.items() if k != "hmac_sig"}
+    )
+    bus.write_envelope("audit.probe", env_payload)
+
+    ack = AuditProbeAckEnvelope(
+        probe_id=env.probe_id, selected_jsonl_path=cand.jsonl_path,
+        signed_at=issued_at, expires_at=issued_at + 300.0, hmac_sig="",
+    )
+    ack_payload = ack.to_dict()
+    ack_payload["hmac_sig"] = desktop_commands.sign(
+        {k: v for k, v in ack_payload.items() if k != "hmac_sig"}
+    )
+    bus.write_envelope("audit.probe_ack", ack_payload)
+
+    return [
+        {"idx": start_idx, "kind": "audit_probe", "envelope": env_payload},
+        {"idx": start_idx + 1, "kind": "audit_probe_ack",
+         "envelope": ack_payload},
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -338,6 +381,15 @@ def main() -> int:
             "v1.3 Path-A: skip the Learn Mode dialogue pump. Produces a "
             "v1.2-shape cassette (no learn_dialogue envelopes). Useful "
             "for cheap CI runs that only validate engine.evaluate plumbing."
+        ),
+    )
+    ap.add_argument(
+        "--skip-ppp-pump",
+        action="store_true",
+        help=(
+            "v2.1 P1 (FR-PPP): skip the PPP pump. Default behaviour records "
+            "one `audit.probe` + one `audit.probe_ack` envelope so cassette "
+            "replay covers the full Layer 1 pair. Set this for legacy CI."
         ),
     )
     args = ap.parse_args()
@@ -450,6 +502,18 @@ def main() -> int:
                     f"[cassette] LM dialogue: {len(lm_rows)} pairs recorded "
                     f"(model={args.lm_model})"
                 )
+
+            # v2.1 P1 (FR-PPP) Layer 1: record one `audit.probe` +
+            # one `audit.probe_ack` envelope so cassette replay covers
+            # the full pair (`feedback_cassette_must_cover_new_envelopes.md`).
+            if not args.skip_ppp_pump:
+                ppp_idx = len(payloads) + (50 if not args.skip_lm_pump else 0)
+                ppp_rows = _record_ppp_envelopes(bus, session_id, ppp_idx)
+                for row in ppp_rows:
+                    fp.write(json.dumps(row) + "\n")
+                    fp.flush()
+                    written += 1
+                print(f"[cassette] PPP: {len(ppp_rows)} envelope(s) recorded")
     finally:
         try:
             if cli_pool_obj is not None:

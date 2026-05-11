@@ -5,11 +5,13 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 
+from stream_manager import desktop_commands
 from stream_manager import message_bus as _msg_bus
 from stream_manager.agent_registry import AgentProfile, AgentRegistry
 from stream_manager.cli_governance import CliGovernor
@@ -1233,6 +1235,107 @@ class GovernanceEngine:
             )
         except Exception:
             log.exception("cross-session: queue_hitl failed")
+
+    # ── v2.1 P1 (FR-PPP) — Provenance Probe Protocol emit ─────────────
+    #
+    # Peer to `_maybe_emit_cross_session_hitl` above (HITL queue entry
+    # with `trigger_reason="audit_probe"` per phase-1 §3, §4). Public
+    # method: dashboard `/api/sm-probe?force=1` handler invokes this;
+    # soak driver `--ppp-auto-probe` (Option B per issue #128) writes
+    # the envelope directly via `bus.write_envelope` and does NOT call
+    # this site (no HITL row needed for unattended soak probes).
+    def emit_audit_probe(
+        self,
+        candidate_streams: list[_msg_bus.AuditProbeCandidate],
+        ttl_seconds: int = 1800,
+    ) -> tuple[str, int, int]:
+        """Emit an `audit.probe` envelope + HITL row asking the operator
+        to identify the JSONL stream currently being driven (FR-PPP-1).
+
+        Returns ``(probe_id, hitl_row_id, delivered_count)``.
+
+        - ``probe_id`` — cryptographic correlation key signed in the
+          envelope (HMAC seam reuses ``desktop_command`` secret of
+          record per issue #128 §A1).
+        - ``hitl_row_id`` — dashboard handle for resolving the HITL
+          question. Operator's signed ack lands in
+          ``provenance_assertions`` via ``/api/sm-probe/ack`` POST.
+        - ``delivered_count`` — number of envelope subscribers that
+          received the probe. Caller (dashboard handler) MUST check
+          this and, on ``delivered_count == 0``, resolve the HITL row
+          (e.g. ``bus.resolve_hitl(hitl_row_id, "no_subscriber")``) and
+          return HTTP 503 + structured error body per issue #128 §A2.
+          Branching on the return value avoids the TOCTOU race that
+          would arise from pre-checking
+          ``bus.envelope_subscriber_count()``.
+
+        The signed payload + delivered payload are guaranteed identical:
+        a single ``envelope_dict`` is constructed, signed (with
+        ``hmac_sig`` removed), then re-stamped with the sig and passed
+        to ``write_envelope`` verbatim. Combined with frozen
+        ``AuditProbeCandidate`` (immutable members), this defends
+        against sign-then-mutate divergence between sign-time and
+        write-time payloads.
+
+        Naming convention (mirrors `_maybe_emit_cross_session_hitl`):
+        the bus message ``Message.type`` uses snake_case
+        (``"audit_probe"``); the SSE envelope type uses dot.case
+        (``"audit.probe"``). Two identifiers, one concept — message
+        anchors the HITL row, envelope rides ADR-14 SSE.
+
+        Threat model (FR-PPP-2 lock 2026-05-10): the HMAC sig binds
+        endpoint-integrity, not operator-attestation. The browser does
+        not hold the secret. Server-side signing on the ack path
+        proves "row written through legitimate endpoint" — defending
+        against direct WAL tampering, not impersonation between server
+        components. P2/P3 verifiers MUST treat the sig as such.
+        """
+        if self.bus is None or not self.session_id:
+            raise RuntimeError(
+                "emit_audit_probe requires bus + session_id"
+            )
+
+        probe_id = uuid.uuid4().hex
+        issued_at = time.time()
+        envelope = _msg_bus.AuditProbeEnvelope(
+            probe_id=probe_id,
+            candidate_streams=list(candidate_streams),
+            ttl_seconds=int(ttl_seconds),
+            issued_at=issued_at,
+            hmac_sig="",
+        )
+        # Build the wire dict ONCE; sign over the same dict (sans
+        # hmac_sig); re-stamp the dict with the sig; deliver verbatim.
+        envelope_dict = envelope.to_dict()
+        sig_payload = {
+            k: v for k, v in envelope_dict.items() if k != "hmac_sig"
+        }
+        sig = desktop_commands.sign(sig_payload)
+        envelope_dict["hmac_sig"] = sig
+        envelope.hmac_sig = sig
+
+        anchor = _msg_bus.Message.new(
+            session_id=self.session_id,
+            type="audit_probe",
+            direction="internal",
+            content=probe_id,
+            metadata={
+                "probe_id": probe_id,
+                "candidate_count": len(envelope.candidate_streams),
+                "ttl_seconds": int(ttl_seconds),
+            },
+        )
+        self.bus.publish(anchor)
+        pending_id = self.bus.queue_hitl(
+            message_id=anchor.id,
+            proposed_action="select_stream",
+            proposed_confidence=0.0,
+            trigger_reason="audit_probe",
+        )
+
+        # Fan envelope to subscribers (dashboard SSE bridges to browser).
+        delivered = self.bus.write_envelope("audit.probe", envelope_dict)
+        return probe_id, pending_id, delivered
 
     def _update_mode(self) -> None:
         if len(self._eligible_window) < ROLLING_WINDOW:

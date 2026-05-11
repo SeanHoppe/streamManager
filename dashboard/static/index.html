@@ -3000,10 +3000,39 @@ function fmtHms(ts){
 }
 
 const TRIGGER_LABEL = {
-  new_pattern:    'NEW PATTERN',
-  low_confidence: 'LOW CONF',
-  desktop_pause:  'PAUSE',
+  new_pattern:        'NEW PATTERN',
+  low_confidence:     'LOW CONF',
+  desktop_pause:      'PAUSE',
+  cross_session_flag: 'X-SESSION',
+  audit_probe:        'AUDIT PROBE',
 };
+
+// FR-PPP-1: probe_id -> envelope cache (filled by /events `audit.probe` SSE).
+const AUDIT_PROBES = new Map();
+
+function buildAuditProbeRow(item){
+  const probeId = String(item.content || '');
+  const envelope = AUDIT_PROBES.get(probeId);
+  const candidates = (envelope && Array.isArray(envelope.candidate_streams))
+    ? envelope.candidate_streams : [];
+  const radioName = `probe-${probeId || item.id}`;
+  const choices = candidates.map((c, i) => `<label class="probe-choice"><input type="radio" name="${esc(radioName)}" value="${esc(c.jsonl_path||'')}" ${i===0?'checked':''}><span class="probe-slug">${esc(c.slug||'?')}</span><code class="probe-path">${esc(c.jsonl_path||'')}</code></label>`).join('');
+  const noneRadio = `<label class="probe-choice probe-none"><input type="radio" name="${esc(radioName)}" value=""><span>none of the above</span></label>`;
+  return `
+    <div class="hitl-ts">${esc(fmtHms(item.queued_at))}</div>
+    <div class="hitl-trig">AUDIT PROBE</div>
+    <div class="hitl-probe-prompt">Which JSONL stream is this session driving?</div>
+    <div class="probe-choices" data-probe-id="${esc(probeId)}" data-hitl-id="${item.id}">
+      ${choices || '<em>(envelope not yet received — wait for SSE…)</em>'}
+      ${candidates.length ? noneRadio : ''}
+    </div>
+    <div class="hitl-item-row2">
+      <div class="hitl-bar"><div class="hitl-bar-fill" data-bar="${item.id}"></div></div>
+      <div class="hitl-btns">
+        <button class="hitl-btn" data-act="probe-ack" data-pid="${item.id}" data-probe-id="${esc(probeId)}">SIGN</button>
+      </div>
+    </div>`;
+}
 
 function renderHitlPanel(){
   // Clear timers for items no longer present
@@ -3063,23 +3092,28 @@ function renderHitlPanel(){
     const el = document.createElement('div');
     el.className = 'hitl-item';
     el.dataset.pid = item.id;
-    el.innerHTML = `
-      <div class="hitl-ts">${esc(fmtHms(item.queued_at))}</div>
-      <div class="hitl-trig">${esc(trigger)}</div>
-      <div><span class="badge badge-${esc(action)}">${esc(action)}</span></div>
-      <div class="c-conf">${conf}%</div>
-      <div class="hitl-prev" title="${esc(item.content||'')}">${esc(preview)}</div>
-      ${biasHtml}
-      <div class="hitl-item-row2">
-        <div class="hitl-bar"><div class="hitl-bar-fill" data-bar="${item.id}"></div></div>
-        <div class="hitl-btns">
-          <button class="hitl-btn" data-act="approve" data-pid="${item.id}">APPROVE</button>
-          <button class="hitl-btn" data-act="GUIDE"   data-pid="${item.id}">GUIDE</button>
-          <button class="hitl-btn" data-act="BLOCK"   data-pid="${item.id}">BLOCK</button>
-          <button class="hitl-btn" data-act="ALLOW"   data-pid="${item.id}">ALLOW</button>
+    if(item.trigger_reason === 'audit_probe'){
+      el.classList.add('hitl-item-probe');
+      el.innerHTML = buildAuditProbeRow(item);
+    } else {
+      el.innerHTML = `
+        <div class="hitl-ts">${esc(fmtHms(item.queued_at))}</div>
+        <div class="hitl-trig">${esc(trigger)}</div>
+        <div><span class="badge badge-${esc(action)}">${esc(action)}</span></div>
+        <div class="c-conf">${conf}%</div>
+        <div class="hitl-prev" title="${esc(item.content||'')}">${esc(preview)}</div>
+        ${biasHtml}
+        <div class="hitl-item-row2">
+          <div class="hitl-bar"><div class="hitl-bar-fill" data-bar="${item.id}"></div></div>
+          <div class="hitl-btns">
+            <button class="hitl-btn" data-act="approve" data-pid="${item.id}">APPROVE</button>
+            <button class="hitl-btn" data-act="GUIDE"   data-pid="${item.id}">GUIDE</button>
+            <button class="hitl-btn" data-act="BLOCK"   data-pid="${item.id}">BLOCK</button>
+            <button class="hitl-btn" data-act="ALLOW"   data-pid="${item.id}">ALLOW</button>
+          </div>
         </div>
-      </div>
-    `;
+      `;
+    }
     hitlList.appendChild(el);
 
     // Start (or resume) countdown.
@@ -3152,11 +3186,41 @@ hitlList.addEventListener('click', e=>{
   if(!btn) return;
   const pid = Number(btn.dataset.pid);
   const act = btn.dataset.act;
+  if(act === 'probe-ack'){
+    submitAuditProbeAck(pid, btn.dataset.probeId || '');
+    return;
+  }
   let resolution;
   if(act === 'approve') resolution = 'approved';
   else resolution = 'overridden:' + act;
   resolveHitl(pid, resolution);
 });
+
+async function submitAuditProbeAck(hitlId, probeId){
+  const choices = hitlList.querySelector(`.probe-choices[data-hitl-id="${hitlId}"]`);
+  if(!choices) return;
+  const checked = choices.querySelector('input[type=radio]:checked');
+  if(!checked){ alert('Select a candidate stream or "none of the above".'); return; }
+  const selected = checked.value || null;  // empty string → null = none-of-above
+  const sid = (window.PHASE6 && PHASE6.selectedSessionId) || null;
+  if(!sid){ alert('Pick a session before signing the probe.'); return; }
+  const before = HITL.pending;
+  HITL.pending = HITL.pending.filter(p=>p.id !== hitlId);
+  renderHitlPanel();
+  try{
+    const r = await fetch('/api/sm-probe/ack', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({probe_id: probeId, hitl_id: Number(hitlId), session_id: sid, selected_jsonl_path: selected}),
+    });
+    if(!r.ok) throw new Error('ack failed: ' + r.status);
+    AUDIT_PROBES.delete(probeId);
+  }catch(err){
+    HITL.pending = before;
+    renderHitlPanel();
+    alert('Audit probe ack failed: ' + err.message);
+  }
+}
 
 function handleHitlEvent(d){
   const t = d.event_type;
@@ -4101,6 +4165,22 @@ function appendEvlogRow(ev, forceFlush=false){
         prependRow(d);
       }catch(_){}
     };
+    // FR-PPP-1: named SSE events on the wrapped (canonical) EventSource.
+    es.addEventListener('audit.probe', e=>{
+      try{
+        const env = JSON.parse(e.data);
+        if(env && env.probe_id){
+          AUDIT_PROBES.set(env.probe_id, env);
+          renderHitlPanel();
+        }
+      }catch(_){}
+    });
+    es.addEventListener('audit.probe_ack', e=>{
+      try{
+        const ack = JSON.parse(e.data);
+        if(ack && ack.probe_id) AUDIT_PROBES.delete(ack.probe_id);
+      }catch(_){}
+    });
     es.onerror = ()=>{
       liveDot.classList.add('off');
       footStat.textContent=`disconnected — retry in 3s`;

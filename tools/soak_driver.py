@@ -1358,6 +1358,33 @@ def _run_replay(args) -> int:
     return 0
 
 
+def _emit_ppp_auto_probe(bus, session_id: str, idx: int) -> None:
+    """v2.1 P1 (FR-PPP) Option B: write a synthetic `audit.probe` envelope.
+
+    Direct `bus.write_envelope` — no HITL row, no operator. Used by the
+    soak driver's `--ppp-auto-probe` mode for cassette envelope coverage
+    without an operator in the loop. HMAC sig reuses the
+    `desktop_command` secret of record per issue #128 §A1.
+    """
+    from stream_manager import desktop_commands
+    from stream_manager.message_bus import (
+        AuditProbeCandidate, AuditProbeEnvelope,
+    )
+    issued_at = time.time()
+    cand = AuditProbeCandidate(
+        slug=f"soak-{idx}", jsonl_path=f"/tmp/soak-{idx}.jsonl",
+        brain_id=session_id, last_event_ts=issued_at, prompt_hash="",
+    )
+    env = AuditProbeEnvelope(
+        probe_id=f"soak-probe-{idx}", candidate_streams=[cand],
+        ttl_seconds=300, issued_at=issued_at, hmac_sig="",
+    )
+    payload = env.to_dict()
+    sig_payload = {k: v for k, v in payload.items() if k != "hmac_sig"}
+    payload["hmac_sig"] = desktop_commands.sign(sig_payload)
+    bus.write_envelope("audit.probe", payload)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8766)
@@ -1417,6 +1444,14 @@ def main() -> int:
         help="v1.3 Path-A: model id for the Learn Mode categorizer. "
              "Defaults to learn_categorizer.DEFAULT_MODEL (Sonnet) per "
              "design spec §2.4.",
+    )
+    ap.add_argument(
+        "--ppp-auto-probe",
+        action="store_true",
+        help="v2.1 P1 (FR-PPP) Layer 1: every 10 publishes, emit a synthetic "
+             "`audit.probe` envelope directly via `bus.write_envelope` "
+             "(issue #128 Option B; no HITL row, unattended soak). "
+             "Default OFF — flip on for cassette PPP coverage runs.",
     )
     args = ap.parse_args()
 
@@ -1633,6 +1668,12 @@ def main() -> int:
                     print(f"[soak] publish error idx={next_idx}: {exc}", file=sys.stderr)
                 next_idx += 1
                 next_publish += args.interval_seconds
+
+            # v2.1 P1 (FR-PPP) Option B: every 10 publishes, fan a synthetic
+            # `audit.probe` envelope directly through the bus (no HITL row).
+            # Cassette envelope subscriber captures the wire shape.
+            if args.ppp_auto_probe and next_idx > 0 and next_idx % 10 == 0:
+                _emit_ppp_auto_probe(bus, session_id, next_idx)
 
             # Sleep a short tick; do not over-sleep so deadline-honor stays tight.
             time.sleep(0.5)

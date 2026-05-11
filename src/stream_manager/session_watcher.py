@@ -380,6 +380,59 @@ class SessionWatcher:
                 for r in self._sessions.values()
             ]
 
+    def build_audit_probe_candidates(
+        self,
+        *,
+        brain_id_filter: str | None = None,
+        sm_brain_id: str | None = None,
+    ) -> list["AuditProbeCandidate"]:
+        """Build frozen candidate list for FR-PPP-1 emit_audit_probe.
+
+        Layer 1 uses ``sessionId`` as ``brain_id`` and empty
+        ``prompt_hash``; P2 fills in real digest.
+
+        ``sm_brain_id``: last-line drop of SM's own brain_id (primary
+        guard is registration-time ``_is_self_session``).
+        ``brain_id_filter``: prefix-include for self-monitor test.
+
+        Skips rows whose ``cwd`` produces an empty ``slug`` — those
+        would resolve to ``~/.claude/projects//<sid>.jsonl`` (broken
+        path, double-slash) and the operator can never pick them.
+        """
+        from stream_manager.message_bus import AuditProbeCandidate
+        with self._lock:
+            snapshot = [
+                (r.sessionId, r.cwd, r.last_seen)
+                for r in self._sessions.values()
+                if r.state == "active"
+            ]
+        out: list[AuditProbeCandidate] = []
+        for session_id, cwd, last_seen in snapshot:
+            if sm_brain_id and session_id == sm_brain_id:
+                continue
+            if brain_id_filter and not session_id.startswith(brain_id_filter):
+                continue
+            slug = (cwd or "").replace("\\", "-").replace("/", "-").strip("-")
+            if not slug:
+                continue
+            jsonl_path = str(
+                Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+            )
+            try:
+                ts = _dt.datetime.fromisoformat(last_seen).timestamp()
+            except (ValueError, TypeError):
+                ts = 0.0
+            out.append(
+                AuditProbeCandidate(
+                    slug=slug,
+                    jsonl_path=jsonl_path,
+                    brain_id=session_id,
+                    last_event_ts=ts,
+                    prompt_hash="",
+                )
+            )
+        return out
+
     def list_pending_bg_tasks(self) -> list[dict]:
         """Snapshot of pending bg-task tokens for dashboard rendering."""
         with self._lock:

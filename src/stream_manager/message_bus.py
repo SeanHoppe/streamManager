@@ -107,6 +107,29 @@ CREATE TABLE IF NOT EXISTS desktop_commands (
 );
 CREATE INDEX IF NOT EXISTS idx_dc_pending ON desktop_commands(session_id, status);
 
+-- v2.1 P1 (FR-PPP): Provenance Probe Protocol assertions. Operator's
+-- signed answer to "which JSONL stream is currently being driven?"
+-- (`audit.probe_ack` payload). Additive — no FROZEN tables modified.
+-- `probe_id UNIQUE` provides replay protection: a second ack for the
+-- same probe_id is a constraint violation; server returns HTTP 409.
+-- jsonl_path NULL = operator picked "none" (no candidate matches).
+-- Active-row resolution: the "current" assertion for a session is the
+-- row with the largest signed_at whose expires_at > NOW(). Multiple
+-- non-expired rows MAY coexist; readers MUST take the latest.
+CREATE TABLE IF NOT EXISTS provenance_assertions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    probe_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
+    jsonl_path TEXT,
+    brain_id TEXT,
+    prompt_hash TEXT,
+    signed_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    hmac_sig TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_provenance_session_active
+    ON provenance_assertions (session_id, signed_at DESC);
+
 -- v1.3 P5c: Learn Mode categorizer output. One row per categorized
 -- desktop_prompt/user_reply pair. Additive — does not modify any
 -- existing table. The verdict hot path never writes here; this is
@@ -205,12 +228,97 @@ class Message:
 SubscriberCallback = Callable[[Message], None]
 
 
+# v2.1 P1 (FR-PPP) — Provenance Probe Protocol envelope payloads.
+# Additive type definitions; not routed through `publish` (which writes
+# to the messages table). PPP envelopes ride the existing ADR-14 SSE
+# transport via the bus subscriber list and the dashboard SSE stream.
+#
+# `frozen=True` on `AuditProbeCandidate` defends against the
+# sign-then-mutate footgun: HMAC sig is computed over the canonical-
+# encoded candidate list at envelope-build time; if the list members
+# were mutable, a caller could mutate `slug` / `jsonl_path` after sign
+# and the delivered envelope dict would diverge from the signed one
+# (verifier-side mismatch).
+@dataclass(frozen=True)
+class AuditProbeCandidate:
+    slug: str
+    jsonl_path: str
+    brain_id: str
+    last_event_ts: float
+    prompt_hash: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "slug": self.slug,
+            "jsonl_path": self.jsonl_path,
+            "brain_id": self.brain_id,
+            "last_event_ts": float(self.last_event_ts),
+            "prompt_hash": self.prompt_hash,
+        }
+
+
+# `AuditProbeEnvelope` is intentionally NOT `frozen=True`. The HMAC sig
+# is stamped onto the dataclass after construction (see
+# `governance.emit_audit_probe`: build → sign sans hmac_sig → assign
+# hmac_sig). Inner `AuditProbeCandidate` is frozen, which is what the
+# sign-then-mutate guard hinges on; mutating the outer envelope fields
+# post-sign would invalidate the sig and is caller-side discipline.
+@dataclass
+class AuditProbeEnvelope:
+    probe_id: str
+    candidate_streams: list[AuditProbeCandidate]
+    ttl_seconds: int
+    issued_at: float
+    hmac_sig: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "probe_id": self.probe_id,
+            "candidate_streams": [c.to_dict() for c in self.candidate_streams],
+            "ttl_seconds": int(self.ttl_seconds),
+            "issued_at": float(self.issued_at),
+            "hmac_sig": self.hmac_sig,
+        }
+
+    def signing_payload(self) -> dict[str, object]:
+        out = self.to_dict()
+        out.pop("hmac_sig", None)
+        return out
+
+
+@dataclass
+class AuditProbeAckEnvelope:
+    probe_id: str
+    selected_jsonl_path: str | None
+    signed_at: float
+    expires_at: float
+    hmac_sig: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "probe_id": self.probe_id,
+            "selected_jsonl_path": self.selected_jsonl_path,
+            "signed_at": float(self.signed_at),
+            "expires_at": float(self.expires_at),
+            "hmac_sig": self.hmac_sig,
+        }
+
+    def signing_payload(self) -> dict[str, object]:
+        out = self.to_dict()
+        out.pop("hmac_sig", None)
+        return out
+
+
+EnvelopeSubscriberCallback = Callable[[str, dict[str, object]], None]
+
+
 class MessageBus:
     def __init__(self, db_path: str) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._subscribers: list[SubscriberCallback] = []
+        self._envelope_subscribers: list[EnvelopeSubscriberCallback] = []
         self._conn = self._connect()
         self._init_schema()
 
@@ -565,6 +673,140 @@ class MessageBus:
             "resolution": row[7],
             "matched_hash": row[8] or "",
             "bias_hint": row[9] or "",
+        }
+
+    # ── v2.1 P1 (FR-PPP) — Provenance Probe Protocol ─────────────────
+
+    def subscribe_envelope(self, callback: EnvelopeSubscriberCallback) -> None:
+        """Register an envelope subscriber.
+
+        Envelope subscribers receive (envelope_type, payload) tuples for
+        non-message bus events such as `audit.probe` / `audit.probe_ack`
+        (FR-PPP). They do NOT receive ordinary `Message` publishes — those
+        go through `subscribe`. Per ADR-14, the dashboard's SSE stream
+        bridges these envelopes to connected browsers.
+        """
+        self._envelope_subscribers.append(callback)
+
+    def envelope_subscriber_count(self) -> int:
+        """Return the number of registered envelope subscribers.
+
+        Telemetry only. The `/api/sm-probe?force=1` 503 branch MUST NOT
+        pre-check this counter — TOCTOU. The handler branches on the
+        return value of `write_envelope` instead.
+        """
+        return len(self._envelope_subscribers)
+
+    def unsubscribe_envelope(self, callback: EnvelopeSubscriberCallback) -> None:
+        """Remove a previously-registered envelope subscriber.
+
+        Idempotent. The dashboard SSE handler registers one envelope
+        subscriber per browser connection and must call this in a
+        ``try/finally`` on disconnect — without it, browser disconnects
+        leak callbacks that hold references to the per-connection
+        ``asyncio.Queue`` and the FastAPI request scope.
+        """
+        try:
+            self._envelope_subscribers.remove(callback)
+        except ValueError:
+            pass
+
+    def write_envelope(
+        self, envelope_type: str, payload: dict[str, object]
+    ) -> int:
+        """Fan an envelope out to all registered envelope subscribers.
+
+        Returns the number of subscribers that received the envelope.
+        Subscriber failures are logged but do NOT crash the bus (NFR-R6
+        invariant from `publish`). Used by the soak driver's
+        `--ppp-auto-probe` direct-bus writer (issue #128 Option B) and by
+        the dashboard `/api/sm-probe` HTTP handler — two writers, one
+        bus, dashboard SSE consumes from the bus.
+        """
+        delivered = 0
+        for sub in list(self._envelope_subscribers):
+            try:
+                sub(envelope_type, payload)
+                delivered += 1
+            except Exception:
+                log.exception(
+                    "envelope subscriber callback failed (%s)", envelope_type
+                )
+        return delivered
+
+    def write_provenance_assertion(
+        self,
+        probe_id: str,
+        session_id: str,
+        jsonl_path: str | None,
+        brain_id: str | None,
+        prompt_hash: str | None,
+        signed_at: float,
+        expires_at: float,
+        hmac_sig: str,
+    ) -> bool:
+        """Write a single provenance_assertions row. Returns False on
+        replay (probe_id UNIQUE conflict); True on first write.
+
+        Replay protection is atomic at the SQLite UNIQUE constraint
+        level. The bus runs in autocommit mode (`isolation_level=None`,
+        L222), so each INSERT commits immediately and the
+        ``ON CONFLICT(probe_id) DO NOTHING`` clause guarantees no
+        duplicate row writes regardless of caller-side concurrency. The
+        caller (dashboard `/api/sm-probe/ack` POST handler) translates
+        False to HTTP 409.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO provenance_assertions ("
+                "probe_id, session_id, jsonl_path, brain_id, prompt_hash, "
+                "signed_at, expires_at, hmac_sig) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(probe_id) DO NOTHING",
+                (
+                    probe_id,
+                    session_id,
+                    jsonl_path,
+                    brain_id,
+                    prompt_hash,
+                    float(signed_at),
+                    float(expires_at),
+                    hmac_sig,
+                ),
+            )
+            return (cur.rowcount or 0) > 0
+
+    def get_active_provenance_assertion(
+        self, session_id: str, now: float | None = None
+    ) -> dict[str, object] | None:
+        """Return the current (latest non-expired) assertion for a session.
+
+        Multiple non-expired rows MAY coexist (e.g. operator answered then
+        revised); readers MUST take the latest by `signed_at`. The
+        `idx_provenance_session_active` index supports this query.
+        """
+        ts = float(now) if now is not None else time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, probe_id, session_id, jsonl_path, brain_id, "
+                "prompt_hash, signed_at, expires_at, hmac_sig "
+                "FROM provenance_assertions "
+                "WHERE session_id=? AND expires_at > ? "
+                "ORDER BY signed_at DESC LIMIT 1",
+                (session_id, ts),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row[0]),
+            "probe_id": row[1],
+            "session_id": row[2],
+            "jsonl_path": row[3],
+            "brain_id": row[4],
+            "prompt_hash": row[5],
+            "signed_at": float(row[6]),
+            "expires_at": float(row[7]),
+            "hmac_sig": row[8],
         }
 
     def annotate_decision(

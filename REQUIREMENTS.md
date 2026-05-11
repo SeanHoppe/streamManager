@@ -508,6 +508,28 @@ See `docs/adr/ADR-19-learn-patterns-canonical-split.md` for the canonical/audit 
 
 Originating task: `docs/v1.3-task-plan.md` §"PHASE P5 — Learn Mode (advisory dialogue bias)" + `docs/learn-mode-design.md` (P5a). Memory source of truth: `project_learn_mode.md` (locked 2026-05-03).
 
+### 4.13 Provenance Probe Protocol (FR-PPP)
+
+The Provenance Probe Protocol (PPP) is a 3-layer audit harness that lets the operator (and, in P2/P3, automated negative controls) confirm which JSONL stream a governed Claude Code session is currently driving. Layer 1 (v2.1 P1) ships stream disambiguation: a signed `audit.probe` envelope asks the operator to identify the brain_id↔jsonl_path binding; the signed ack lands in `provenance_assertions` (WAL). Layer 2 (canary echo) and Layer 3 (negative control + self-monitor hard guard) follow. Design source: `docs/prompts/v2.1-orchestration/phase-1-ppp-stream-disambiguation.md`. Cycle scope: `docs/v2.1-p1-scope.md`. Transport decision: issue #128 §Decision (Option B — direct `MessageBus.write_envelope`).
+
+**FR-PPP-1** — **Audit probe envelope.** SM MUST emit an `audit.probe` envelope on operator demand (dashboard `/api/sm-probe?force=1`) and MAY emit one on unattended soak (`tools/soak_driver.py --ppp-auto-probe`, default OFF). The envelope MUST carry a `probe_id` (uuid hex), a `candidate_streams` list of `{slug, jsonl_path, brain_id, last_event_ts, prompt_hash}` rows, a `ttl_seconds`, an `issued_at`, and a `hmac_sig`. The HMAC seam MUST reuse the `desktop_command` secret of record (`SM_DESKTOP_SECRET` env → `.bridge/secret` file → generate; per ADR-13 + commit `595df23`); no new secret seam is introduced. The envelope rides the existing ADR-14 SSE transport via `MessageBus.write_envelope` (peer to `MessageBus.publish` for ordinary `Message` rows).
+
+**FR-PPP-2** — **Operator ack + signed assertion.** The operator's response (`POST /api/sm-probe/ack`) MUST be persisted as a row in `provenance_assertions` (WAL, additive table; replay protection via `probe_id UNIQUE`). `selected_jsonl_path = NULL` represents "none of the above". The active assertion for a session_id is the row with the largest `signed_at` whose `expires_at > NOW()` (per `idx_provenance_session_active`); readers MUST take the latest. Replay (same `probe_id` POSTed twice) MUST return HTTP 409.
+
+**Threat model (locked v2.1 P1, 2026-05-10):** the HMAC sig binds **endpoint-integrity**, NOT operator-attestation. The ack handler signs server-side at write time using the `desktop_command` secret of record (FR-PPP-1, issue #128 §A1). The browser does NOT hold the secret and does NOT sign. The sig's purpose is to prove that the row was written through the legitimate `/api/sm-probe/ack` endpoint, defending against direct WAL tampering by processes that lack the secret. Operator-attestation (browser-side signing or side-channel signer process) is rejected for v2.1 P1 because shipping the secret to JS is unsafe and the single-user single-machine MVP threat model does not require it. P2/P3 verifiers MUST treat the sig as endpoint-integrity, not as operator approval. Sig payload schema: `{probe_id, selected_jsonl_path, signed_at, expires_at}`. P1a will extend the schema (and bump a sig version) when `brain_id` + `prompt_hash` enrichment lands; pre-P1a rows will then validate under the v1 schema only.
+
+**FR-PPP-3** — **Zero-subscriber 503 path.** When the dashboard `/api/sm-probe?force=1` handler invokes `engine.emit_audit_probe(...)` and the returned `delivered_count == 0` (no SSE subscribers connected), the handler MUST resolve the queued HITL row (`bus.resolve_hitl(hitl_id, "no_subscriber")`) and return HTTP 503 with a structured `{error, probe_id, hitl_id, delivered}` body. The handler MUST branch on the `write_envelope` return value and MUST NOT pre-check `bus.envelope_subscriber_count()` (TOCTOU race: subscribers can register/disconnect between the count read and the dispatch). The `envelope_subscriber_count()` accessor is telemetry-only.
+
+**FR-PPP-4** — **HITL row + trigger reason.** Every `audit.probe` emit (FR-PPP-1, dashboard path; soak driver Option B path is exempt — no operator) MUST queue a `hitl_pending` row with `trigger_reason = "audit_probe"` (FR-HITL-2 5th trigger; peer to `cross_session_flag`, `desktop_pause`, `low_confidence`, `new_pattern`). The dashboard renders the row via the `audit_probe` HITL row variant — radio choices over `candidate_streams` plus a "none of the above" option plus a SIGN button.
+
+**FR-PPP-5** — **Sign-then-mutate guard.** The HMAC sig MUST be computed over the canonical-encoded envelope dict with `hmac_sig` removed, then the dict MUST be re-stamped with the sig and delivered verbatim. The `AuditProbeCandidate` dataclass MUST be `frozen=True` to prevent in-process mutation of inner candidate fields after sign. The single-`envelope_dict` build → sign → stamp → deliver sequence MUST be the only sign path in `governance.emit_audit_probe`.
+
+**FR-PPP-6** — **Cassette envelope coverage.** `tools/cassette_record.py` MUST record one `audit.probe` + one `audit.probe_ack` envelope pair per cassette run (default ON; `--skip-ppp-pump` opt-out for legacy CI). Per `feedback_cassette_must_cover_new_envelopes.md`, cassette coverage of new envelope types is a same-cycle requirement.
+
+(FR-PPP-7 — replay protection cassette + DB UNIQUE constraint test — is deferred to P1a per ADR-18 Rule 4 cycle-frame amendment, recorded in `docs/v2.1-p1-scope.md` §3 LOC tracker.)
+
+Originating task: `docs/prompts/v2.1-orchestration/phase-1-ppp-stream-disambiguation.md`. Cycle scope: `docs/v2.1-p1-scope.md`. Transport decision lock: issue #128 §Decision + §A1 + §A2.
+
 ---
 
 ## 5. Non-functional requirements

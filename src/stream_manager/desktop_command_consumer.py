@@ -115,6 +115,11 @@ def _default_executors() -> dict[str, Callable[[dict], None]]:
     def _noop_request_attention(args: dict) -> None:
         log.info("desktop_command request_attention stub: %r", args)
 
+    def _noop_audit_probe(args: dict) -> None:
+        # v2.1 P1 (FR-PPP): stub so the kind is recognized; real flow is
+        # dashboard-side (see `docs/v2.1-p1-scope.md` §4 M3).
+        log.info("desktop_command audit_probe stub: %r", args)
+
     return {
         "pause": _noop_pause,
         "foreground": _noop_foreground,
@@ -122,6 +127,7 @@ def _default_executors() -> dict[str, Callable[[dict], None]]:
         "audible_cue": _noop_audible,
         "surface_hitl": _noop_surface_hitl,
         "request_attention": _noop_request_attention,
+        "audit_probe": _noop_audit_probe,
     }
 
 
