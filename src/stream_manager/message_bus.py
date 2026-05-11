@@ -130,6 +130,26 @@ CREATE TABLE IF NOT EXISTS provenance_assertions (
 CREATE INDEX IF NOT EXISTS idx_provenance_session_active
     ON provenance_assertions (session_id, signed_at DESC);
 
+-- v2.1 P3 (FR-PPP) — Layer 3 negative-control decoy stream registry.
+-- A `provenance_decoys` row registers a synthetic JSONL path that is
+-- never written by SM. If the parser/tail/observer reports a parsed
+-- record whose `jsonl_path` matches a registered decoy, the parser is
+-- producing fictional records (hallucination). The hallucination
+-- detector fires `audit.hallucination_detected` and stamps
+-- `triggered_at` (single-write-wins via `WHERE triggered_at IS NULL`).
+-- `jsonl_path UNIQUE` keeps registration idempotent: a re-register on
+-- the same path is a constraint no-op (`ON CONFLICT(jsonl_path) DO NOTHING`).
+CREATE TABLE IF NOT EXISTS provenance_decoys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    probe_id TEXT NOT NULL UNIQUE,
+    jsonl_path TEXT NOT NULL UNIQUE,
+    registered_at REAL NOT NULL,
+    triggered_at REAL,
+    hmac_sig TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_provenance_decoys_path
+    ON provenance_decoys (jsonl_path);
+
 -- v1.3 P5c: Learn Mode categorizer output. One row per categorized
 -- desktop_prompt/user_reply pair. Additive — does not modify any
 -- existing table. The verdict hot path never writes here; this is
@@ -400,6 +420,35 @@ class AuditProbeFailureEnvelope:
             "probe_id": self.probe_id,
             "reason": self.reason,
             "failed_at": float(self.failed_at),
+            "hmac_sig": self.hmac_sig,
+        }
+
+    def signing_payload(self) -> dict[str, object]:
+        out = self.to_dict()
+        out.pop("hmac_sig", None)
+        return out
+
+
+# v2.1 P3 (FR-PPP) — Layer 3 negative-control hallucination detector.
+# Fired when ANY code path inside `jsonl_tail` / `session_watcher` /
+# `governance` reports a parsed record or candidate row whose
+# `jsonl_path` matches a registered decoy stream. The decoy stream is
+# never written by SM (it is a sentinel synthetic path); a parser
+# report on the path proves the parser is producing fictional records.
+# Sig binds `{probe_id, jsonl_path, detected_at}` — endpoint-integrity
+# per FR-PPP-2; server-stamped at detection time.
+@dataclass
+class AuditHallucinationDetectedEnvelope:
+    probe_id: str
+    jsonl_path: str
+    detected_at: float
+    hmac_sig: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "probe_id": self.probe_id,
+            "jsonl_path": self.jsonl_path,
+            "detected_at": float(self.detected_at),
             "hmac_sig": self.hmac_sig,
         }
 
@@ -952,6 +1001,71 @@ class MessageBus:
                 "SET canary_nonce=?, canary_confirmed_at=? "
                 "WHERE probe_id=? AND canary_confirmed_at IS NULL",
                 (nonce, float(confirmed_at), probe_id),
+            )
+            return (cur.rowcount or 0) > 0
+
+    # ── v2.1 P3 (FR-PPP) — Layer 3 negative-control decoy registry ─────
+
+    def write_provenance_decoy(
+        self,
+        probe_id: str,
+        jsonl_path: str,
+        registered_at: float,
+        hmac_sig: str,
+    ) -> bool:
+        """Write a single provenance_decoys row. Returns False on
+        re-register (jsonl_path UNIQUE conflict); True on first write.
+
+        Idempotent at the SQLite UNIQUE-constraint level via
+        ``ON CONFLICT(jsonl_path) DO NOTHING``: a second register on the
+        same path is a no-op rather than a 409 (decoy registration is
+        an SM-boot-time operator action; re-registering should not
+        error).
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO provenance_decoys ("
+                "probe_id, jsonl_path, registered_at, triggered_at, hmac_sig) "
+                "VALUES (?, ?, ?, NULL, ?) "
+                "ON CONFLICT(jsonl_path) DO NOTHING",
+                (probe_id, jsonl_path, float(registered_at), hmac_sig),
+            )
+            return (cur.rowcount or 0) > 0
+
+    def is_registered_decoy_path(self, jsonl_path: str) -> str | None:
+        """Return the probe_id for a registered decoy path, else None.
+
+        Hot-path read for `jsonl_tail` ingest: each parsed-record path
+        scan calls this. Indexed via `idx_provenance_decoys_path`.
+        """
+        if not jsonl_path:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT probe_id FROM provenance_decoys WHERE jsonl_path=?",
+                (jsonl_path,),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def mark_decoy_triggered(
+        self,
+        probe_id: str,
+        triggered_at: float,
+    ) -> bool:
+        """Single-write-wins stamp on `provenance_decoys.triggered_at`.
+
+        Mirrors `mark_canary_confirmed`: a second hallucination
+        detection on the same probe_id is a no-op via
+        ``WHERE triggered_at IS NULL``. Returns True on first stamp,
+        False on no-op (intrinsic R7 mitigation — caller checks the
+        return value before emitting the envelope to avoid SSE dupes).
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE provenance_decoys "
+                "SET triggered_at=? "
+                "WHERE probe_id=? AND triggered_at IS NULL",
+                (float(triggered_at), probe_id),
             )
             return (cur.rowcount or 0) > 0
 
