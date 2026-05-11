@@ -247,6 +247,23 @@ class JsonlTailWorker:
         stop_reason = str(record.get("stopReason", "") or "")
         session_id_jsonl = str(record.get("sessionId", "") or "")
 
+        # v2.1 P3 (FR-PPP) — Layer 3 negative-control hallucination hook.
+        # If the JSONL we are currently tailing is registered as a decoy
+        # (never written by SM), the fact that we got a parsed record at
+        # all is proof of parser hallucination. Defense-in-depth: skip
+        # SM-originated records first so SM's own transcripts never
+        # trigger a decoy match (the registration-time guard at
+        # `session_watcher._is_self_session` is the primary defense).
+        # Single-emit invariant is enforced WAL-side
+        # (`mark_decoy_triggered` returns False on a re-stamp).
+        if not self._is_sm_originated(session_id_jsonl):
+            try:
+                self._check_decoy_hallucination()
+            except Exception:
+                log.exception(
+                    "jsonl_tail: decoy hallucination check failed"
+                )
+
         if attribution_plugin and attribution_plugin != self._last_attribution:
             try:
                 profile = self.registry.resolve(
@@ -550,6 +567,51 @@ class JsonlTailWorker:
                 )
             except Exception:
                 log.exception("jsonl_tail: mark_canary_confirmed failed")
+
+    # ── v2.1 P3 (FR-PPP) — Layer 3 decoy hallucination detector ───────
+
+    def _check_decoy_hallucination(self) -> None:
+        """Fire `audit.hallucination_detected` if the current JSONL path
+        is a registered decoy.
+
+        Called from `_process_line` AFTER the `_is_sm_originated` filter
+        (defense in depth: SM-self transcripts never trigger). The
+        single-emit invariant is enforced at the WAL row level
+        (`mark_decoy_triggered` returns False on a re-stamp); a second
+        parsed-record on the same decoy is a no-op envelope-wise.
+
+        When no governance ref is wired (early-startup or test contexts
+        that construct a bare worker), the hook logs + skips rather than
+        crashing — the dashboard alarm path stays usable even with the
+        observer's governance ref dormant.
+        """
+        current_path = self._current_jsonl_path
+        if not current_path:
+            return
+        try:
+            probe_id = self.bus.is_registered_decoy_path(current_path)
+        except Exception:
+            log.exception("jsonl_tail: is_registered_decoy_path failed")
+            return
+        if not probe_id:
+            return
+        gov = self.governance
+        if gov is None:
+            log.warning(
+                "jsonl_tail: decoy match on %s (probe_id=%s) but no "
+                "governance ref available; envelope skipped",
+                current_path, probe_id,
+            )
+            return
+        try:
+            gov.emit_audit_hallucination_detected(
+                probe_id=probe_id, jsonl_path=current_path,
+            )
+        except Exception:
+            log.exception(
+                "jsonl_tail: emit_audit_hallucination_detected failed "
+                "for %s", probe_id,
+            )
 
     def _run_canary_sweep(self) -> None:
         """1s sweep — emit failure envelope on entries past `timeout_s`.
