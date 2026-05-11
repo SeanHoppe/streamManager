@@ -43,7 +43,7 @@ ADR-18 surface freeze stays in force. v2.1 cycle is **feature, no LOC cap** per 
 - `docs/v2.1-backlog.md` — 6 seeds at hard cap; P4 closes PPP seed and decides whether to seed v2.2 from any P4-surfaced findings
 - `docs/adr/ADR-18-mvp-surface-freeze.md` §"Cycle-discipline rules" + §"Decommissioned" + §"WIRED_LEVER_LEDGER_COUNT: 0" HTML comment
 - `docs/adr/ADR-5-latency-budget.md` — append §"v2.1 ship-gate baseline" section
-- `docs/adr/ADR-17-soak-tier-amendment.md` + `docs/soak-trigger-matrix.md` — Tier 3 invocation
+- `docs/adr/ADR-17-soak-tiers.md` + `docs/soak-trigger-matrix.md` — Tier 3 invocation
 - `docs/prompts/v2.0-orchestration/phase-4-ship-gate-finalize.md` — immediate predecessor; format reference for S1–S12 structure
 - `reports/soak-20260507T174051Z.md` — v2.0 ship-gate baseline (compare against)
 - `tools/soak_driver.py` §`WIRED_LEVER_LEDGER` (line ~474) + §`_format_lever_ledger` + §`--ppp-auto-probe` flag — auto-probe cadence already implemented at P1; P4 flips default
