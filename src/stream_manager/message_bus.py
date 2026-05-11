@@ -1046,8 +1046,10 @@ class MessageBus:
                 "FROM provenance_decoys WHERE jsonl_path=?",
                 (jsonl_path,),
             ).fetchone()
-            if row is None:
-                return (False, None, None, None)
+            assert row is not None, (
+                "provenance_decoys ON CONFLICT path SELECT returned no row — "
+                "WAL integrity violation"
+            )
             return (False, row[0], row[1], row[2])
 
     def is_registered_decoy_path(self, jsonl_path: str) -> str | None:

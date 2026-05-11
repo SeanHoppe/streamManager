@@ -1501,9 +1501,13 @@ class GovernanceEngine:
                 hmac_sig=sig,
             )
         )
-        if not first_write and wal_probe_id is not None:
+        if not first_write:
             # P3a R-decoy-idem: re-register returns the authentic WAL
             # row, not the freshly-minted (and discarded) probe_id/sig.
+            assert wal_probe_id is not None, (
+                "WAL row vanished after ON CONFLICT — "
+                "provenance_decoys integrity violation"
+            )
             return wal_probe_id, {
                 "probe_id": wal_probe_id,
                 "jsonl_path": jsonl_path,
