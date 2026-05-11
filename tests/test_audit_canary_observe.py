@@ -149,6 +149,44 @@ def test_sweep_timeout_routes_to_governance(bus, tmp_path):
     assert len(gov.calls) == 1
 
 
+def test_active_worker_handle_routes_register_canary(bus, tmp_path):
+    """Module-level active-worker handle is the dashboard's seam to
+    `register_canary`. set/get must round-trip; clearing back to None
+    must let `get_active_worker()` return None (dormant state)."""
+    from stream_manager import jsonl_tail as _jt
+    w = _make_worker(bus, tmp_path)
+    assert _jt.get_active_worker() is None  # baseline
+    _jt.set_active_worker(w)
+    assert _jt.get_active_worker() is w
+    # Production seam: dashboard fetches the active worker and calls
+    # register_canary on it. Verify the call lands on the same
+    # per-instance registry the observer reads from.
+    target = str(tmp_path / "real.jsonl")
+    _jt.get_active_worker().register_canary(
+        probe_id="p-handle", nonce="zz", target_jsonl_path=target,
+    )
+    assert "p-handle" in w._canary_registry
+    _jt.set_active_worker(None)
+    assert _jt.get_active_worker() is None
+
+
+def test_concurrent_match_does_not_double_fire(bus, tmp_path):
+    """Pop-then-emit ordering: a second observer pass on the same nonce
+    after the first popped the registry entry must NOT re-emit the
+    `audit.canary_observed` envelope."""
+    target = str(tmp_path / "real.jsonl")
+    _write_assertion(bus, "p1", target)
+    w = _make_worker(bus, tmp_path)
+    w._current_jsonl_path = target
+    captured: list[str] = []
+    bus.subscribe_envelope(lambda t, p: captured.append(t))
+    w.register_canary("p1", "deadbeef", target_jsonl_path=target)
+    w._process_line(_user_text_line("deadbeef"))
+    w._process_line(_user_text_line("deadbeef again"))
+    observed = [t for t in captured if t == "audit.canary_observed"]
+    assert len(observed) == 1
+
+
 def test_self_monitor_guard_skips_sm_originated(bus, tmp_path):
     """SM-originated user-text turns are filtered before canary scan."""
     target = str(tmp_path / "real.jsonl")

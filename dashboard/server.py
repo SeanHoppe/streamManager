@@ -1087,6 +1087,36 @@ async def api_sm_probe_ack(request: Request):
                     )
                 )
                 canary_timeout_s = 10
+                # Register on the per-process JsonlTailWorker so the
+                # observer can match the nonce in the user's claimed
+                # JSONL. Without this call the canary envelope fires
+                # but the registry stays empty → every canary times out
+                # → wired-but-dormant lifecycle.
+                from stream_manager import jsonl_tail as _jt
+                worker = _jt.get_active_worker()
+                if worker is not None and canary_nonce is not None:
+                    worker.register_canary(
+                        probe_id=probe_id,
+                        nonce=canary_nonce,
+                        target_jsonl_path=selected,
+                        timeout_s=float(canary_timeout_s),
+                    )
+                else:
+                    # Surface DORMANT-observer state rather than silently
+                    # accepting a timeout-bound canary. The envelope still
+                    # fired (SSE subscribers see it), but the observer is
+                    # not running so this canary WILL time out.
+                    log.warning(
+                        "api_sm_probe_ack: canary emitted but no active "
+                        "tail worker; observer dormant (probe_id=%s)",
+                        probe_id,
+                    )
+                if canary_delivered == 0:
+                    log.warning(
+                        "api_sm_probe_ack: canary delivered=0 (no SSE "
+                        "subscribers) for probe_id=%s",
+                        probe_id,
+                    )
         except Exception:
             log.exception("api_sm_probe_ack: emit_audit_canary failed")
 
@@ -1178,11 +1208,35 @@ async def api_sm_canary_emit(request: Request):
             },
         )
 
+    # Register on the per-process JsonlTailWorker (peer to the
+    # auto-emit hook on /api/sm-probe/ack). When no worker is active
+    # the observer is dormant and this canary will time out; surface
+    # that as a `observer_dormant` flag in the response so the cassette
+    # / soak driver can distinguish "wired" from "wired + observed".
+    from stream_manager import jsonl_tail as _jt
+    worker = _jt.get_active_worker()
+    observer_dormant = False
+    if worker is not None:
+        worker.register_canary(
+            probe_id=probe_id,
+            nonce=nonce,
+            target_jsonl_path=jsonl_path,
+            timeout_s=float(timeout_s),
+        )
+    else:
+        observer_dormant = True
+        log.warning(
+            "api_sm_canary_emit: no active tail worker; observer "
+            "dormant (probe_id=%s)",
+            probe_id,
+        )
+
     return {
         "probe_id": probe_id,
         "nonce": nonce,
         "timeout_s": timeout_s,
         "delivered": delivered,
+        "observer_dormant": observer_dormant,
     }
 
 

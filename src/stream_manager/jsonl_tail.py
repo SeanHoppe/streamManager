@@ -44,6 +44,29 @@ POLL_INTERVAL_S = 0.5
 CANARY_SWEEP_INTERVAL_S = 1.0
 
 
+# v2.1 P2 (FR-PPP) — process-global handle for the running tail worker.
+# The dashboard auto-emit hooks in `dashboard/server.py` reach
+# `register_canary` via `jsonl_tail.get_active_worker()` rather than
+# threading a worker reference through the FastAPI request scope —
+# there is one tail worker per process by construction. When no worker
+# is registered (e.g. early in app startup or test contexts that don't
+# call `worker.start()`), callers MUST log + skip rather than crash so
+# the dashboard ack path stays usable even with the observer dormant.
+_ACTIVE_WORKER: JsonlTailWorker | None = None
+_ACTIVE_WORKER_LOCK = threading.Lock()
+
+
+def set_active_worker(worker: JsonlTailWorker | None) -> None:
+    global _ACTIVE_WORKER
+    with _ACTIVE_WORKER_LOCK:
+        _ACTIVE_WORKER = worker
+
+
+def get_active_worker() -> JsonlTailWorker | None:
+    with _ACTIVE_WORKER_LOCK:
+        return _ACTIVE_WORKER
+
+
 # v2.1 P2 (FR-PPP) — per-process Layer-2 canary registry entry.
 # `candidates_for_requeue` is captured at register_canary time so that
 # the timeout sweep can re-fire Layer-1 HITL deterministically (R7 cap
@@ -136,6 +159,7 @@ class JsonlTailWorker:
             daemon=True,
         )
         self._sweep_thread.start()
+        set_active_worker(self)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -147,6 +171,8 @@ class JsonlTailWorker:
         if sweep is not None:
             sweep.join(timeout=2.0)
         self._sweep_thread = None
+        if get_active_worker() is self:
+            set_active_worker(None)
 
     def _newest_jsonl(self) -> Path | None:
         slug_dir = self.projects_dir / self._project_slug
@@ -477,12 +503,25 @@ class JsonlTailWorker:
                 continue
             if state.nonce not in text:
                 continue
+            # Pop-then-emit: claim ownership under the lock BEFORE
+            # building/firing the envelope. Without this, two concurrent
+            # text turns containing the same nonce could each pass the
+            # in-text check and both emit `audit.canary_observed`
+            # (mark_canary_confirmed's WHERE clause is single-write-wins
+            # at the WAL row, but the envelope side would still
+            # double-fire to SSE subscribers). Re-popping under the lock
+            # is the claim; a concurrent matcher sees `state is None`
+            # and bails.
+            with self._canary_lock:
+                claimed = self._canary_registry.pop(probe_id, None)
+            if claimed is None:
+                continue
             observed_at = time.time()
             envelope = _msg_bus.AuditCanaryObservedEnvelope(
                 probe_id=probe_id,
-                nonce=state.nonce,
+                nonce=claimed.nonce,
                 observed_at=observed_at,
-                jsonl_path=state.target_jsonl_path,
+                jsonl_path=claimed.target_jsonl_path,
                 hmac_sig="",
             )
             envelope_dict = envelope.to_dict()
@@ -506,13 +545,11 @@ class JsonlTailWorker:
             try:
                 self.bus.mark_canary_confirmed(
                     probe_id=probe_id,
-                    nonce=state.nonce,
+                    nonce=claimed.nonce,
                     confirmed_at=observed_at,
                 )
             except Exception:
                 log.exception("jsonl_tail: mark_canary_confirmed failed")
-            with self._canary_lock:
-                self._canary_registry.pop(probe_id, None)
 
     def _run_canary_sweep(self) -> None:
         """1s sweep — emit failure envelope on entries past `timeout_s`.
