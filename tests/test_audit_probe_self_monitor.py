@@ -65,7 +65,9 @@ def test_empty_slug_row_skipped(tmp_path):
     # `cwd=""` and `cwd="/"` both produce empty slug after strip("-").
     w._sessions["bad-empty"] = _record("bad-empty", "")
     w._sessions["bad-slash"] = _record("bad-slash", "/")
-    cands = w.build_audit_probe_candidates()
+    # v2.1 P3 hard guard: sm_brain_id is mandatory; pass the watcher's
+    # own session id as the sentinel (no row matches it here).
+    cands = w.build_audit_probe_candidates(sm_brain_id="sm-self")
     ids = [c.brain_id for c in cands]
     assert "proj-a" in ids
     assert "bad-empty" not in ids
@@ -77,7 +79,9 @@ def test_brain_id_filter_prefix_include(tmp_path):
     w = _make_watcher(tmp_path)
     w._sessions["proj-a-1"] = _record("proj-a-1", "C:/u/proj-a")
     w._sessions["proj-b-1"] = _record("proj-b-1", "C:/u/proj-b")
-    cands = w.build_audit_probe_candidates(brain_id_filter="proj-a")
+    cands = w.build_audit_probe_candidates(
+        sm_brain_id="sm-self", brain_id_filter="proj-a",
+    )
     ids = [c.brain_id for c in cands]
     assert ids == ["proj-a-1"]
 
@@ -90,7 +94,7 @@ def test_inactive_sessions_skipped(tmp_path):
     exited.state = "exited"
     w._sessions["alive"] = active
     w._sessions["dead"] = exited
-    cands = w.build_audit_probe_candidates()
+    cands = w.build_audit_probe_candidates(sm_brain_id="sm-self")
     ids = [c.brain_id for c in cands]
     assert ids == ["alive"]
 
@@ -99,7 +103,7 @@ def test_candidate_path_under_claude_projects(tmp_path):
     """Built jsonl_path MUST be under `~/.claude/projects/<slug>/`."""
     w = _make_watcher(tmp_path)
     w._sessions["s1"] = _record("s1", "C:/Users/u/proj-a")
-    cands = w.build_audit_probe_candidates()
+    cands = w.build_audit_probe_candidates(sm_brain_id="sm-self")
     assert len(cands) == 1
     c = cands[0]
     expected_prefix = str(Path.home() / ".claude" / "projects")

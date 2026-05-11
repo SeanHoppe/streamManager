@@ -937,7 +937,15 @@ async def api_sm_probe(session_id: str, force: int = 0):
     watcher = get_session_watcher()
     if watcher is None:
         raise HTTPException(status_code=503, detail="session watcher inactive")
-    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip() or None
+    # v2.1 P3 hard guard: sm_brain_id is mandatory; missing env var ⇒
+    # raise at the endpoint with HTTP 500 (the watcher would also raise,
+    # but the endpoint-side check produces the more-specific error body).
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    if not sm_own:
+        raise HTTPException(
+            status_code=500,
+            detail="SM_OWN_SESSION_ID required for audit probe",
+        )
     candidates = watcher.build_audit_probe_candidates(sm_brain_id=sm_own)
     if not candidates:
         raise HTTPException(status_code=400, detail="no candidate streams")

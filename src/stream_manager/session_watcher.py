@@ -383,22 +383,32 @@ class SessionWatcher:
     def build_audit_probe_candidates(
         self,
         *,
+        sm_brain_id: str,
         brain_id_filter: str | None = None,
-        sm_brain_id: str | None = None,
     ) -> list["AuditProbeCandidate"]:
         """Build frozen candidate list for FR-PPP-1 emit_audit_probe.
 
         Layer 1 uses ``sessionId`` as ``brain_id`` and empty
         ``prompt_hash``; P2 fills in real digest.
 
-        ``sm_brain_id``: last-line drop of SM's own brain_id (primary
-        guard is registration-time ``_is_self_session``).
+        ``sm_brain_id`` (v2.1 P3 hard guard — MANDATORY): last-line
+        drop of SM's own brain_id (primary guard is registration-time
+        ``_is_self_session``). Must be the resolved value of
+        ``SM_OWN_SESSION_ID``; passing an empty string raises
+        ``RuntimeError`` per ``feedback_no_self_monitor.md``. The P1a
+        defense-in-depth optional kwarg graduated to mandatory in P3 so
+        the failure mode flips from silent ("filter not applied") to
+        loud (immediate exception at the call site).
         ``brain_id_filter``: prefix-include for self-monitor test.
 
         Skips rows whose ``cwd`` produces an empty ``slug`` — those
         would resolve to ``~/.claude/projects//<sid>.jsonl`` (broken
         path, double-slash) and the operator can never pick them.
         """
+        if not sm_brain_id:
+            raise RuntimeError(
+                "SM_OWN_SESSION_ID required for audit-probe candidate build"
+            )
         from stream_manager.message_bus import AuditProbeCandidate
         with self._lock:
             snapshot = [
@@ -408,7 +418,7 @@ class SessionWatcher:
             ]
         out: list[AuditProbeCandidate] = []
         for session_id, cwd, last_seen in snapshot:
-            if sm_brain_id and session_id == sm_brain_id:
+            if session_id == sm_brain_id:
                 continue
             if brain_id_filter and not session_id.startswith(brain_id_filter):
                 continue
