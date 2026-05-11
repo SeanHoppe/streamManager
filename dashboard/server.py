@@ -1006,6 +1006,9 @@ async def api_sm_probe_ack(request: Request):
         raise HTTPException(status_code=400, detail="session_id required")
     if selected is not None and not isinstance(selected, str):
         raise HTTPException(status_code=400, detail="selected_jsonl_path must be string or null")
+    # FR-PPP-2: empty-string == "none of the above"; coerce to None so
+    # provenance_assertions.jsonl_path stores SQL NULL, not "".
+    selected = selected or None
 
     bus = _get_bus()
     if bus is None:
