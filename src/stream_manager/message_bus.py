@@ -293,6 +293,13 @@ class AuditProbeAckEnvelope:
     signed_at: float
     expires_at: float
     hmac_sig: str
+    # v2.1 P1a (R14): sig schema versioning. v1 = {probe_id,
+    # selected_jsonl_path, signed_at, expires_at}. v2 adds brain_id +
+    # prompt_hash (FR-PPP-2 enrichment for P2 canary echo). Defaults
+    # keep P1-era call sites compiling under v1.
+    brain_id: str | None = None
+    prompt_hash: str | None = None
+    sig_v: int = 1
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -301,11 +308,27 @@ class AuditProbeAckEnvelope:
             "signed_at": float(self.signed_at),
             "expires_at": float(self.expires_at),
             "hmac_sig": self.hmac_sig,
+            "brain_id": self.brain_id,
+            "prompt_hash": self.prompt_hash,
+            "sig_v": int(self.sig_v),
         }
 
     def signing_payload(self) -> dict[str, object]:
+        """Return the dict that gets HMAC-signed. Schema depends on sig_v.
+
+        sig_v == 1: legacy P1 shape — `{probe_id, selected_jsonl_path,
+        signed_at, expires_at}`. Used for pre-P1a rows.
+
+        sig_v >= 2: P1a-enriched shape — includes `brain_id`,
+        `prompt_hash`, and `sig_v` itself so a v1 sig can never collide
+        with a v2 sig over the same probe.
+        """
         out = self.to_dict()
         out.pop("hmac_sig", None)
+        if int(self.sig_v) <= 1:
+            out.pop("brain_id", None)
+            out.pop("prompt_hash", None)
+            out.pop("sig_v", None)
         return out
 
 

@@ -830,6 +830,61 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
   color:var(--text-dim);
 }
 
+/* v2.1 P1a — PPP HITL row variant. `.hitl-item-probe` re-layouts the
+   grid so the candidate-list + prompt span full width (instead of the
+   default 5-column action grid). */
+.hitl-item-probe{
+  grid-template-columns:78px 100px 1fr;
+}
+.hitl-probe-prompt{
+  grid-column:1/-1;
+  font-family:var(--font-d);
+  font-size:11px;
+  color:var(--text);
+  letter-spacing:0.04em;
+  margin-top:4px;
+}
+.probe-choices{
+  grid-column:1/-1;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  margin-top:4px;
+}
+.probe-choice{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:5px 8px;
+  border:1px solid var(--border);
+  background:var(--bg-row);
+  cursor:pointer;
+  font-family:var(--font-d);
+  font-size:10.5px;
+  transition:border-color .15s,background .15s;
+}
+.probe-choice:hover{border-color:var(--accent);background:var(--bg-row-hover)}
+.probe-choice input[type="radio"]{margin:0;cursor:pointer}
+.probe-slug{
+  font-weight:600;
+  color:var(--accent);
+  min-width:90px;
+}
+.probe-path{
+  font-family:var(--font-d);
+  font-size:10px;
+  color:var(--text-dim);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  flex:1;
+}
+.probe-choice.probe-none{
+  font-style:italic;
+  color:var(--text-dim);
+}
+.probe-choice.probe-none:hover{color:var(--text)}
+
 /* annotate tray */
 .row.has-tray{cursor:pointer}
 .row.tray-open{background:var(--bg-row-hover)}
@@ -3204,6 +3259,19 @@ async function submitAuditProbeAck(hitlId, probeId){
   const selected = checked.value || null;  // empty string → null = none-of-above
   const sid = (window.PHASE6 && PHASE6.selectedSessionId) || null;
   if(!sid){ alert('Pick a session before signing the probe.'); return; }
+  // v2.1 P1a (R14): look up brain_id + prompt_hash for the selected
+  // candidate from the cached envelope and pass them to /ack so the
+  // v2 sig payload covers them.
+  let brainId = null, promptHash = null;
+  if(selected){
+    const env = AUDIT_PROBES.get(probeId);
+    const cands = (env && Array.isArray(env.candidate_streams)) ? env.candidate_streams : [];
+    const match = cands.find(c => c && c.jsonl_path === selected);
+    if(match){
+      brainId = match.brain_id || null;
+      promptHash = match.prompt_hash || null;
+    }
+  }
   const before = HITL.pending;
   HITL.pending = HITL.pending.filter(p=>p.id !== hitlId);
   renderHitlPanel();
@@ -3211,7 +3279,11 @@ async function submitAuditProbeAck(hitlId, probeId){
     const r = await fetch('/api/sm-probe/ack', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({probe_id: probeId, hitl_id: Number(hitlId), session_id: sid, selected_jsonl_path: selected}),
+      body: JSON.stringify({
+        probe_id: probeId, hitl_id: Number(hitlId), session_id: sid,
+        selected_jsonl_path: selected,
+        brain_id: brainId, prompt_hash: promptHash,
+      }),
     });
     if(!r.ok) throw new Error('ack failed: ' + r.status);
     AUDIT_PROBES.delete(probeId);

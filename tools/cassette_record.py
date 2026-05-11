@@ -487,6 +487,7 @@ def main() -> int:
                 fp.flush()
                 written += 1
             # v1.3 Path-A: append Learn Mode dialogue envelopes.
+            lm_row_count = 0
             if not args.skip_lm_pump:
                 lm_rows = _record_lm_dialogue(
                     bus,
@@ -498,16 +499,20 @@ def main() -> int:
                     fp.write(json.dumps(row) + "\n")
                     fp.flush()
                     written += 1
+                lm_row_count = len(lm_rows)
                 print(
-                    f"[cassette] LM dialogue: {len(lm_rows)} pairs recorded "
+                    f"[cassette] LM dialogue: {lm_row_count} pairs recorded "
                     f"(model={args.lm_model})"
                 )
 
             # v2.1 P1 (FR-PPP) Layer 1: record one `audit.probe` +
             # one `audit.probe_ack` envelope so cassette replay covers
             # the full pair (`feedback_cassette_must_cover_new_envelopes.md`).
+            # v2.1 P1a (R-cassette-idx): use actual LM row count, not the
+            # magic-50 estimate; cassette readers disambiguate pairs by
+            # `kind`, not by `idx`, but accurate idx makes diffs readable.
             if not args.skip_ppp_pump:
-                ppp_idx = len(payloads) + (50 if not args.skip_lm_pump else 0)
+                ppp_idx = len(payloads) + lm_row_count
                 ppp_rows = _record_ppp_envelopes(bus, session_id, ppp_idx)
                 for row in ppp_rows:
                     fp.write(json.dumps(row) + "\n")
