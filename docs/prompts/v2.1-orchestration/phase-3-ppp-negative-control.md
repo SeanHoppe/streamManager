@@ -229,7 +229,7 @@ already in place; P3 graduates + adds the decoy seam).
       `feedback_cassette_must_cover_new_envelopes.md`)
 - [ ] P2 `_is_sm_originated` filter fires before decoy match
       (defense in depth preserved)
-- [ ] All 4 test files added; full suite green via
+- [ ] All 5 test files added; full suite green via
       `pytest -m "not slow and not alignment_eval"`
 - [ ] LOC budget ≤ 700 net add (target ~390; split to P3a per
       ADR-18 Rule 4 if exceeded — same pattern as P1 → P1a)
