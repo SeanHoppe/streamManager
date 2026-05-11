@@ -1067,7 +1067,177 @@ async def api_sm_probe_ack(request: Request):
     except Exception:
         log.exception("api_sm_probe_ack: write_envelope failed")
 
-    return {"ok": True, "probe_id": probe_id, "written": True, "sig_v": 2}
+    # v2.1 P2: auto-emit Layer-2 canary on ack-success path. Skipped on
+    # "none of the above" (`selected is None`) since there is no JSONL
+    # to bind. Failures are swallowed — ack success MUST NOT be rolled
+    # back by canary emit failure (the assertion row is already on
+    # disk; canary is best-effort).
+    canary_nonce: str | None = None
+    canary_timeout_s: int | None = None
+    canary_delivered: int | None = None
+    if selected:
+        try:
+            reg = _get_engine_registry()
+            if reg is not None:
+                engine = reg.get_or_create(session_id)
+                canary_nonce, _env, canary_delivered = (
+                    engine.emit_audit_canary(
+                        probe_id=probe_id,
+                        jsonl_path=selected,
+                    )
+                )
+                canary_timeout_s = 10
+                # Register on the per-process JsonlTailWorker so the
+                # observer can match the nonce in the user's claimed
+                # JSONL. Without this call the canary envelope fires
+                # but the registry stays empty → every canary times out
+                # → wired-but-dormant lifecycle.
+                from stream_manager import jsonl_tail as _jt
+                worker = _jt.get_active_worker()
+                if worker is not None and canary_nonce is not None:
+                    worker.register_canary(
+                        probe_id=probe_id,
+                        nonce=canary_nonce,
+                        target_jsonl_path=selected,
+                        timeout_s=float(canary_timeout_s),
+                    )
+                else:
+                    # Surface DORMANT-observer state rather than silently
+                    # accepting a timeout-bound canary. The envelope still
+                    # fired (SSE subscribers see it), but the observer is
+                    # not running so this canary WILL time out.
+                    log.warning(
+                        "api_sm_probe_ack: canary emitted but no active "
+                        "tail worker; observer dormant (probe_id=%s)",
+                        probe_id,
+                    )
+                if canary_delivered == 0:
+                    log.warning(
+                        "api_sm_probe_ack: canary delivered=0 (no SSE "
+                        "subscribers) for probe_id=%s",
+                        probe_id,
+                    )
+        except Exception:
+            log.exception("api_sm_probe_ack: emit_audit_canary failed")
+
+    return {
+        "ok": True,
+        "probe_id": probe_id,
+        "written": True,
+        "sig_v": 2,
+        "canary_nonce": canary_nonce,
+        "canary_timeout_s": canary_timeout_s,
+        "canary_delivered": canary_delivered,
+    }
+
+
+# v2.1 P2 (FR-PPP) — explicit canary emit (operator-triggered or
+# cassette/test deterministic path). The auto-emit hook on
+# /api/sm-probe/ack already fires the canary on the UX happy path; this
+# endpoint exists for re-emit + cassette determinism.
+@app.post("/api/sm-canary/emit")
+async def api_sm_canary_emit(request: Request):
+    """Emit `audit.canary_emit` for an existing provenance assertion.
+
+    Body: ``{probe_id, timeout_s?}``. Looks up the assertion row to
+    recover ``session_id`` + ``jsonl_path``; rejects when the assertion
+    is unknown / expired / has ``jsonl_path IS NULL`` (operator picked
+    "none of the above" — nothing to bind).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body")
+    probe_id = body.get("probe_id")
+    timeout_s = int(body.get("timeout_s") or 10)
+    if not isinstance(probe_id, str) or not probe_id:
+        raise HTTPException(status_code=400, detail="probe_id required")
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+
+    # Look up the assertion row. P2 reads via direct WAL query — the
+    # bus exposes `get_active_provenance_assertion(session_id)` but the
+    # caller of this endpoint knows only `probe_id`, not `session_id`.
+    try:
+        row = bus._conn.execute(  # noqa: SLF001 — read-only WAL probe
+            "SELECT session_id, jsonl_path, expires_at "
+            "FROM provenance_assertions WHERE probe_id=?",
+            (probe_id,),
+        ).fetchone()
+    except Exception as exc:
+        log.exception("api_sm_canary_emit: WAL lookup failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+    if row is None:
+        raise HTTPException(status_code=404, detail="probe_id unknown")
+    session_id, jsonl_path, expires_at = row[0], row[1], float(row[2])
+    if not jsonl_path:
+        raise HTTPException(
+            status_code=400,
+            detail="assertion has no jsonl_path (none-of-the-above)",
+        )
+    if expires_at <= time.time():
+        raise HTTPException(status_code=410, detail="assertion expired")
+
+    reg = _get_engine_registry()
+    if reg is None:
+        raise HTTPException(status_code=500, detail="engine registry unavailable")
+    try:
+        engine = reg.get_or_create(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        nonce, _env, delivered = engine.emit_audit_canary(
+            probe_id=probe_id,
+            jsonl_path=jsonl_path,
+            timeout_s=timeout_s,
+        )
+    except Exception as exc:
+        log.exception("api_sm_canary_emit: emit_audit_canary failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if delivered == 0:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "no envelope subscribers",
+                "probe_id": probe_id,
+                "delivered": 0,
+            },
+        )
+
+    # Register on the per-process JsonlTailWorker (peer to the
+    # auto-emit hook on /api/sm-probe/ack). When no worker is active
+    # the observer is dormant and this canary will time out; surface
+    # that as a `observer_dormant` flag in the response so the cassette
+    # / soak driver can distinguish "wired" from "wired + observed".
+    from stream_manager import jsonl_tail as _jt
+    worker = _jt.get_active_worker()
+    observer_dormant = False
+    if worker is not None:
+        worker.register_canary(
+            probe_id=probe_id,
+            nonce=nonce,
+            target_jsonl_path=jsonl_path,
+            timeout_s=float(timeout_s),
+        )
+    else:
+        observer_dormant = True
+        log.warning(
+            "api_sm_canary_emit: no active tail worker; observer "
+            "dormant (probe_id=%s)",
+            probe_id,
+        )
+
+    return {
+        "probe_id": probe_id,
+        "nonce": nonce,
+        "timeout_s": timeout_s,
+        "delivered": delivered,
+        "observer_dormant": observer_dormant,
+    }
 
 
 # ── Task F: cross-session pattern endpoints ──────────────────────────

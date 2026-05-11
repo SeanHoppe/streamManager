@@ -283,12 +283,21 @@ def _record_lm_dialogue(
 def _record_ppp_envelopes(
     bus: MessageBus, session_id: str, start_idx: int,
 ) -> list[dict]:
-    """v2.1 P1 (FR-PPP) Layer 1: synthesize one `audit.probe` + one
-    `audit.probe_ack` envelope pair. HMAC sigs reuse the
-    `desktop_command` secret (issue #128 §A1)."""
+    """v2.1 P1+P2 (FR-PPP) Layers 1 & 2: synthesize the full PPP envelope
+    set — Layer 1 `audit.probe` + `audit.probe_ack`, then Layer 2
+    `audit.canary_emit` + `audit.canary_observed` + `audit.probe_failure`.
+    All five HMAC sigs reuse the `desktop_command` secret (issue #128 §A1).
+    Canary envelopes ride the same opt-out flag (`--skip-ppp-pump`) per
+    v2.1 P2 scope §3 — Layer 2 is part of the PPP pump, not a separate
+    cassette section."""
     from stream_manager import desktop_commands
     from stream_manager.message_bus import (
-        AuditProbeAckEnvelope, AuditProbeCandidate, AuditProbeEnvelope,
+        AuditCanaryEmitEnvelope,
+        AuditCanaryObservedEnvelope,
+        AuditProbeAckEnvelope,
+        AuditProbeCandidate,
+        AuditProbeEnvelope,
+        AuditProbeFailureEnvelope,
     )
     issued_at = time.time()
     cand = AuditProbeCandidate(
@@ -316,10 +325,44 @@ def _record_ppp_envelopes(
     )
     bus.write_envelope("audit.probe_ack", ack_payload)
 
+    # v2.1 P2 — Layer 2 canary echo triplet. Three sequential envelopes
+    # cover the binding-proof happy path (emit → observed) plus the
+    # failure path (probe_failure). Cassette readers disambiguate by
+    # `kind`; idx is informational.
+    def _sign(p: dict) -> dict:
+        p["hmac_sig"] = desktop_commands.sign(
+            {k: v for k, v in p.items() if k != "hmac_sig"}
+        )
+        return p
+
+    nonce = "cassette_nonce_" + str(start_idx).zfill(4)
+    emit_payload = _sign(AuditCanaryEmitEnvelope(
+        probe_id=env.probe_id, jsonl_path=cand.jsonl_path, nonce=nonce,
+        issued_at=issued_at, timeout_s=10, hmac_sig="",
+    ).to_dict())
+    bus.write_envelope("audit.canary_emit", emit_payload)
+    observed_payload = _sign(AuditCanaryObservedEnvelope(
+        probe_id=env.probe_id, nonce=nonce,
+        observed_at=issued_at + 1.0, jsonl_path=cand.jsonl_path,
+        hmac_sig="",
+    ).to_dict())
+    bus.write_envelope("audit.canary_observed", observed_payload)
+    failure_payload = _sign(AuditProbeFailureEnvelope(
+        probe_id=env.probe_id + "-neg", reason="canary_timeout",
+        failed_at=issued_at + 11.0, hmac_sig="",
+    ).to_dict())
+    bus.write_envelope("audit.probe_failure", failure_payload)
+
     return [
         {"idx": start_idx, "kind": "audit_probe", "envelope": env_payload},
         {"idx": start_idx + 1, "kind": "audit_probe_ack",
          "envelope": ack_payload},
+        {"idx": start_idx + 2, "kind": "audit_canary_emit",
+         "envelope": emit_payload},
+        {"idx": start_idx + 3, "kind": "audit_canary_observed",
+         "envelope": observed_payload},
+        {"idx": start_idx + 4, "kind": "audit_probe_failure",
+         "envelope": failure_payload},
     ]
 
 

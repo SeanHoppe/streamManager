@@ -836,6 +836,50 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
 .hitl-item-probe{
   grid-template-columns:78px 100px 1fr;
 }
+/* v2.1 P2 — Layer-2 canary echo row variant. Single column; the
+   operator's task is to type the nonce, not pick an action. */
+.hitl-item-canary{
+  display:block;
+  border-left:3px solid var(--accent);
+  padding:6px 10px;
+}
+.hitl-item-canary .canary-prompt{
+  font-family:var(--font-d);
+  font-size:11px;
+  color:var(--text);
+  letter-spacing:.04em;
+  margin:2px 0 6px 0;
+}
+.hitl-item-canary .canary-nonce{
+  display:inline-block;
+  font-family:var(--font-d);
+  font-size:14px;
+  font-weight:700;
+  letter-spacing:.08em;
+  padding:4px 8px;
+  background:var(--bg-row);
+  border:1px solid var(--border);
+  user-select:all;
+}
+.hitl-item-canary .canary-bar{
+  margin-top:6px;
+  height:3px;
+  background:var(--bg-row);
+  overflow:hidden;
+}
+.hitl-item-canary .canary-bar-fill{
+  height:100%;
+  background:var(--accent);
+  width:100%;
+  transition:width 1s linear;
+}
+.hitl-item-canary.canary-observed{
+  border-left-color:#3aa66c;
+  opacity:.85;
+}
+.hitl-item-canary.canary-failed{
+  border-left-color:#c43a3a;
+}
 .hitl-probe-prompt{
   grid-column:1/-1;
   font-family:var(--font-d);
@@ -3065,6 +3109,10 @@ const TRIGGER_LABEL = {
 // FR-PPP-1: probe_id -> envelope cache (filled by /events `audit.probe` SSE).
 const AUDIT_PROBES = new Map();
 
+// FR-PPP-2 (v2.1 P2): probe_id -> Layer-2 canary state.
+// `{nonce, jsonl_path, issued_at, timeout_s, status: 'pending'|'observed'|'failed', failure_reason?}`
+const AUDIT_CANARIES = new Map();
+
 function buildAuditProbeRow(item){
   const probeId = String(item.content || '');
   const envelope = AUDIT_PROBES.get(probeId);
@@ -3100,7 +3148,12 @@ function renderHitlPanel(){
     }
   }
 
-  if(!HITL.pending.length){
+  // v2.1 P2 — Layer-2 canary echo rows. Independent of HITL.pending
+  // (the canary auto-emit hook fires AFTER the underlying audit_probe
+  // HITL row is resolved). When at least one canary is active, the
+  // panel is shown even with an empty HITL list.
+  const canaryCount = AUDIT_CANARIES.size;
+  if(!HITL.pending.length && !canaryCount){
     hitlPanel.classList.remove('show');
     hitlList.innerHTML = '';
     hitlCount.textContent = '0';
@@ -3110,11 +3163,53 @@ function renderHitlPanel(){
   }
 
   hitlPanel.classList.add('show');
-  hitlCount.textContent = String(HITL.pending.length);
-  if(window.updateNavHitlBadge) updateNavHitlBadge(HITL.pending.length);
+  const visible = HITL.pending.length + canaryCount;
+  hitlCount.textContent = String(visible);
+  if(window.updateNavHitlBadge) updateNavHitlBadge(visible);
 
   // Re-render every item (idempotent — preserves bar by reading startedAt).
   hitlList.innerHTML = '';
+  // Prepend canary rows so the operator sees the nonce-to-type immediately.
+  for(const [probeId, state] of AUDIT_CANARIES){
+    const row = document.createElement('div');
+    row.className = 'hitl-item hitl-item-canary';
+    row.dataset.probeId = probeId;
+    const nonce = String(state.nonce || '');
+    const status = String(state.status || 'pending');
+    if(status === 'observed') row.classList.add('canary-observed');
+    if(status === 'failed') row.classList.add('canary-failed');
+    let bodyHtml;
+    if(status === 'pending'){
+      bodyHtml =
+        `<div class="hitl-trig">CANARY ECHO</div>`+
+        `<div class="canary-prompt">Type this string into your active Claude CLI session within ${esc(String(state.timeout_s||10))}s:</div>`+
+        `<code class="canary-nonce">${esc(nonce)}</code>`+
+        `<div class="canary-bar"><div class="canary-bar-fill" data-canary-bar="${esc(probeId)}"></div></div>`;
+    } else if(status === 'observed'){
+      bodyHtml =
+        `<div class="hitl-trig">CANARY ECHO — confirmed</div>`+
+        `<div class="canary-prompt">Binding proven both ways.</div>`+
+        `<code class="canary-nonce">${esc(nonce)}</code>`;
+    } else {
+      bodyHtml =
+        `<div class="hitl-trig">CANARY ECHO — FAILED</div>`+
+        `<div class="canary-prompt">Binding suspect (${esc(String(state.failure_reason||'unknown'))}). Re-pick your stream when re-prompted.</div>`;
+    }
+    row.innerHTML = bodyHtml;
+    hitlList.appendChild(row);
+    if(status === 'pending'){
+      // Countdown bar: width = remaining/total. Updated once on render;
+      // the next SSE event (observed / probe_failure / re-emit) is what
+      // drives the next visual update. Avoids per-row setInterval churn.
+      const fill = row.querySelector('[data-canary-bar]');
+      if(fill){
+        const total = (state.timeout_s || 10);
+        const elapsed = Math.max(0, (Date.now()/1000) - (state.issued_at || Date.now()/1000));
+        const pct = Math.max(0, Math.min(100, 100*(1 - elapsed/total)));
+        fill.style.width = pct + '%';
+      }
+    }
+  }
   HITL.pending.forEach(item=>{
     const trigger = TRIGGER_LABEL[item.trigger_reason] || (item.trigger_reason||'?').toUpperCase();
     const action = String(item.proposed_action||'?');
@@ -4251,6 +4346,50 @@ function appendEvlogRow(ev, forceFlush=false){
       try{
         const ack = JSON.parse(e.data);
         if(ack && ack.probe_id) AUDIT_PROBES.delete(ack.probe_id);
+      }catch(_){}
+    });
+    // v2.1 P2 — Layer-2 canary echo SSE handlers.
+    // canary_emit: surface the nonce + countdown to the operator.
+    // canary_observed: binding proven; auto-clear.
+    // probe_failure: binding suspect; flip the row to failure state.
+    es.addEventListener('audit.canary_emit', e=>{
+      try{
+        const env = JSON.parse(e.data);
+        if(env && env.probe_id){
+          AUDIT_CANARIES.set(env.probe_id, {
+            nonce: env.nonce,
+            jsonl_path: env.jsonl_path,
+            issued_at: env.issued_at,
+            timeout_s: env.timeout_s,
+            status: 'pending',
+          });
+          renderHitlPanel();
+        }
+      }catch(_){}
+    });
+    es.addEventListener('audit.canary_observed', e=>{
+      try{
+        const env = JSON.parse(e.data);
+        if(env && env.probe_id){
+          const s = AUDIT_CANARIES.get(env.probe_id);
+          if(s){ s.status = 'observed'; AUDIT_CANARIES.set(env.probe_id, s); }
+          // Auto-clear after a brief confirmation flash so the operator
+          // sees the binding proof land before the row disappears.
+          setTimeout(()=>{ AUDIT_CANARIES.delete(env.probe_id); renderHitlPanel(); }, 1500);
+          renderHitlPanel();
+        }
+      }catch(_){}
+    });
+    es.addEventListener('audit.probe_failure', e=>{
+      try{
+        const env = JSON.parse(e.data);
+        if(env && env.probe_id){
+          const s = AUDIT_CANARIES.get(env.probe_id) || {};
+          s.status = 'failed';
+          s.failure_reason = env.reason || 'unknown';
+          AUDIT_CANARIES.set(env.probe_id, s);
+          renderHitlPanel();
+        }
       }catch(_){}
     });
     es.onerror = ()=>{

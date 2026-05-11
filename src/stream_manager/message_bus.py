@@ -332,6 +332,83 @@ class AuditProbeAckEnvelope:
         return out
 
 
+# v2.1 P2 (FR-PPP) — Layer 2 canary echo envelopes. Server-stamped sigs
+# at emit / observe / failure time inside the JsonlTailWorker and
+# governance emitters; browser never holds the secret per FR-PPP-2.
+# Canary sigs are sig_v=1 (intrinsic to envelope; no schema versioning
+# needed yet — schema-versioning rationale is reserved for the ack path
+# where sig_v=2 added brain_id/prompt_hash in P1a). NOT `frozen=True`:
+# `hmac_sig` is stamped after construction by the canonical-payload
+# build → sign-sans-sig → re-stamp pattern that AuditProbeEnvelope uses.
+@dataclass
+class AuditCanaryEmitEnvelope:
+    probe_id: str
+    jsonl_path: str
+    nonce: str
+    issued_at: float
+    timeout_s: int
+    hmac_sig: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "probe_id": self.probe_id,
+            "jsonl_path": self.jsonl_path,
+            "nonce": self.nonce,
+            "issued_at": float(self.issued_at),
+            "timeout_s": int(self.timeout_s),
+            "hmac_sig": self.hmac_sig,
+        }
+
+    def signing_payload(self) -> dict[str, object]:
+        out = self.to_dict()
+        out.pop("hmac_sig", None)
+        return out
+
+
+@dataclass
+class AuditCanaryObservedEnvelope:
+    probe_id: str
+    nonce: str
+    observed_at: float
+    jsonl_path: str
+    hmac_sig: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "probe_id": self.probe_id,
+            "nonce": self.nonce,
+            "observed_at": float(self.observed_at),
+            "jsonl_path": self.jsonl_path,
+            "hmac_sig": self.hmac_sig,
+        }
+
+    def signing_payload(self) -> dict[str, object]:
+        out = self.to_dict()
+        out.pop("hmac_sig", None)
+        return out
+
+
+@dataclass
+class AuditProbeFailureEnvelope:
+    probe_id: str
+    reason: str
+    failed_at: float
+    hmac_sig: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "probe_id": self.probe_id,
+            "reason": self.reason,
+            "failed_at": float(self.failed_at),
+            "hmac_sig": self.hmac_sig,
+        }
+
+    def signing_payload(self) -> dict[str, object]:
+        out = self.to_dict()
+        out.pop("hmac_sig", None)
+        return out
+
+
 EnvelopeSubscriberCallback = Callable[[str, dict[str, object]], None]
 
 
@@ -427,6 +504,31 @@ class MessageBus:
                 self._conn.execute(
                     "ALTER TABLE hitl_pending ADD COLUMN bias_hint TEXT NOT NULL DEFAULT ''"
                 )
+
+            # v2.1 P2 (FR-PPP) — Layer 2 canary echo columns on
+            # `provenance_assertions`. Additive ALTER; idempotent via
+            # `PRAGMA table_info` guard (peer to the hitl_pending /
+            # decisions migrations above). Existing P1 rows get
+            # `canary_nonce=NULL, canary_confirmed_at=NULL` —
+            # semantically "P1 row, no canary attempted yet".
+            prov_cols = {
+                row[1]
+                for row in self._conn.execute(
+                    "PRAGMA table_info(provenance_assertions)"
+                ).fetchall()
+            }
+            if "canary_nonce" not in prov_cols:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._conn.execute(
+                        "ALTER TABLE provenance_assertions "
+                        "ADD COLUMN canary_nonce TEXT"
+                    )
+            if "canary_confirmed_at" not in prov_cols:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._conn.execute(
+                        "ALTER TABLE provenance_assertions "
+                        "ADD COLUMN canary_confirmed_at REAL"
+                    )
 
             # One-time backfill: rows authored before Task L encoded the
             # pattern hash inside proposed_action as `flag_cross_session:<h>`.
@@ -831,6 +933,27 @@ class MessageBus:
             "expires_at": float(row[7]),
             "hmac_sig": row[8],
         }
+
+    def mark_canary_confirmed(
+        self,
+        probe_id: str,
+        nonce: str,
+        confirmed_at: float,
+    ) -> bool:
+        """v2.1 P2 — record a Layer-2 canary echo on the assertion row.
+
+        Single-write-wins via WHERE canary_confirmed_at IS NULL: a
+        second observe of the same nonce (operator re-typed) does NOT
+        re-stamp the row. Returns True on first write, False on no-op.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE provenance_assertions "
+                "SET canary_nonce=?, canary_confirmed_at=? "
+                "WHERE probe_id=? AND canary_confirmed_at IS NULL",
+                (nonce, float(confirmed_at), probe_id),
+            )
+            return (cur.rowcount or 0) > 0
 
     def annotate_decision(
         self,
