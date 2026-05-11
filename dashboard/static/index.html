@@ -880,6 +880,50 @@ html[data-scanlines="on"] body::after{ opacity:.06; }
 .hitl-item-canary.canary-failed{
   border-left-color:#c43a3a;
 }
+/* v2.1 P3 — Layer 3 negative-control hallucination alarm. RED border,
+   alarm icon, NO auto-clear. Operator-dismiss only (explicit X).
+   Reuses the `.hitl-item-canary` block layout for consistency. */
+.hitl-item-hallucination{
+  display:block;
+  border-left:3px solid #c43a3a;
+  background:rgba(196,58,58,.06);
+  padding:6px 10px;
+}
+.hitl-item-hallucination .halluc-trig{
+  color:#c43a3a;
+  font-weight:700;
+  letter-spacing:.06em;
+}
+.hitl-item-hallucination .halluc-prompt{
+  font-family:var(--font-d);
+  font-size:11px;
+  color:var(--text);
+  letter-spacing:.04em;
+  margin:2px 0 6px 0;
+}
+.hitl-item-hallucination .halluc-path{
+  display:block;
+  font-family:var(--font-d);
+  font-size:11px;
+  word-break:break-all;
+  padding:4px 8px;
+  background:var(--bg-row);
+  border:1px solid var(--border);
+}
+.hitl-item-hallucination .halluc-dismiss{
+  margin-top:6px;
+  background:transparent;
+  border:1px solid #c43a3a;
+  color:#c43a3a;
+  padding:2px 8px;
+  font-family:var(--font-d);
+  font-size:10px;
+  cursor:pointer;
+}
+.hitl-item-hallucination .halluc-dismiss:hover{
+  background:#c43a3a;
+  color:#fff;
+}
 .hitl-probe-prompt{
   grid-column:1/-1;
   font-family:var(--font-d);
@@ -3113,6 +3157,12 @@ const AUDIT_PROBES = new Map();
 // `{nonce, jsonl_path, issued_at, timeout_s, status: 'pending'|'observed'|'failed', failure_reason?}`
 const AUDIT_CANARIES = new Map();
 
+// FR-PPP-12..14 (v2.1 P3): probe_id -> Layer-3 hallucination alarm state.
+// `{jsonl_path, detected_at}`. RED alarm row — operator-dismiss only,
+// NO auto-clear (this is a parser-correctness alarm, not an
+// operator-attestation prompt).
+const AUDIT_HALLUCINATIONS = new Map();
+
 function buildAuditProbeRow(item){
   const probeId = String(item.content || '');
   const envelope = AUDIT_PROBES.get(probeId);
@@ -3153,7 +3203,8 @@ function renderHitlPanel(){
   // HITL row is resolved). When at least one canary is active, the
   // panel is shown even with an empty HITL list.
   const canaryCount = AUDIT_CANARIES.size;
-  if(!HITL.pending.length && !canaryCount){
+  const hallucCount = AUDIT_HALLUCINATIONS.size;
+  if(!HITL.pending.length && !canaryCount && !hallucCount){
     hitlPanel.classList.remove('show');
     hitlList.innerHTML = '';
     hitlCount.textContent = '0';
@@ -3163,12 +3214,28 @@ function renderHitlPanel(){
   }
 
   hitlPanel.classList.add('show');
-  const visible = HITL.pending.length + canaryCount;
+  const visible = HITL.pending.length + canaryCount + hallucCount;
   hitlCount.textContent = String(visible);
   if(window.updateNavHitlBadge) updateNavHitlBadge(visible);
 
   // Re-render every item (idempotent — preserves bar by reading startedAt).
   hitlList.innerHTML = '';
+  // v2.1 P3 — prepend hallucination alarms FIRST (RED border, top of
+  // the panel). Operator-dismiss only; no auto-clear. Click the
+  // `.halluc-dismiss` button to remove from the local Map (the WAL row
+  // remains stamped — this clears the UI only).
+  for(const [probeId, state] of AUDIT_HALLUCINATIONS){
+    const row = document.createElement('div');
+    row.className = 'hitl-item hitl-item-hallucination';
+    row.dataset.probeId = probeId;
+    const path = String(state.jsonl_path || '');
+    row.innerHTML =
+      `<div class="hitl-trig halluc-trig">⚠ HALLUCINATION DETECTED</div>`+
+      `<div class="halluc-prompt">Parser reported activity on a registered decoy stream. The parser is producing fictional records.</div>`+
+      `<code class="halluc-path">${esc(path)}</code>`+
+      `<button class="halluc-dismiss" data-halluc-dismiss="${esc(probeId)}">DISMISS</button>`;
+    hitlList.appendChild(row);
+  }
   // Prepend canary rows so the operator sees the nonce-to-type immediately.
   for(const [probeId, state] of AUDIT_CANARIES){
     const row = document.createElement('div');
@@ -3332,6 +3399,18 @@ async function resolveHitl(pid, resolution){
 }
 
 hitlList.addEventListener('click', e=>{
+  // v2.1 P3 — hallucination alarm dismiss button. UI-only clear; the
+  // WAL row carries the audit trail. Handled before the hitl-btn
+  // delegation since the dismiss button is NOT a .hitl-btn.
+  const dismiss = e.target.closest('[data-halluc-dismiss]');
+  if(dismiss){
+    const probeId = dismiss.getAttribute('data-halluc-dismiss');
+    if(probeId){
+      AUDIT_HALLUCINATIONS.delete(probeId);
+      renderHitlPanel();
+    }
+    return;
+  }
   const btn = e.target.closest('.hitl-btn');
   if(!btn) return;
   const pid = Number(btn.dataset.pid);
@@ -4388,6 +4467,21 @@ function appendEvlogRow(ev, forceFlush=false){
           s.status = 'failed';
           s.failure_reason = env.reason || 'unknown';
           AUDIT_CANARIES.set(env.probe_id, s);
+          renderHitlPanel();
+        }
+      }catch(_){}
+    });
+    // v2.1 P3 — Layer 3 negative-control alarm. RED row; operator-dismiss
+    // only (no auto-clear, no countdown). The WAL row carries the audit
+    // trail; clearing the local Map is UI-only.
+    es.addEventListener('audit.hallucination_detected', e=>{
+      try{
+        const env = JSON.parse(e.data);
+        if(env && env.probe_id){
+          AUDIT_HALLUCINATIONS.set(env.probe_id, {
+            jsonl_path: env.jsonl_path,
+            detected_at: env.detected_at,
+          });
           renderHitlPanel();
         }
       }catch(_){}

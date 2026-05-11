@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -1245,6 +1246,72 @@ async def api_sm_canary_emit(request: Request):
         "timeout_s": timeout_s,
         "delivered": delivered,
         "observer_dormant": observer_dormant,
+    }
+
+
+# v2.1 P3 (FR-PPP) — Layer 3 negative-control decoy registration.
+# Operator-triggered (or auto-fired at SM boot) registration of a
+# synthetic JSONL path that is never written. Subsequent parser reports
+# on this path fire `audit.hallucination_detected` via the M4 hook in
+# `jsonl_tail._check_decoy_hallucination`. The path SHAPE convention
+# (sentinel slug + fresh uuid) matches the phase-3 prompt §1.
+@app.post("/api/sm-decoy/register")
+async def api_sm_decoy_register(request: Request):
+    """Register a synthetic decoy JSONL path. Returns the registration
+    row metadata (probe_id, jsonl_path, hmac_sig) per FR-PPP-12.
+
+    Body: optional `{jsonl_path}`. When omitted, the endpoint generates
+    a fresh path under `~/.claude/projects/sm-decoy-control/<uuid>.jsonl`
+    per the phase-3 prompt §1 path-shape convention. Re-register on the
+    same path is idempotent at the WAL UNIQUE-constraint level (returns
+    `first_write=false` in the response body).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    jsonl_path = body.get("jsonl_path") if isinstance(body, dict) else None
+    if not jsonl_path:
+        # Generate a fresh decoy path under the sentinel slug.
+        decoy_uuid = secrets.token_hex(16)
+        jsonl_path = str(
+            Path.home() / ".claude" / "projects"
+            / "sm-decoy-control" / f"{decoy_uuid}.jsonl"
+        )
+    if not isinstance(jsonl_path, str) or not jsonl_path:
+        raise HTTPException(
+            status_code=400, detail="jsonl_path must be a non-empty string"
+        )
+
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=500, detail="bus unavailable")
+    reg = _get_engine_registry()
+    if reg is None:
+        raise HTTPException(
+            status_code=500, detail="engine registry unavailable"
+        )
+    # Pick any engine — register_decoy_stream is bus-scoped, not session-
+    # scoped (the decoy is a process-wide synthetic path). Reuse a known
+    # session id if present; fall back to a sentinel session id.
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip() or "sm-decoy"
+    try:
+        engine = reg.get_or_create(sm_own)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        probe_id, registration, first_write = engine.register_decoy_stream(
+            jsonl_path=jsonl_path,
+        )
+    except Exception as exc:
+        log.exception("api_sm_decoy_register: register_decoy_stream failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "probe_id": probe_id,
+        "jsonl_path": registration["jsonl_path"],
+        "registered_at": registration["registered_at"],
+        "hmac_sig": registration["hmac_sig"],
+        "first_write": first_write,
     }
 
 
