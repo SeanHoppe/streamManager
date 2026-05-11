@@ -530,6 +530,16 @@ The Provenance Probe Protocol (PPP) is a 3-layer audit harness that lets the ope
 
 Originating task: `docs/prompts/v2.1-orchestration/phase-1-ppp-stream-disambiguation.md`. Cycle scope: `docs/v2.1-p1-scope.md`. Transport decision lock: issue #128 §Decision + §A1 + §A2.
 
+**FR-PPP-8** — **Layer-2 canary envelope schema.** Three additive envelope types ride the existing ADR-14 SSE transport: `audit.canary_emit` carries `{probe_id, jsonl_path, nonce, issued_at, timeout_s, hmac_sig}`; `audit.canary_observed` carries `{probe_id, nonce, observed_at, jsonl_path, hmac_sig}`; `audit.probe_failure` carries `{probe_id, reason, failed_at, hmac_sig}`. All three sigs are computed with `desktop_commands.sign` over the canonical envelope dict sans `hmac_sig`, then the dict is re-stamped and delivered verbatim (FR-PPP-5 sign-then-mutate guard reused). Canary sigs are `sig_v=1` and the field is intrinsic to the envelope, NOT a schema-version negotiation — versioning is reserved for the ack path (FR-PPP-2) where `sig_v=2` added `brain_id` + `prompt_hash` in P1a.
+
+**FR-PPP-9** — **Layer-2 observer contract.** `JsonlTailWorker` exposes `register_canary(probe_id, nonce, target_jsonl_path, timeout_s=10, candidates_for_requeue=None)` + `unregister_canary(probe_id)` against a per-process `_canary_registry: dict[probe_id, _CanaryState]` guarded by a dedicated lock. The observer scans user-text turns at ingest time AFTER the existing `_is_sm_originated` filter (so SM-originated transcripts are NEVER scanned — self-monitor guard inherited per `feedback_no_self_monitor.md`). Match conditions: `nonce in text` AND `target_jsonl_path == self._current_jsonl_path`. On match: stamp + fan `audit.canary_observed`, call `bus.mark_canary_confirmed(probe_id, nonce, confirmed_at)` (single-write-wins via `WHERE canary_confirmed_at IS NULL`), pop the registry entry.
+
+**FR-PPP-10** — **Layer-2 timeout sweep.** A daemon thread bound to the tail worker's stop event ticks every `CANARY_SWEEP_INTERVAL_S = 1.0`; entries past `timeout_s` (default 10s) are popped under the registry lock and routed to `governance.emit_audit_probe_failure(probe_id, reason="canary_timeout", candidate_streams=...)`. The failure envelope is server-stamped; the `provenance_assertions` row is NOT mutated (failure surfaces via envelope only — keeps the assertions table a "confirmed" record). R7 mitigation (canary failure → Layer 1 → canary → … recursion cap at 1 per probe) is intrinsic: a swept entry is removed before the failure call, so a second sweep cannot fire for the same probe.
+
+**FR-PPP-11** — **Layer-2 cassette coverage.** `tools/cassette_record._record_ppp_envelopes` MUST record all three Layer-2 envelope types (`audit.canary_emit`, `audit.canary_observed`, `audit.probe_failure`) same-cycle alongside the Layer-1 pair (FR-PPP-6). Canary envelopes ride the same `--skip-ppp-pump` opt-out. Per `feedback_cassette_must_cover_new_envelopes.md`, cassette coverage of new envelope types is a same-cycle requirement; deferring to a later PR is a blocking finding.
+
+Originating task: `docs/prompts/v2.1-orchestration/phase-2-ppp-canary-echo.md`. Cycle scope: `docs/v2.1-p2-scope.md`.
+
 ---
 
 ## 5. Non-functional requirements
