@@ -997,6 +997,11 @@ async def api_sm_probe_ack(request: Request):
     hitl_id = body.get("hitl_id")
     session_id = body.get("session_id")
     selected = body.get("selected_jsonl_path")
+    # v2.1 P1a (R14): brain_id + prompt_hash flow from the selected
+    # candidate row in the probe envelope (browser passes them through).
+    # Both null when operator picks "none of the above".
+    brain_id = body.get("brain_id")
+    prompt_hash = body.get("prompt_hash")
     ttl_seconds = int(body.get("ttl_seconds") or 1800)
     if not isinstance(probe_id, str) or not probe_id:
         raise HTTPException(status_code=400, detail="probe_id required")
@@ -1006,31 +1011,44 @@ async def api_sm_probe_ack(request: Request):
         raise HTTPException(status_code=400, detail="session_id required")
     if selected is not None and not isinstance(selected, str):
         raise HTTPException(status_code=400, detail="selected_jsonl_path must be string or null")
+    if brain_id is not None and not isinstance(brain_id, str):
+        raise HTTPException(status_code=400, detail="brain_id must be string or null")
+    if prompt_hash is not None and not isinstance(prompt_hash, str):
+        raise HTTPException(status_code=400, detail="prompt_hash must be string or null")
     # FR-PPP-2: empty-string == "none of the above"; coerce to None so
     # provenance_assertions.jsonl_path stores SQL NULL, not "".
     selected = selected or None
+    # Same coercion for brain_id + prompt_hash so the WAL row stores
+    # NULL (not empty string) when the operator picked "none".
+    brain_id = brain_id or None
+    prompt_hash = prompt_hash or None
 
     bus = _get_bus()
     if bus is None:
         raise HTTPException(status_code=500, detail="bus unavailable")
 
     from stream_manager import desktop_commands as _dc
+    from stream_manager.message_bus import AuditProbeAckEnvelope
     signed_at = time.time()
     expires_at = signed_at + ttl_seconds
-    sig_payload = {
-        "probe_id": probe_id,
-        "selected_jsonl_path": selected,
-        "signed_at": signed_at,
-        "expires_at": expires_at,
-    }
-    hmac_sig = _dc.sign(sig_payload)
+    # v2.1 P1a (R14): sig_v=2 binds brain_id + prompt_hash into the sig
+    # so a P2 canary-echo verifier can detect candidate-row tampering.
+    # Pre-P1a v1 rows still validate under the v1 schema (see
+    # `AuditProbeAckEnvelope.signing_payload` sig_v branch).
+    ack = AuditProbeAckEnvelope(
+        probe_id=probe_id, selected_jsonl_path=selected,
+        signed_at=signed_at, expires_at=expires_at, hmac_sig="",
+        brain_id=brain_id, prompt_hash=prompt_hash, sig_v=2,
+    )
+    hmac_sig = _dc.sign(ack.signing_payload())
+    ack.hmac_sig = hmac_sig
 
     written = bus.write_provenance_assertion(
         probe_id=probe_id,
         session_id=session_id,
         jsonl_path=selected,
-        brain_id=None,
-        prompt_hash=None,
+        brain_id=brain_id,
+        prompt_hash=prompt_hash,
         signed_at=signed_at,
         expires_at=expires_at,
         hmac_sig=hmac_sig,
@@ -1044,19 +1062,12 @@ async def api_sm_probe_ack(request: Request):
     except Exception:
         log.exception("api_sm_probe_ack: resolve_hitl failed")
 
-    ack_dict = {
-        "probe_id": probe_id,
-        "selected_jsonl_path": selected,
-        "signed_at": signed_at,
-        "expires_at": expires_at,
-        "hmac_sig": hmac_sig,
-    }
     try:
-        bus.write_envelope("audit.probe_ack", ack_dict)
+        bus.write_envelope("audit.probe_ack", ack.to_dict())
     except Exception:
         log.exception("api_sm_probe_ack: write_envelope failed")
 
-    return {"ok": True, "probe_id": probe_id, "written": True}
+    return {"ok": True, "probe_id": probe_id, "written": True, "sig_v": 2}
 
 
 # ── Task F: cross-session pattern endpoints ──────────────────────────
@@ -2391,13 +2402,32 @@ async def sse_events(
         # in `finally` is the only thing preventing a callback leak (the
         # callback closure pins the queue + request scope).
         loop = asyncio.get_running_loop()
-        env_q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        # v2.1 P1a (R16): cap raised 256 → 512 to absorb LM-pump bursts
+        # observed during cassette record (45-row Learn Mode dialogue
+        # arrives in <50 ms when soak driver pumps locally). Drops are
+        # still possible under sustained backpressure but now logged
+        # (was silent pre-P1a).
+        env_q: asyncio.Queue = asyncio.Queue(maxsize=512)
+        env_drop_count = [0]
         bus = _get_bus()
+
+        def _safe_put(item: tuple[str, dict]) -> None:
+            try:
+                env_q.put_nowait(item)
+            except asyncio.QueueFull:
+                env_drop_count[0] += 1
+                if env_drop_count[0] == 1 or env_drop_count[0] % 50 == 0:
+                    log.warning(
+                        "/events: env_q full, dropped envelope "
+                        "(type=%s, drop_total=%d, qsize=%d/%d)",
+                        item[0], env_drop_count[0],
+                        env_q.qsize(), env_q.maxsize,
+                    )
 
         def _env_cb(env_type: str, payload: dict) -> None:
             try:
-                loop.call_soon_threadsafe(env_q.put_nowait, (env_type, payload))
-            except (RuntimeError, asyncio.QueueFull):
+                loop.call_soon_threadsafe(_safe_put, (env_type, payload))
+            except RuntimeError:
                 pass
 
         if bus is not None:
