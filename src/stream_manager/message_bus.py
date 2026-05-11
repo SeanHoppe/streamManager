@@ -1012,9 +1012,18 @@ class MessageBus:
         jsonl_path: str,
         registered_at: float,
         hmac_sig: str,
-    ) -> bool:
-        """Write a single provenance_decoys row. Returns False on
-        re-register (jsonl_path UNIQUE conflict); True on first write.
+    ) -> tuple[bool, str | None, float | None, str | None]:
+        """Write a single provenance_decoys row.
+
+        Returns ``(first_write, existing_probe_id, existing_registered_at,
+        existing_hmac_sig)``:
+
+        - On first write: ``(True, None, None, None)``.
+        - On re-register (jsonl_path UNIQUE conflict): ``(False,
+          existing_probe_id, existing_registered_at, existing_hmac_sig)``
+          — the authentic WAL row data, fetched in the same lock window
+          so callers can return WAL-truth metadata without a second
+          round-trip. (P3a R-decoy-bus-sig — review-drain from PR #145.)
 
         Idempotent at the SQLite UNIQUE-constraint level via
         ``ON CONFLICT(jsonl_path) DO NOTHING``: a second register on the
@@ -1030,7 +1039,18 @@ class MessageBus:
                 "ON CONFLICT(jsonl_path) DO NOTHING",
                 (probe_id, jsonl_path, float(registered_at), hmac_sig),
             )
-            return (cur.rowcount or 0) > 0
+            if (cur.rowcount or 0) > 0:
+                return (True, None, None, None)
+            row = self._conn.execute(
+                "SELECT probe_id, registered_at, hmac_sig "
+                "FROM provenance_decoys WHERE jsonl_path=?",
+                (jsonl_path,),
+            ).fetchone()
+            assert row is not None, (
+                "provenance_decoys ON CONFLICT path SELECT returned no row — "
+                "WAL integrity violation"
+            )
+            return (False, row[0], row[1], row[2])
 
     def is_registered_decoy_path(self, jsonl_path: str) -> str | None:
         """Return the probe_id for a registered decoy path, else None.
