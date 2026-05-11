@@ -392,10 +392,11 @@ def _record_decoy_envelopes(
         "probe_id": probe_id, "jsonl_path": jsonl_path,
         "registered_at": float(issued_at),
     })
-    bus.write_provenance_decoy(
+    ok, *_ = bus.write_provenance_decoy(
         probe_id=probe_id, jsonl_path=jsonl_path,
         registered_at=issued_at, hmac_sig=reg_sig,
     )
+    del ok  # cassette discards WAL-row payload; only writes the row
     detected_at = issued_at + 5.0
     halluc = AuditHallucinationDetectedEnvelope(
         probe_id=probe_id, jsonl_path=jsonl_path,

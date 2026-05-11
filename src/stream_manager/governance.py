@@ -1493,12 +1493,23 @@ class GovernanceEngine:
             "registered_at": float(registered_at),
         }
         sig = desktop_commands.sign(sig_payload)
-        first_write = self.bus.write_provenance_decoy(
-            probe_id=probe_id,
-            jsonl_path=jsonl_path,
-            registered_at=registered_at,
-            hmac_sig=sig,
+        first_write, wal_probe_id, wal_registered_at, wal_sig = (
+            self.bus.write_provenance_decoy(
+                probe_id=probe_id,
+                jsonl_path=jsonl_path,
+                registered_at=registered_at,
+                hmac_sig=sig,
+            )
         )
+        if not first_write and wal_probe_id is not None:
+            # P3a R-decoy-idem: re-register returns the authentic WAL
+            # row, not the freshly-minted (and discarded) probe_id/sig.
+            return wal_probe_id, {
+                "probe_id": wal_probe_id,
+                "jsonl_path": jsonl_path,
+                "registered_at": float(wal_registered_at),
+                "hmac_sig": wal_sig,
+            }, False
         return probe_id, {**sig_payload, "hmac_sig": sig}, first_write
 
     def emit_audit_hallucination_detected(
