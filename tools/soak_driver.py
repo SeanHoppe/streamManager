@@ -41,6 +41,7 @@ import subprocess
 import sys
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1224,6 +1225,16 @@ def _run_replay(args) -> int:
     session_id = f"replay-{iso_ts}"
     bus.open_session(session_id, project_slug="soak-replay", pid=os.getpid())
 
+    # v10 P4 B': opt-in EpisodeLogger subscriber. ``attach`` is a no-op
+    # when ``BRIDGE_RL_LOGGER_ENABLED`` is unset, so this path is free
+    # by default. When set, the rl_episodes.db is taken from
+    # ``BRIDGE_RL_EPISODES_DB`` or defaults next to the gov db.
+    from rl.bus_subscriber import attach as _rl_attach
+    _rl_db_path = os.environ.get(
+        "BRIDGE_RL_EPISODES_DB", str(gov_db.parent / "rl_episodes.db")
+    )
+    close_rl_subscriber = _rl_attach(bus, _rl_db_path)
+
     state = _DriverState()
     start_mono = time.monotonic()
 
@@ -1284,6 +1295,10 @@ def _run_replay(args) -> int:
             )
             state.events_emitted += 1
     finally:
+        try:
+            close_rl_subscriber()
+        except Exception:
+            pass
         try:
             bus.close_session(session_id)
         except Exception:
@@ -1500,6 +1515,10 @@ def main() -> int:
     dashboard_proc: subprocess.Popen | None = None
     consumer_proc: subprocess.Popen | None = None
     bus: MessageBus | None = None
+    # v10 P4 B': overwritten with rl.bus_subscriber.attach() once the bus
+    # exists. Defaults to no-op so the finally-block teardown is safe
+    # even when env is unset or attach is unreached.
+    close_rl_subscriber: Callable[[], None] = lambda: None
     state = _DriverState()
     payloads = _build_payload_sequence(args.seed)[:60]
     rss_peak: float | None = None
@@ -1535,6 +1554,18 @@ def main() -> int:
         bus = MessageBus(str(gov_db))
         session_id = f"soak-{iso_ts}"
         bus.open_session(session_id, project_slug="soak", pid=os.getpid())
+
+        # v10 P4 B': opt-in EpisodeLogger subscriber. ``attach`` is a
+        # no-op when ``BRIDGE_RL_LOGGER_ENABLED`` is unset, so the
+        # baseline soak path is unaffected. When set, the rl_episodes.db
+        # is taken from ``BRIDGE_RL_EPISODES_DB`` or defaults next to
+        # the gov db. Used by the ADR-5 §v10 overhead B' paired soak.
+        from rl.bus_subscriber import attach as _rl_attach
+        _rl_db_path = os.environ.get(
+            "BRIDGE_RL_EPISODES_DB", str(gov_db.parent / "rl_episodes.db")
+        )
+        close_rl_subscriber = _rl_attach(bus, _rl_db_path)
+
         snap = load_project_context(str(ROOT))
 
         # Task J / v1.1: optional CLI warm-pool. When --cli-pool-size > 0,
@@ -1717,6 +1748,13 @@ def main() -> int:
                 cli_pool_obj.shutdown()  # type: ignore[union-attr]
         except Exception as exc:
             print(f"[soak] cli_pool shutdown raised: {exc}", file=sys.stderr)
+        # v10 P4 B': detach subscriber BEFORE bus.close() so the WAL
+        # handle on rl_episodes.db releases cleanly. Idempotent no-op
+        # when env was unset (lambda).
+        try:
+            close_rl_subscriber()
+        except Exception:
+            pass
         if bus is not None:
             try:
                 bus.close_session(session_id)
