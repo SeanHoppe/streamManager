@@ -194,7 +194,9 @@ def test_mode_ro_prevents_write(tmp_path):
     ro_conn.close()
 
     # Also assert the extractor source contains the mode=ro URI literal.
-    src = Path("tools/extract_gov_to_jsonl.py").read_text(encoding="utf-8")
+    # Anchor to repo root so the test works under any pytest cwd.
+    src_path = Path(__file__).resolve().parents[1] / "tools" / "extract_gov_to_jsonl.py"
+    src = src_path.read_text(encoding="utf-8")
     assert "mode=ro" in src
 
 
