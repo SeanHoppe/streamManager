@@ -31,7 +31,7 @@ Close the streamManager governance loop with a **deterministic-Python contextual
 | **P1** | Episode logging (`rl/__init__.py`, `rl/schema.sql`, `rl/state_features.py`, `rl/episode_logger.py`) | ✅ SHIPPED | #108 → bundle-merged via #121 (2026-05-07) | ≤ 500 | 100 |
 | **P2** | Corpus augmentation (`rl/corpus_augment.py`, `rl/sources/{cassette,probe,golden,review}.py`) | ✅ SHIPPED | (P2 PR) | ≤ 500 | 100 |
 | **P3** | OPE harness 5-stage gauntlet (`rl/ope.py`, `rl/validate.py`, `rl/cli/validate.py`) | ⚠ SHIPPED with 2 known gaps | #123 (`fa4a55f`) | ≤ 600 | 85 |
-| **P4** | Bandit trainer (Thompson + CMDP + promotion gate) | 🔒 HELD Q4 | (#111) | ≤ 700 | 0 |
+| **P4** | Bandit trainer (Thompson + CMDP + promotion gate) | 🟡 READY (corpus-gated, ≥200 ep) | (#111) | ≤ 700 | 0 |
 | **P5** | Shadow A/B + ship criteria | 🔒 BLOCKED on #111 | (#112) | ≤ 600 | 0 |
 
 ### Aggregate v10 track completeness
@@ -65,6 +65,7 @@ Phase-weighted (P0 + P0a + P1 + P2 + P3 = 5 of 7 phases shipped):
 - Bundle-merged via PR #121 (2026-05-07).
 - Closes #108. Unblocks #118 (rl_test_helper schema parity — UNBLOCKED 2026-05-08, ready to land parallel).
 - ADR-5 §"v10 logging overhead" appended.
+- **Live-subscriber gap:** writer + ingest CLI shipped; `EpisodeLogger` NOT wired into `governance.py`/`message_bus.py` as live bus subscriber. Corpus-fill is two-step (see P4 detail).
 
 ### P2 — Corpus augmentation (✅ SHIPPED, 100%)
 
@@ -79,12 +80,20 @@ Phase-weighted (P0 + P0a + P1 + P2 + P3 = 5 of 7 phases shipped):
 - **Known gap 2 (DR alias to IPS):** `doubly_robust_estimate` + `cross_validated_dr` are forward-compat aliases of IPS; Ridge-Q + Cholesky solver scoped out at P3 to fit 600-LOC cap (full draft was 771). Tracked in **#125**. Restoration estimated +80 LOC, requires offset funding.
 - **Promotion to non-advisory:** wire `BRIDGE_L4_FALLBACK_CONFIDENCE` + replace heuristic with `route()`-based replay (#124) + restore Ridge-Q (#125).
 
-### P4 — Bandit trainer (🔒 HELD Q4, 0%)
+### P4 — Bandit trainer (🟡 READY corpus-gated, 0%)
 
 - Phase prompt: `docs/prompts/v10-orchestration/phase-4-bandit-trainer.md`.
 - Scope: Thompson sampler over 9-bin L4 action space; CMDP safety filter (FR-OG-7 + HITL-floor + alignment-pass-floor); posterior-CI promotion gate (`is_ready_for_shadow()` iff `best_arm_posterior_ci ≤ 0.10` AND `total_episodes ≥ 200`); proposal manifest output (`rl_proposals/<UTC>Z.json`).
-- **Hold reason:** Q4 hold per operator. Unhold gates entire v10 chain (#112 → #131 → #124 + #125).
-- Predecessor: P3 merged ✅ + ≥ 200 live episodes accumulated.
+- **Q4 hold lifted 2026-05-11 by operator.** (see [#111 comment](https://github.com/SeanHoppe/streamManager/issues/111#issuecomment-4427854788)) Real blocker is now corpus-fill (`rl_episodes.db` < 200 ep), not policy.
+- **Corpus-fill path is two-step** (P1 wired the writer but not the live subscriber): (a) run Tier-3 soak → emits governance envelopes to `tmp/soak_gov.db` (sqlite, configurable via `--gov-db`) and `tmp/soak-sse-{UTC}.ndjson` (SSE consumer stream); (b) extract `governance_decision` envelopes from the ndjson (one JSON per line, filter by envelope kind) into a JSONL, then run `python -m rl.episode_logger ingest --source live --file <extracted.jsonl>`. Verify ≥200 rows in `episodes` before firing phase-4 prompt.
+
+  ```bash
+  sqlite3 rl_episodes.db "SELECT COUNT(*) FROM episodes WHERE source='live';"
+  ```
+
+  - TODO(v10-P4): no shipped helper to extract `governance_decision` from soak-sse ndjson; either land helper or wire `EpisodeLogger` as live bus subscriber (P1 live-subscriber gap).
+- Predecessor: P3 merged ✅ + ≥ 200 live episodes accumulated (NOT YET).
+- **Episode count 2026-05-12:** total=0, live=0 (`rl_episodes.db` absent — soak-fill pending).
 
 ### P5 — Shadow A/B + ship criteria (🔒 BLOCKED on #111, 0%)
 
@@ -99,12 +108,14 @@ Phase-weighted (P0 + P0a + P1 + P2 + P3 = 5 of 7 phases shipped):
 ## 4. Held-chain map
 
 ```
-#111 (P4 trainer) — HELD Q4
+#111 (P4 trainer) — READY (Q4 hold lifted 2026-05-11; corpus-gated ≥200 ep)
    └─ #112 (P5 shadow) — BLOCKED on #111
         └─ #131 (v10.x cycle frame: ADR-18 freeze-lift trigger) — BLOCKED on #112
              ├─ #124 (wire BRIDGE_L4_FALLBACK_CONFIDENCE + un-ADVISORY stage-1) — BLOCKED on #131
              └─ #125 (restore Ridge-Q DR estimator) — BLOCKED on #131
 ```
+
+**Cycle-frame skeleton:** `docs/prompts/v10x-orchestration/phase-0-cycle-frame.md` minted 2026-05-11 (PR #140 merged at `568b72e`); do-not-fire until 3 trigger conds hold. Skeleton itself is EXPERIMENTAL under ADR-18 (pre-trigger; FROZEN/EVOLVING decision deferred to P0 fire-time per skeleton L35).
 
 **Trigger conditions for #131 cycle frame mint** (all 3 required):
 
@@ -120,7 +131,7 @@ When all 3 hold → mint `docs/prompts/v10x-orchestration/phase-0-cycle-frame.md
 
 | # | Title | Status | Bucket |
 |---|---|---|---|
-| #118 | `rl_test_helper` schema-parity vs `rl/schema.sql` | ✅ UNBLOCKED 2026-05-08; ready to land | NOW (parallel-safe with v2.1 P1) |
+| #118 | `rl_test_helper` schema-parity vs `rl/schema.sql` | ✅ CLOSED (`52e8874`, PR #139) | — |
 | #124 | Wire `BRIDGE_L4_FALLBACK_CONFIDENCE` + promote `_stage_1_golden` from ADVISORY | 🔒 BLOCKED on #131 | v10 chain |
 | #125 | Restore Ridge-Q DR estimator | 🔒 BLOCKED on #131 | v10 chain |
 | #131 | v10.x cycle frame mint trigger | 🔒 BLOCKED on #112 | v10 chain |
