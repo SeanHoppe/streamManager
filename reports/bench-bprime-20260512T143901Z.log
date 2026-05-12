@@ -1,0 +1,17 @@
+[bench] n=10000 per arm; warming…
+[bench] OFF arm running…
+[bench] OFF wall=1.4s
+[bench] ON  arm running…
+[bench] ON  wall=3.6s
+
+=== MessageBus.record_decision latency (ms) ===
+OFF (control)    : {'n': 10000.0, 'p50': 0.02300000051036477, 'p95': 0.05600001895800233, 'p99': 0.18909998470917344, 'mean': 0.06537809988367371, 'stdev': 0.6015615602042444}
+ON  (subscriber) : {'n': 10000.0, 'p50': 0.11369999265298247, 'p95': 0.4323000321164727, 'p99': 6.290299992542714, 'mean': 0.2554088800505269, 'stdev': 1.1379439288896478}
+
+=== overhead (ON - OFF) absolute ms ===
+  dp50: +0.0907ms  (rel +394.3% of baseline; budget <=1.0ms)  PASS
+  dp95: +0.3763ms  (rel +672.0% of baseline; budget <=5.0ms)  PASS
+  dp99: +6.1012ms  (rel +3226.4% of baseline; budget <=20.0ms)  PASS
+  dmean (info): +0.1900ms (+290.7%)
+
+PASS: all gates within budget.
