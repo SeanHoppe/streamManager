@@ -56,7 +56,13 @@ def extract(
     exclude_session_id: str | None,
     since_epoch: float | None,
 ) -> dict[str, object]:
-    """Materialise governance_decision JSONL from gov.db; return summary."""
+    """Materialise governance_decision JSONL from gov.db; return summary.
+
+    Raises ValueError if ``since_epoch`` is set and the ``decisions.timestamp``
+    column is not a numeric type (REAL/INTEGER/NUMERIC). The --since-hours
+    window assumes epoch-numeric timestamps; ISO-string columns would silently
+    misbehave under a numeric comparison.
+    """
     if not gov_db.exists():
         raise FileNotFoundError(f"gov_db not found: {gov_db}")
     if not exclude_slugs:
@@ -69,6 +75,18 @@ def extract(
 
     # mode=ro URI ensures we cannot write
     conn = sqlite3.connect(f"file:{gov_db}?mode=ro", uri=True)
+
+    # Assert decisions.timestamp is numeric before relying on `>=` semantics
+    # for the --since-hours window. ISO-string timestamps would silently
+    # misbehave under a numeric comparison.
+    cur = conn.execute("PRAGMA table_info(decisions)")
+    cols = {row[1]: row[2].upper() for row in cur.fetchall()}
+    ts_type = cols.get("timestamp", "")
+    if since_epoch is not None and ts_type not in ("REAL", "INTEGER", "NUMERIC"):
+        raise ValueError(
+            f"decisions.timestamp is {ts_type!r}; --since-hours unsupported "
+            f"against this gov.db schema (expected REAL/INTEGER/NUMERIC)"
+        )
 
     slug_placeholders = ",".join("?" for _ in exclude_slugs)
     params: list[object] = list(exclude_slugs)
@@ -112,12 +130,13 @@ def extract(
     excluded_by_session = 0
     if exclude_session_id:
         excluded_by_session = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM decisions d
             JOIN messages m ON m.id = d.message_id
-            WHERE m.session_id = ?
+            JOIN sessions s ON s.id = m.session_id
+            WHERE m.session_id = ? AND s.project_slug NOT IN ({slug_placeholders})
             """,
-            (exclude_session_id,),
+            [exclude_session_id, *exclude_slugs],
         ).fetchone()[0]
 
     extracted = 0
@@ -135,13 +154,14 @@ def extract(
                 _content,
                 project_slug,
             ) = row
+            # action_taken intentionally omitted — historic gov.db has no threshold
+            # column; rl.episode_logger defaults to 0.0. See PR #156 review.
             envelope = {
                 "session_id": session_id,
                 "trace_id": decision_id,
                 "verdict": verdict,
                 "project_slug": project_slug,
                 "confidence": float(confidence),
-                "action_taken": float(confidence),
                 "action_propensity": 1.0,
                 "latency_ms": 0.0,
                 "state": {},
