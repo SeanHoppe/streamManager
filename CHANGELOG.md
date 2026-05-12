@@ -166,18 +166,21 @@ haiku-vs-sonnet regressions 0). Sonnet pass rate dipped 0.95 → 0.8636
 between v2.0 and v2.1 ship-gate runs (`reports/alignment-eval-
 20260511T185249Z.md`); ship-go per the P4 prompt §"Mint-new-phase
 rule" because PPP envelope pairs cannot causally influence Sonnet
-alignment (pubsub seam, never reaches `cli_governance.py`). Two
-runtime degradations recorded during the run (`cli governance: inner
-JSON parse failed; degrading` + `cli governance timeout (>25.0s);
-degrading`) lowered Sonnet stability count and likely depressed the
-pass-rate. Alignment-recovery investigation carries forward to v2.2.
+alignment (pubsub seam, never reaches `cli_governance.py`). The
+Sonnet pass *count* is unchanged at 19 vs v2.0; the rate dropped
+because the stability denominator rose (sonnet_stable_count 22 in
+v2.1 vs 20 in v2.0) — two additional rows resolved to stably-wrong
+majority verdicts. Latency variance is **ruled out** (it would lower
+stability, not raise it); leading candidates are corpus rot on the
+2 newly-stably-wrong rows or a Sonnet behavioural shift on those
+2 rows. Alignment-recovery investigation carries forward to v2.2.
 
 **Carry-forwards into v2.2** (`docs/v2.1-backlog.md` §"Carry-forwards
 from v2.1"): `JsonlTailWorker.start()` production wiring, soak-
 summary probe-emit counter (P4-surfaced gap), feature-cycle LOC
 ceiling ADR amendment candidate, alignment-recovery investigation
-(Sonnet 0.95 → 0.8636 dip — corpus drift vs latency variance vs
-Sonnet behavioural shift).
+(Sonnet 0.95 → 0.8636 dip — corpus rot vs Sonnet behavioural shift;
+latency variance falsified by the stability-count rise).
 
 ## [2.0.0] — 2026-05-07
 

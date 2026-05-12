@@ -1151,17 +1151,31 @@ P0 candidate, not a v2.1 ship abort).** Causal attribution: PPP
 cannot influence Sonnet alignment. PPP envelope pairs ride the
 `MessageBus.write_envelope` pubsub seam, in-process subscriber-only,
 never reach `cli_governance.py`'s prompt-build / CLI-dispatch path
-that alignment-eval exercises. Two runtime degradations recorded
-during the run (`cli governance: inner JSON parse failed; degrading`
-+ `cli governance timeout (>25.0s); degrading`) lowered Sonnet
-stability count (22/32 vs v2.0's 20/32 stable) and likely depressed
-the pass-rate denominator on transient corpus-CLI-latency variance.
-v2.0 ship-gate posted Sonnet 0.95 against the same gate corpus; the
-v2.1 cycle introduced no codepath touching alignment-eval inputs.
+that alignment-eval exercises. **The pass count itself is unchanged
+at 19 vs v2.0; the rate dropped because the stability denominator
+rose** (sonnet_stable_count 22 in v2.1 vs 20 in v2.0). That means
+two additional rows resolved to *stably wrong* answers
+(majority-vote across 3 runs landed on a verdict that disagrees
+with the golden), not to latency-induced instability. Transient
+latency variance would lower stability, not raise it — so latency
+variance is **not** the right framing for this dip. Two runtime
+degradations were recorded during the run (`cli governance: inner
+JSON parse failed; degrading` + `cli governance timeout (>25.0s);
+degrading`); these affected specific calls but did not knock those
+rows out of the stable bucket. v2.0 ship-gate posted Sonnet 0.95
+against the same gate corpus; the v2.1 cycle introduced no codepath
+touching alignment-eval inputs, so the two stably-wrong rows point
+to **corpus rot** (golden verdicts no longer match modern Sonnet
+behaviour on those 2 rows) **or a Sonnet behavioural shift** between
+2026-05-07 and 2026-05-12 on those 2 specific rows. `frog7_regression_rows`
+and `regression_rows` are both empty — no FR-OG-7 row flipped — so
+the wrongs are inside the ambig-block / hitl-synth / neg-allow
+banks, not the FR-OG-7 floor.
 
 **Carry-forward seed at v2.1-backlog §"Carry-forwards from v2.1"**:
-alignment-recovery investigation (root-cause whether transient
-network variance vs corpus rot vs a Sonnet behavioural shift).
+alignment-recovery investigation (root-cause whether **corpus rot**
+on the 2 newly-stably-wrong rows vs **Sonnet behavioural shift**;
+latency variance ruled out by the stability count rising).
 
 ### PPP cadence note
 
@@ -1229,11 +1243,14 @@ ADR-18 remain in force unchanged.
   read as a lever effect.
 - Sonnet alignment pass rate dipped 0.95 → 0.8636 between v2.0 and
   v2.1 ship-gate runs without any v2.1 codepath that could causally
-  influence Sonnet. Two runtime CLI degradations during the run
-  (inner-JSON parse + >25 s timeout) lowered stability count;
-  read as corpus-drift / transient-latency variance per §"Alignment-
-  eval gate". Alignment-recovery investigation seeded as a v2.2
-  carry-forward.
+  influence Sonnet. The Sonnet pass *count* is unchanged at 19; the
+  rate dropped because the stability denominator rose
+  (sonnet_stable_count 22 vs v2.0's 20). Two additional rows
+  resolved to stably-wrong majority verdicts — read as **corpus
+  rot** or **Sonnet behavioural shift** on those 2 specific rows,
+  NOT as latency variance (which would lower stability, not raise
+  it). See §"Alignment-eval gate" for the full reframing.
+  Alignment-recovery investigation seeded as a v2.2 carry-forward.
 
 ## References
 
