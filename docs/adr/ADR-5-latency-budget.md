@@ -1051,6 +1051,207 @@ force for v2.1+ per ADR-18.
   dedicated lever or larger-n soak (Tier 4 candidate carried into
   v2.1 backlog).
 
+## v2.1 ship-gate baseline
+
+- **Source**: `reports/soak-20260511T173516Z.md`
+- **Date**: 2026-05-11
+- **Ship branch**: `ship/v2.1-shipgate-finalize` (target tag `v2.1.0`)
+- **Driver**: `python tools/soak_driver.py --cli-pool-size 2` (no
+  `--ppp-auto-probe` flag — default flipped ON at v2.1 P4 per FR-PPP-1
+  ship-gate-default amendment; no `--worker-recycle-every-n` —
+  verdict-fallback ripped in v2.0 P3)
+- **Runtime**: 1910.9 s (31.8 min); 60 events emitted, 158 received
+  (263.3% via SSE seed-replay)
+- **Verdict**: PASS
+
+### Latency targets (overall, n=60)
+
+| Metric        | v2.0 baseline | v2.1 ship-gate | Delta         |
+|---------------|---------------|----------------|---------------|
+| count         |  60           |  60            |  0            |
+| p50 wall      |  3.718 s      |  3.995 s       |  +0.28 s      |
+| p95 wall      |  9.115 s      |  7.694 s       |  −1.42 s      |
+| max wall      | 19.097 s      | 12.317 s       |  −6.78 s      |
+| mean wall     |  3.236 s      |  3.444 s       |  +0.21 s      |
+
+Overall p95 improvement −1.42 s vs v2.0 is the largest cycle delta
+since the v1.0 → v1.1 pool fix; not attributable to any lever
+introduced in v2.1 (PPP envelopes are additive, sparse, and off the
+governance hot path). Likely sources: corpus-batch CLI-warmup
+variation + transient network-latency variance to the Sonnet
+endpoint. The p50 +0.28 s mean +0.21 s suggests the median moved up
+slightly while the upper tail compressed; n=60 leaves both within
+the sample-size oscillation band described at §"v1.4 ship-gate
+baseline / Caveats". Max −6.78 s is a single-event tail (n=60,
+max ≈ p98+); not statistically meaningful.
+
+### Per-band split
+
+| Path                 |   n  | v2.0 p95   | v2.1 p95   | Delta        |
+|----------------------|------|------------|------------|--------------|
+| ALLOW (routine)      |  49  |  6.70 s    |  6.35 s    |  −0.35 s     |
+| L2/L3 escalation     |   7  |  9.63 s    |  9.00 s    |  −0.63 s     |
+| L4 alignment         |   4  | 17.70 s    | 12.14 s    |  −5.56 s     |
+| LM (categorize)      |  10  | 14.12 s    | 10.79 s    |  −3.33 s     |
+
+L4 alignment −5.56 s is the largest band improvement; n=4 small-
+sample oscillation band — L4 has swung 17.40 → 17.70 → 12.14 across
+v1.9 / v2.0 / v2.1 ship-gates. The band remains structural-floor-
+bound per §"v1.4 ship-gate baseline / Caveats" (Sonnet alignment +
+FR-OG-7 synthesis network + token output dominated). LM −3.33 s
+closes the v1.6-vintage LM-watch band a 5th consecutive cycle
+(11.95 → 14.12 → 10.79; below the 18 s ceiling for the 5th time;
+small-n n=10 caveat still applies but the cumulative trend across
+five cycles is below-ceiling). ALLOW and L2/L3 hold within the
+small-band noise floor.
+
+### ALLOW _evaluate_inner CLI residue breakout (v1.6 — 5 rows post-P3)
+
+| Phase                  |  n  | p50 ms     | p95 ms     | max ms     |
+|------------------------|-----|------------|------------|------------|
+| cli_setup_ms           | 49  |    0.00    |    0.00    |    0.01    |
+| cli_dispatch_ms        | 49  | 3945.26    | 6348.82    | 7309.60    |
+| cli_pool_acquire_ms    | 49  |    0.02    |    0.03    |    0.11    |
+| cli_pool_send_ms       | 49  | 3944.89    | 6348.39    | 7309.26    |
+| cli_parse_ms           | 49  |    0.05    |    0.07    |    0.14    |
+
+`cli_pool_send_ms` p95 ≈ `cli_dispatch_ms` p95 (driver localised to
+`CliWorker.send` exactly as v1.6 P1 confirmed). Send p95 −350 ms vs
+v2.0 (6698.35 → 6348.39); within run-to-run variance at n=49.
+
+### Lever ledger after v2.1 P4 ship-gate
+
+| Surface                                           | v2.0 | v2.1 |
+|---------------------------------------------------|------|------|
+| `WIRED_LEVER_LEDGER_COUNT` (ADR-18 HTML comment)  |  0   |  0   |
+| `tools/soak_driver.WIRED_LEVER_LEDGER` (dict)     |  0   |  0   |
+
+Empty-ledger inert-gate line emitted in soak summary:
+`Lever ledger: 0 wired levers — DORMANT-N gate inert`. Drift-detection
+test `tests/test_dormant_ledger_consistency.py` passes unchanged. v2.1
+introduced PPP envelope pairs (additive surface, FR-PPP-1..14); no
+lever surface added per `docs/v2.1-task-plan.md` §"DORMANT-N gate
+stays inert this cycle".
+
+### Alignment-eval gate
+
+- Sonnet pass rate: 0.8636 (19/22 stable; ≥ 0.95 ⚠️ **below floor**)
+- Haiku pass rate:  0.95 (19/20 stable; ≥ 0.85 ✅)
+- FR-OG-7 regressions: 0 ✅ (`regression_rows: []`)
+- Haiku regressions vs Sonnet: 0 ✅ (`haiku_regression_vs_sonnet: 0`)
+- `--ci-gate` exit code: 0 (gate logic checks FR-OG-7 + haiku-vs-
+  sonnet regressions; passes)
+- Source: `reports/alignment-eval-20260511T185249Z.md` (sidecar:
+  `reports/alignment-eval-20260511T185249Z.json`)
+
+**Sonnet floor dip (0.95 → 0.8636) — ship-go per
+`docs/prompts/v2.1-orchestration/phase-4-ship-gate-finalize.md`
+§"Mint-new-phase rule" (alignment-recovery is a v2.1.1 patch / v2.2
+P0 candidate, not a v2.1 ship abort).** Causal attribution: PPP
+cannot influence Sonnet alignment. PPP envelope pairs ride the
+`MessageBus.write_envelope` pubsub seam, in-process subscriber-only,
+never reach `cli_governance.py`'s prompt-build / CLI-dispatch path
+that alignment-eval exercises. **The pass count itself is unchanged
+at 19 vs v2.0; the rate dropped because the stability denominator
+rose** (sonnet_stable_count 22 in v2.1 vs 20 in v2.0). That means
+two additional rows resolved to *stably wrong* answers
+(majority-vote across 3 runs landed on a verdict that disagrees
+with the golden), not to latency-induced instability. Transient
+latency variance would lower stability, not raise it — so latency
+variance is **not** the right framing for this dip. Two runtime
+degradations were recorded during the run (`cli governance: inner
+JSON parse failed; degrading` + `cli governance timeout (>25.0s);
+degrading`); these affected specific calls but did not knock those
+rows out of the stable bucket. v2.0 ship-gate posted Sonnet 0.95
+against the same gate corpus; the v2.1 cycle introduced no codepath
+touching alignment-eval inputs, so the two stably-wrong rows point
+to **corpus rot** (golden verdicts no longer match modern Sonnet
+behaviour on those 2 rows) **or a Sonnet behavioural shift** between
+2026-05-07 and 2026-05-12 on those 2 specific rows. `frog7_regression_rows`
+and `regression_rows` are both empty — no FR-OG-7 row flipped — so
+the wrongs are inside the ambig-block / hitl-synth / neg-allow
+banks, not the FR-OG-7 floor.
+
+**Carry-forward seed at v2.1-backlog §"Carry-forwards from v2.1"**:
+alignment-recovery investigation (root-cause whether **corpus rot**
+on the 2 newly-stably-wrong rows vs **Sonnet behavioural shift**;
+latency variance ruled out by the stability count rising).
+
+### PPP cadence note
+
+Auto-probe cadence is N=10 publishes (every 10th envelope publish
+fires `_emit_ppp_auto_probe`, not a 30-min wall-clock cadence as the
+P4 phase prompt §S3 anticipated). With 60 envelope publishes during
+the 31.8-min Tier 3 soak, six probe fires occurred (at indices 10,
+20, 30, 40, 50, 60). Probe emission is verifiable circumstantially
+(loop branch executed, zero `publish_errors`, zero uncaught
+exceptions); the soak summary does NOT print an explicit emit count
+because the soak driver's local `MessageBus` instance has no
+envelope subscribers wired (auto-probe is fire-and-forget per
+issue #128 §A1 Option B). Cassette coverage (`tools/cassette_record`
+PPP pump, default ON since v2.1 P1) is the regression-detection
+path for wire-shape correctness; the default-on flip exercises the
+production cadence but does not surface a count.
+
+### LOC delta vs v2.0.0 (`401ae47`)
+
+`git --no-pager diff 401ae47..HEAD --stat -- src tests tools dashboard`
+end row (post-P4 ship-gate code additions):
+`39 files changed, 5426 insertions(+), 50 deletions(-)`.
+
+The 5426/50 number combines the v2.1 PPP cycle with the v10 RL
+companion track (P3 + robin agent landed on `main` during the v2.1
+window; see `project_v10_rl_track.md`). Subset breakdown:
+
+- **v2.1 PPP cycle**: 25 files changed, +3924 / −50 → **net +3874**.
+- **v10 RL companion track**: 27 files changed, +2971 / −0 →
+  **net +2971** (excluded from the v2.1 ADR-5 anchor; see
+  §"§v10 logging overhead" for its own budget surface).
+
+v2.1 cycle is **feature, no hard cap** per
+`docs/v2.1-task-plan.md` §"LOC budget"; the +3874 figure is the
+operator anchor for future feature-cycle precedent. Order of
+magnitude: ~4× v1.9 cycle (~+2800), opposite-sign of v2.0
+consolidation cycle (−1031). The §"Feature-cycle LOC ceiling —
+POLICY GAP" cross-cutting risk from the task plan carries forward
+to v2.2 as an ADR-18 amendment seed.
+
+### Lever-effect ledger update
+
+No new levers introduced or ripped in v2.1; ledger empty going in
+(post-v2.0 P3 rip), ledger empty going out. PPP envelope pairs are
+additive surface, not levers — they do not gate any behavioural
+branch in the governance hot path.
+
+### Status
+
+ACCEPTED as v2.1 ship-gate baseline. Cycle-discipline rules under
+ADR-18 remain in force unchanged.
+
+### Caveats
+
+- Per-band n is small (ALLOW 49, L2/L3 7, L4 4, LM 10). p95
+  improvements meaningful for the overall band; per-band tails
+  remain sample-size-bound (Tier 4 large-n smoke soak is the
+  carry-forward lever, deferred per v2.1-backlog).
+- Auto-probe emit count not surfaced in the soak summary — see
+  §"PPP cadence note". v2.1-backlog §"Carry-forwards from v2.1"
+  records this as a 🟢 seed (add summary instrumentation for probe-
+  emit counter; ~5 LOC additive in `tools/soak_driver.py`).
+- L4 alignment p95 −5.56 s improvement is large for n=4 — likely
+  small-sample noise rather than a real structural shift; do not
+  read as a lever effect.
+- Sonnet alignment pass rate dipped 0.95 → 0.8636 between v2.0 and
+  v2.1 ship-gate runs without any v2.1 codepath that could causally
+  influence Sonnet. The Sonnet pass *count* is unchanged at 19; the
+  rate dropped because the stability denominator rose
+  (sonnet_stable_count 22 vs v2.0's 20). Two additional rows
+  resolved to stably-wrong majority verdicts — read as **corpus
+  rot** or **Sonnet behavioural shift** on those 2 specific rows,
+  NOT as latency variance (which would lower stability, not raise
+  it). See §"Alignment-eval gate" for the full reframing.
+  Alignment-recovery investigation seeded as a v2.2 carry-forward.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
@@ -1101,6 +1302,19 @@ force for v2.1+ per ADR-18.
   fresh-process Haiku probe (wrapped, 100% BLOCK at confidence ≥ 0.85);
   diagnostic supporting the cli_pool warm-process-reuse hypothesis for
   fallback-lever dormancy
+- `reports/soak-20260507T174051Z.md` — v2.0 32.2-min ship-gate soak,
+  `--cli-pool-size 2`, post-Haiku-fastpath + verdict-fallback rip; the
+  v2.0 baseline source per §"v2.0 ship-gate baseline"
+- `reports/soak-20260511T173516Z.md` — v2.1 31.8-min ship-gate soak,
+  `--cli-pool-size 2`, `--ppp-auto-probe` default-on (first cycle with
+  PPP audit harness landed end-to-end); the v2.1 baseline source per
+  §"v2.1 ship-gate baseline"
+- `reports/alignment-eval-20260511T185249Z.md` — v2.1 alignment-eval
+  `--ci-gate` ship-gate run; sonnet 0.8636 / haiku 0.95 / 0 FR-OG-7
+  regressions / 0 haiku regressions vs sonnet / exit 0. Sonnet dip
+  below the 0.95 floor documented at §"Alignment-eval gate" and at
+  §"Caveats"; ship-go per phase-prompt §"Mint-new-phase rule"
+  because PPP cannot causally influence Sonnet alignment.
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17

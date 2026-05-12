@@ -1447,11 +1447,13 @@ def main() -> int:
     )
     ap.add_argument(
         "--ppp-auto-probe",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="v2.1 P1 (FR-PPP) Layer 1: every 10 publishes, emit a synthetic "
              "`audit.probe` envelope directly via `bus.write_envelope` "
              "(issue #128 Option B; no HITL row, unattended soak). "
-             "Default OFF — flip on for cassette PPP coverage runs.",
+             "Default ON at v2.1 ship-gate (was OFF in P1/P2/P3); pass "
+             "`--no-ppp-auto-probe` to opt out for legacy CI / Tier 1.5 smokes.",
     )
     args = ap.parse_args()
 
