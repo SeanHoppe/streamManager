@@ -1355,3 +1355,32 @@ disabled, comparing `cli_dispatch_ms` p95. The phase-1 invariant is
 doc-only edit per ADR-18 §"Doc-edit carve-outs"; the latency-budget
 ADR remains EVOLVING for additive subsections that record measured
 overhead introduced by EVOLVING surfaces (the v10 RL track).
+
+### v10 P4 B' addendum — bus-subscriber wiring (2026-05-12)
+
+B' introduces the live `governance_decision` envelope fan-out at
+`MessageBus.record_decision` (ADR-18 amendment 2026-05-12). The added
+work per decision is:
+
+1. **Zero-cost when subscriber count == 0** (env flag
+   `BRIDGE_RL_LOGGER_ENABLED` unset): the `if
+   self._decision_subscribers:` guard skips the JOIN + dict build
+   entirely. This is the default production posture.
+2. **When subscriber attached**: one extra SQLite SELECT (JOIN
+   `messages` × `sessions`) under the same lock as the INSERT, plus a
+   dict build, plus the subscriber callback (which is an
+   `EpisodeLogger.record_decision` = one INSERT into `rl_episodes.db`).
+
+The hard ceiling above (≤ 10 ms p95 for the rl record_decision
+itself) still binds. The new bus-side overhead must additionally fit
+the v2.0 P1 `cli_dispatch_ms` p95 ±5% invariant under Tier 3 soak.
+The pre-merge gate for v10 P4 (per
+`docs/prompts/v10-orchestration/phase-1-episode-logging.md:113`) is a
+paired soak: `BRIDGE_RL_LOGGER_ENABLED=1` vs `=0`, same
+`--cli-pool-size 2`, no other config drift. If `cli_dispatch_ms` p95
+diff > 5%, B' regresses and must move to a queue-and-drain design
+(per Hard ceiling above).
+
+The bus's SELECT is bounded by a primary-key + LEFT JOIN of a small
+indexed table; expected cost is sub-millisecond on warm SQLite WAL
+cache. The measurement is the gate.

@@ -274,3 +274,59 @@ generalise to keys belonging to active levers.
 `tools/soak_driver.py` formatter additively skips absent keys
 (per Rule 1 additivity guidance for cassette / historical-report
 parsing); pre-rip soak reports continue to render unchanged.
+
+### 2026-05-12 — v10 P4 B': new FROZEN envelope `governance_decision`
+
+Mints a new bus envelope `governance_decision` as FROZEN under Rule 1.
+The envelope is fanned out by `MessageBus.record_decision` to any
+subscriber registered via the new `MessageBus.subscribe_decision`
+hook. Schema (FROZEN, metadata-only extensions thereafter):
+
+| field | type | source |
+|---|---|---|
+| `kind` | str (literal `"governance_decision"`) | bus constant |
+| `decision_id` | str (UUID) | `decisions.id` |
+| `trace_id` | str | alias of `decision_id` (RL convention) |
+| `message_id` | str | bus arg |
+| `session_id` | str | JOIN `messages.session_id` |
+| `project_slug` | str | JOIN `sessions.project_slug` |
+| `verdict` | str (`ALLOW`/`SUGGEST`/`INTERVENE`/`BLOCK`/`AMBIGUOUS`) | bus arg `action` |
+| `confidence` | float | bus arg |
+| `reasoning` | str | bus arg |
+| `matched_hash` | str | bus arg |
+| `model_used` | str | bus arg |
+| `layer` | int | bus arg |
+| `ts` | float (epoch) | bus internal `time.time()` |
+| `latency_ms` | float | 0.0 at B' (see "Known limitation" below) |
+| `action_taken` | float | alias of `confidence` (RL convention) |
+| `action_propensity` | float | 1.0 default |
+| `state` | dict | `{}` placeholder until state-extractor wired |
+
+**Precedent.** ADR-18 line 62 already permits "Metadata-only
+extensions" to FROZEN bus envelope schemas (`governance_call`,
+lifecycle envelopes). Adding a new envelope that mirrors data already
+written to the `decisions` table is additive and does not change any
+existing envelope's shape. Subscriber wiring uses the same NFR-R6
+defensive try/except pattern as the existing `_subscribers` /
+`_envelope_subscribers` lists.
+
+**Activation.** Subscribers are opt-in via
+`BRIDGE_RL_LOGGER_ENABLED=1`. With the env unset the bus skips the
+envelope build entirely (zero-cost — confirmed by the
+`if self._decision_subscribers:` guard at `message_bus.py`).
+
+**Known limitation (B').** `latency_ms` is hard-coded `0.0` in the
+envelope because `_last_phase_timings_ms` is populated AFTER
+`MessageBus.record_decision` returns at `governance.py:449`. Capturing
+real per-decision latency requires either (a) the bus accepting a new
+optional `latency_ms` kwarg (caller change at `governance.py:416` —
+additive but touches FROZEN `governance.py`, needs its own amendment)
+or (b) a post-record_decision update path. Reserved for a follow-up
+amendment; B' ships with the zero value documented and a pinning test
+(`tests/test_rl_bus_subscriber.py::test_subscriber_latency_ms_zero_in_b_prime`).
+
+**Future-extension constraint.** Subsequent RL-driven extensions to
+this envelope MUST be additive optional fields only. A FROZEN →
+EVOLVING demotion of `governance_decision` requires explicit user
+approval per Rule 1 §"State transitions"; this amendment does not
+pre-authorize one.

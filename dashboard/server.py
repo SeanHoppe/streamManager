@@ -75,6 +75,18 @@ def _get_bus():
         try:
             from stream_manager.message_bus import MessageBus
             _bus = MessageBus(str(DB_PATH))
+            # v10 P4 B': opt-in subscribe rl_episodes.db to live
+            # governance_decision envelopes. No-op when
+            # BRIDGE_RL_LOGGER_ENABLED unset (ADR-5 §"v10 logging
+            # overhead" zero-cost default). The dashboard is the
+            # canonical long-lived attach point; the per-hook process
+            # also attaches via tools/hook_evaluate.py.
+            try:
+                from rl.bus_subscriber import attach as _rl_attach
+                _rl_db = os.environ.get("BRIDGE_RL_EPISODES_DB", "rl_episodes.db")
+                _rl_attach(_bus, _rl_db)
+            except Exception:
+                log.exception("rl bus_subscriber attach failed; dashboard continues")
         except Exception:
             _bus = None
     return _bus

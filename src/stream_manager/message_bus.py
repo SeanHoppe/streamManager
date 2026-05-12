@@ -460,6 +460,12 @@ class AuditHallucinationDetectedEnvelope:
 
 EnvelopeSubscriberCallback = Callable[[str, dict[str, object]], None]
 
+# v10 P4 B': separate callback shape for governance_decision envelopes.
+# Receives the enriched envelope dict (session_id, project_slug, verdict,
+# confidence, decision_id, message_id, …). Failures are caught at fan-out
+# per NFR-R6; subscriber MUST be defensive on its own end too.
+DecisionSubscriberCallback = Callable[[dict[str, object]], None]
+
 
 class MessageBus:
     def __init__(self, db_path: str) -> None:
@@ -468,6 +474,7 @@ class MessageBus:
         self._lock = threading.Lock()
         self._subscribers: list[SubscriberCallback] = []
         self._envelope_subscribers: list[EnvelopeSubscriberCallback] = []
+        self._decision_subscribers: list[DecisionSubscriberCallback] = []
         self._conn = self._connect()
         self._init_schema()
 
@@ -659,6 +666,8 @@ class MessageBus:
         layer: int = 0,
     ) -> str:
         decision_id = str(uuid.uuid4())
+        ts = time.time()
+        envelope: dict[str, object] | None = None
         with self._lock:
             self._conn.execute(
                 "INSERT INTO decisions (id, message_id, action, confidence, "
@@ -671,12 +680,86 @@ class MessageBus:
                     confidence,
                     reasoning,
                     matched_hash,
-                    time.time(),
+                    ts,
                     model_used,
                     int(layer),
                 ),
             )
+            # v10 P4 B': build governance_decision envelope iff a subscriber
+            # is attached. Skipping the JOIN when nobody listens keeps the
+            # hot path identical (ADR-5 §"v10 logging overhead" zero-cost
+            # when BRIDGE_RL_LOGGER_ENABLED unset). ADR-18 amendment
+            # 2026-05-12 mints `governance_decision` as a FROZEN envelope
+            # with metadata-only extensions thereafter.
+            if self._decision_subscribers:
+                row = self._conn.execute(
+                    "SELECT m.session_id, COALESCE(s.project_slug, '') "
+                    "FROM messages m "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    "WHERE m.id = ?",
+                    (message_id,),
+                ).fetchone()
+                session_id, project_slug = (row or ("", ""))
+                envelope = {
+                    "kind": "governance_decision",
+                    "decision_id": decision_id,
+                    "trace_id": decision_id,
+                    "message_id": message_id,
+                    "session_id": session_id,
+                    "project_slug": project_slug,
+                    "verdict": action,
+                    "confidence": float(confidence),
+                    "reasoning": reasoning,
+                    "matched_hash": matched_hash,
+                    "model_used": model_used,
+                    "layer": int(layer),
+                    "ts": ts,
+                    # B' limitation: real cli_dispatch_ms is captured AFTER
+                    # this method returns (governance.py:449). Field stays
+                    # 0.0 in B'; follow-up adds an optional kwarg.
+                    "latency_ms": 0.0,
+                    "action_taken": float(confidence),
+                    "action_propensity": 1.0,
+                    "state": {},
+                }
+        if envelope is not None:
+            for sub in list(self._decision_subscribers):
+                try:
+                    sub(envelope)
+                except Exception:
+                    # NFR-R6: subscriber failures must not crash the bus.
+                    log.exception("decision subscriber callback failed")
         return decision_id
+
+    def subscribe_decision(self, callback: DecisionSubscriberCallback) -> None:
+        """Attach a callback that receives every ``governance_decision``
+        envelope fanned out by :meth:`record_decision`.
+
+        Per ADR-18 amendment 2026-05-12 the envelope schema is FROZEN
+        (metadata-only extensions). Callbacks MUST be defensive: failures
+        are caught here and logged (NFR-R6) but the subscriber should
+        also wrap its own writes so a single bad row never reaches
+        Exception. See ``rl/bus_subscriber.py`` for the reference adapter
+        used by v10 episode logging.
+
+        Idempotency: the bus does not de-duplicate subscribers. Wiring
+        callers should attach exactly once per bus instance.
+        """
+        self._decision_subscribers.append(callback)
+
+    def unsubscribe_decision(self, callback: DecisionSubscriberCallback) -> None:
+        """Detach a previously-registered decision subscriber.
+
+        Used by :func:`rl.bus_subscriber.attach` so the close-fn it
+        returns leaves no dangling reference when the hook process
+        tears the bus down.
+        """
+        with contextlib.suppress(ValueError):
+            self._decision_subscribers.remove(callback)
+
+    def decision_subscriber_count(self) -> int:
+        """Test helper: number of attached decision subscribers."""
+        return len(self._decision_subscribers)
 
     def upsert_agent(
         self,
