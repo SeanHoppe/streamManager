@@ -68,6 +68,7 @@ def main() -> int:
     session_id = payload.get("session_id", "")
     bus_path = os.environ.get("STREAM_MANAGER_BUS", DEFAULT_BUS_PATH)
 
+    rl_logger_close = None  # set by rl.bus_subscriber.attach when env-enabled
     try:
         snap = load(ROOT)
         bus: MessageBus | None = None
@@ -76,6 +77,15 @@ def main() -> int:
             if session_id:
                 slug = os.environ.get("STREAM_MANAGER_PROJECT") or _startup_cwd.name
                 bus.open_session(session_id, project_slug=slug, pid=os.getpid())
+            # v10 P4 B': opt-in subscribe `rl_episodes.db` to live
+            # decisions. No-op when BRIDGE_RL_LOGGER_ENABLED unset
+            # (ADR-5 §"v10 logging overhead" zero-cost default).
+            try:
+                from rl.bus_subscriber import attach as _rl_attach
+                rl_db = os.environ.get("BRIDGE_RL_EPISODES_DB", "rl_episodes.db")
+                rl_logger_close = _rl_attach(bus, rl_db)
+            except Exception:
+                log.exception("rl bus_subscriber attach failed; gov continues")
 
         # Per-session engine via registry. The hook process is short-lived,
         # so the registry holds at most one engine per invocation; the
@@ -93,6 +103,11 @@ def main() -> int:
 
         if bus_path:
             engine.graph.save(bus_path)
+        if rl_logger_close is not None:
+            try:
+                rl_logger_close()
+            except Exception:
+                log.exception("rl bus_subscriber close failed")
         if bus is not None:
             bus.close()
 

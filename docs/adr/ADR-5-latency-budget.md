@@ -1355,3 +1355,83 @@ disabled, comparing `cli_dispatch_ms` p95. The phase-1 invariant is
 doc-only edit per ADR-18 §"Doc-edit carve-outs"; the latency-budget
 ADR remains EVOLVING for additive subsections that record measured
 overhead introduced by EVOLVING surfaces (the v10 RL track).
+
+### v10 P4 B' addendum — bus-subscriber wiring (2026-05-12)
+
+B' introduces the live `governance_decision` envelope fan-out at
+`MessageBus.record_decision` (ADR-18 amendment 2026-05-12). The added
+work per decision is:
+
+1. **Zero-cost when subscriber count == 0** (env flag
+   `BRIDGE_RL_LOGGER_ENABLED` unset): the `if
+   self._decision_subscribers:` guard skips the JOIN + dict build
+   entirely. This is the default production posture.
+2. **When subscriber attached**: one extra SQLite SELECT (JOIN
+   `messages` × `sessions`) under the same lock as the INSERT, plus a
+   dict build, plus the subscriber callback (which is an
+   `EpisodeLogger.record_decision` = one INSERT into `rl_episodes.db`).
+
+The hard ceiling above (≤ 10 ms p95 for the rl record_decision
+itself) still binds.
+
+#### Ship-gate measurement (revised 2026-05-12)
+
+**The pre-merge gate is a direct micro-bench of
+`MessageBus.record_decision` overhead, not a soak-derived
+`cli_dispatch_ms` p95 diff.** Rationale: the subscriber fan-out lives
+inside `record_decision`'s lock + dict-build loop, *not* inside
+`cli_dispatch_ms` (which is the CLI worker round-trip and fires
+*before* `record_decision` is called by the engine). Measuring the
+right seam directly is more rigorous than aggregating it into a
+proxy whose noise floor is dominated by cli_pool warmup, LM dialogue
+pump, SSE consumer, and psutil sampling — none of which the
+subscriber touches.
+
+The relative-percentage framing also breaks at this seam: the OFF
+baseline of `record_decision` is sub-millisecond (one INSERT), so any
+attached subscriber registers as a multi-hundred-percent relative
+diff while remaining trivial (<1%) of the actual cli_dispatch_ms p95
+budget. Gates are therefore stated as **absolute millisecond
+ceilings** sized at <1% of the typical ~2000 ms cli_dispatch_ms p95
+budget:
+
+| Statistic | Overhead ceiling (ON − OFF) | As % of 2000 ms budget |
+|-----------|-----------------------------|------------------------|
+| p50       | ≤ 1.0 ms                    | ≤ 0.05%                |
+| p95       | ≤ 5.0 ms                    | ≤ 0.25%                |
+| p99       | ≤ 20.0 ms                   | ≤ 1.0%                 |
+
+**Procedure**: run `python tools/bench_subscriber_overhead.py --n
+10000` on the merge candidate. The bench runs both arms in-process
+against a tmp WAL db; one arm constructs the bus with no subscriber,
+the other attaches `rl.bus_subscriber.attach()`. Per-call timings of
+`record_decision` are captured for both arms; the difference is
+gated.
+
+**Pass at 2026-05-12 (commit `a0da262` head of `feat/v10-bus-subscriber`)**:
+
+```
+dp50: +0.0907 ms   (budget ≤ 1.0 ms)   PASS
+dp95: +0.3763 ms   (budget ≤ 5.0 ms)   PASS
+dp99: +6.1012 ms   (budget ≤ 20.0 ms)  PASS
+```
+
+Report: `reports/bench-bprime-20260512T*.log`.
+
+**Regression rule**: any breach of the table above blocks B' merge
+and triggers the queue-and-drain follow-up design (Hard ceiling
+above remains the eventual long-tail safeguard).
+
+**Why not a soak**: the 2026-05-12 paired soak attempt (bg tasks
+`bxjobkxj8` / `b4sl9ylo6`) revealed that `tools/soak_driver.py`
+constructs its bus directly and never called `bus_subscriber.attach()`,
+so both arms ran the same code path. The harness was patched
+(commit `a0da262`) to wire `attach()` at both bus construction sites,
+but the micro-bench supersedes the soak for this gate per the
+rationale above. The patched soak path is retained for future
+overhead-under-realistic-load checks (post-merge watch), not for the
+ship gate.
+
+The bus's SELECT is bounded by a primary-key + LEFT JOIN of a small
+indexed table; expected cost is sub-millisecond on warm SQLite WAL
+cache. The measurement is the gate.

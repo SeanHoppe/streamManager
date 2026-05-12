@@ -5,9 +5,17 @@ Reads only from gov state (governance_decision envelope dict,
 hitl_overrides table, _last_phase_timings_ms). NEVER edits any
 FROZEN gov surface.
 
-Self-monitor refusal: if the envelope's session_id matches
-``BRIDGE_SM_SELF_SESSION_ID`` env var, the row is rejected (per
-``feedback_no_self_monitor.md``).
+Self-monitor refusal (two layers per
+``feedback_no_self_monitor.md`` §"Polarity flip"):
+
+1. If the envelope's ``session_id`` matches the
+   ``BRIDGE_SM_SELF_SESSION_ID`` env var, the row is rejected.
+2. If the envelope's ``project_slug`` is in the SM-self slug set
+   (``BRIDGE_SM_PROJECT_SLUGS`` env, default ``{"streamManager"}``),
+   the row is rejected. Polarity-flip default: include iff
+   project_slug is NOT in the SM set, so corpus building defaults to
+   non-SM sessions and SM-self leakage surfaces as zero rows rather
+   than silent contamination.
 """
 
 from __future__ import annotations
@@ -29,9 +37,18 @@ _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 VALID_VERDICTS = ("ALLOW", "SUGGEST", "INTERVENE", "BLOCK", "AMBIGUOUS")
 VALID_SOURCES = ("soak", "cassette", "probe", "golden", "review", "live")
 
+_DEFAULT_SM_SLUGS = "streamManager"
+
+
+def _sm_slug_set() -> frozenset[str]:
+    """Read SM self-slug set from env each call (cheap, test-friendly)."""
+    raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", _DEFAULT_SM_SLUGS)
+    return frozenset(s.strip() for s in raw.split(",") if s.strip())
+
 
 class SelfMonitorRefusal(ValueError):
-    """Raised when a logger envelope matches the SM's own session id."""
+    """Raised when a logger envelope matches the SM's own session id
+    or carries an SM ``project_slug``."""
 
 
 class EpisodeLogger:
@@ -87,7 +104,13 @@ class EpisodeLogger:
 
         sm_self = os.environ.get("BRIDGE_SM_SELF_SESSION_ID", "").strip()
         if sm_self and session_id == sm_self:
-            raise SelfMonitorRefusal("self-monitor refusal")
+            raise SelfMonitorRefusal("self-monitor refusal (session_id match)")
+
+        project_slug = str(envelope.get("project_slug", "")).strip()
+        if project_slug and project_slug in _sm_slug_set():
+            raise SelfMonitorRefusal(
+                f"self-monitor refusal (project_slug={project_slug!r} in SM set)"
+            )
 
         verdict = str(envelope["verdict"])
         if verdict not in VALID_VERDICTS:

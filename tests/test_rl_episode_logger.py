@@ -110,6 +110,49 @@ def test_logger_no_self_monitor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert count == 0
 
 
+def test_logger_refuses_sm_project_slug_default(tmp_path: Path) -> None:
+    """v10 P4 B': polarity-flip slug filter. Default slug set =
+    {"streamManager"}; envelope with that slug must refuse, regardless
+    of BRIDGE_SM_SELF_SESSION_ID."""
+    db = tmp_path / "rl_episodes.db"
+    env = _envelope(session_id="other-sess")
+    env["project_slug"] = "streamManager"
+    with EpisodeLogger(db) as logger:
+        with pytest.raises(SelfMonitorRefusal) as exc:
+            logger.record_decision(env, source="live")
+        assert "project_slug" in str(exc.value)
+    conn = sqlite3.connect(str(db))
+    count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    assert count == 0
+
+
+def test_logger_allows_non_sm_project_slug(tmp_path: Path) -> None:
+    """v10 P4 B': default polarity-flip permits non-SM project slugs."""
+    db = tmp_path / "rl_episodes.db"
+    env = _envelope()
+    env["project_slug"] = "certPortal"
+    with EpisodeLogger(db) as logger:
+        logger.record_decision(env, source="live")
+    conn = sqlite3.connect(str(db))
+    count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    assert count == 1
+
+
+def test_logger_slug_set_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BRIDGE_SM_PROJECT_SLUGS env adds worktree-slug variants."""
+    db = tmp_path / "rl_episodes.db"
+    monkeypatch.setenv(
+        "BRIDGE_SM_PROJECT_SLUGS", "streamManager,streamManager-1,sm-dev"
+    )
+    env = _envelope(session_id="other-sess")
+    env["project_slug"] = "sm-dev"
+    with EpisodeLogger(db) as logger:
+        with pytest.raises(SelfMonitorRefusal):
+            logger.record_decision(env, source="live")
+
+
 def test_logger_fr_og_7_pass_null_on_live(tmp_path: Path) -> None:
     db = tmp_path / "rl_episodes.db"
     with EpisodeLogger(db) as logger:

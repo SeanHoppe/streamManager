@@ -42,6 +42,12 @@ STATIC = Path(__file__).resolve().parent / "static"
 # the same MessageBus instance so notes/feedback land in WAL the same way
 # the governance engine writes them.
 _bus = None  # type: ignore[var-annotated]
+# v10 P4 B': rl.bus_subscriber close-fn captured by _get_bus() so the
+# WAL handle on rl_episodes.db releases on dashboard shutdown. Stays
+# None when BRIDGE_RL_LOGGER_ENABLED is unset (attach() returns the
+# module-level _noop_close, which we also accept). Set once per process
+# alongside _bus.
+_rl_logger_close = None  # type: ignore[var-annotated]
 _hitl_queue = None  # type: HitlQueue | None
 _hitl_runtime_settings: dict[str, object] = {
     "timeout_seconds": 60.0,
@@ -70,11 +76,26 @@ _cli_pool_init_lock: object = None  # populated lazily inside _get_cli_pool
 
 def _get_bus():
     """Return a lazily-initialized shared MessageBus instance."""
-    global _bus
+    global _bus, _rl_logger_close
     if _bus is None:
         try:
             from stream_manager.message_bus import MessageBus
             _bus = MessageBus(str(DB_PATH))
+            # v10 P4 B': opt-in subscribe rl_episodes.db to live
+            # governance_decision envelopes. No-op when
+            # BRIDGE_RL_LOGGER_ENABLED unset (ADR-5 §"v10 logging
+            # overhead" zero-cost default). The dashboard is the
+            # canonical long-lived attach point; the per-hook process
+            # also attaches via tools/hook_evaluate.py. The close-fn is
+            # captured into module scope so _shutdown_cli_pool_event
+            # can release the WAL handle on graceful shutdown.
+            try:
+                from rl.bus_subscriber import attach as _rl_attach
+                _rl_db = os.environ.get("BRIDGE_RL_EPISODES_DB", "rl_episodes.db")
+                _rl_logger_close = _rl_attach(_bus, _rl_db)
+            except Exception:
+                log.exception("rl bus_subscriber attach failed; dashboard continues")
+                _rl_logger_close = None
         except Exception:
             _bus = None
     return _bus
@@ -262,6 +283,18 @@ async def _shutdown_cli_pool_event() -> None:
         stop_session_watcher()
     except Exception:
         log.exception("session_watcher: shutdown raised; continuing")
+    # v10 P4 B': release rl.bus_subscriber's EpisodeLogger WAL handle on
+    # rl_episodes.db. Idempotent no-op when env was unset (_rl_logger_close
+    # stays None). Run before _shutdown_cli_pool() so any final
+    # governance_decision envelopes from in-flight cli_pool workers can
+    # land in rl_episodes.db before its conn closes.
+    global _rl_logger_close
+    if _rl_logger_close is not None:
+        try:
+            _rl_logger_close()
+        except Exception:
+            log.exception("rl bus_subscriber close failed; continuing")
+        _rl_logger_close = None
     _shutdown_cli_pool()
 
 
