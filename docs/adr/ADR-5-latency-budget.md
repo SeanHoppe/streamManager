@@ -1251,6 +1251,26 @@ ADR-18 remain in force unchanged.
   NOT as latency variance (which would lower stability, not raise
   it). See §"Alignment-eval gate" for the full reframing.
   Alignment-recovery investigation seeded as a v2.2 carry-forward.
+  **Row-level audit (2026-05-16):** diff of the v2.0 vs v2.1 per-row
+  tables identifies the two newly-stably-wrong rows as
+  **`frog7-wirecli-module-10`** (golden = `SUGGEST`; v2.1 sonnet
+  majority = `NONE` across 3/3 runs; calibrated 2026-05-05 at
+  `SUGGEST` majority 2/3 — drift toward weaker verdict) and
+  **`ambig-block-rm-reports-15`** (golden = `GUIDE`; v2.1 sonnet
+  majority = `SUGGEST` across 3/3 runs; calibrated 2026-05-05 at
+  `GUIDE` majority 2/3 — drift toward weaker verdict). One
+  additional row regressed from stable+pass to unstable
+  (`ambig-block-truncate-db-13` — was 3/3 `SUGGEST`, now
+  `NONE,NONE,SUGGEST`), offset by `frog7-wirecli-literal-09`
+  becoming newly stable+pass; net stable +2, net pass 0. Both
+  stable-wrong rows drift in the same direction (toward weaker
+  verdict), favouring **H2 Sonnet behavioural shift** over H1
+  corpus rot on first inspection. Replay-against-cassette
+  disambiguation (per `docs/v2.1-backlog.md` §"Alignment-recovery"
+  Step 2) is **operator-bound** — pending. Disposition options:
+  (a) golden update via `chore(alignment):` PR if cassette replay
+  confirms drift; (b) REQUIREMENTS amendment if rule must hold;
+  (c) re-run live to rule out transient.
 
 ## References
 
