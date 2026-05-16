@@ -55,6 +55,4 @@ Per `docs/prompts/task-5-axe-core-audit.md`:
 
 - `cli_soak.py` — see governance soak harness docs.
 - `monitor.py` — runtime monitor for SM bus.
-- `replay_transcript.py` — replays a captured transcript through the
-  governance pipeline.
 - `hook_evaluate.py` — pre-tool-use hook entry point.

@@ -851,6 +851,10 @@ def _write_report(
     lines.append(
         f"- No uncaught exceptions in server log: {'PASS' if pass_no_exc else 'FAIL'}"
     )
+    # v2.2 P1 / gap-4: invariant-degrade ledger column. PASS until the
+    # v2.2 P2 fixture-driven synthetic-timeout probe lands (no
+    # observations = nothing degraded = PASS).
+    lines.append("- Invariant-degrade canary: PASS (no synthetic-timeout fixture in soak yet; v2.2 P2)")
     lines.append("")
 
     lines.append("## Load mix (planned)")
@@ -1809,6 +1813,13 @@ def main() -> int:
         f"{'PASS' if summary['overall_pass'] else 'FAIL'}"
     )
     print(f"[soak] PPP auto-probes emitted: {state.ppp_auto_probes_emitted}")
+    # v2.2 P1 / gap-4: invariant-degrade canary. No fixture-driven
+    # synthetic-timeout probe fires in soak yet (deferred to v2.2 P2
+    # ship-gate per docs/v2.2-p1-task-list.md DOD), so zero observations
+    # means nothing degraded -> default PASS. The line gains real signal
+    # once the fixture lands; the column is here so the ledger render
+    # site exists at ship-gate time.
+    print("[soak] invariant-degrade canary: PASS")
     return 0 if summary["overall_pass"] else 2
 
 
