@@ -91,3 +91,44 @@ Desktop orchestration. SM governs messages, not transitions.
 - Replacing Claude Code's own permission model.
 - Acting as a general-purpose IDE or terminal multiplexer.
 - Supporting non-Claude CLI tools (architecture allows but v1 doesn't).
+
+---
+
+## Current cycle posture (as of 2026-05-16)
+
+### Shipped lineage
+
+`v1.0 (POC) → v1.1 (cli_pool) → v1.2 (orchestration ship) → v1.3 (Learn Mode) → v1.5 (sub-phase instrumentation) → v1.6 (cli_dispatch localisation) → v1.7 (Haiku fastpath wired, DORMANT) → v1.8 (content-detection seam) → v1.9 (verdict-fallback + session watcher) → v2.0 (ADR-18 minted; Haiku + verdict-fallback ripped) → v2.1.0 (PPP audit harness ship-gate, 2026-05-11, tag 8303f38)`.
+
+### Two parallel tracks
+
+1. **v2.x main cycle** — governance feature stream. **v2.1.0 SHIPPED.** v2.2 cycle frame **NOT yet minted**. Two ADR-18 §"Amendments" entries queued for v2.2 P0 (feature-cycle LOC ceiling [#130]; memory pre-flight Rule 6 [#133]). Carry-forwards from v2.1 P4: dormant `JsonlTailWorker.start()` production wiring, soak-summary probe-emit counter, Sonnet 0.95 → 0.8636 alignment dip (🟡), feature-cycle LOC ceiling.
+2. **v10 RL companion track** — deterministic-Python contextual bandit over L4 confidence threshold. **P0–P3 SHIPPED** (5/7 phases; ~60% MVP). P4 Q4 hold **LIFTED 2026-05-11**; real blocker is now **corpus-fill** (`rl_episodes.db` < 200 live episodes; currently 0). Live subscriber (PR #155) + backfill extractor (PR #156) just landed to enable corpus-fill paths.
+
+### ADR-18 governance regime (in force)
+
+- Rule 1: Surface freeze (FROZEN / EVOLVING / EXPERIMENTAL).
+- Rule 2: DORMANT-N falsify-before-extend (cumulative).
+- Rule 3: Consolidation cycles net LOC ≤ 0; feature cycles uncapped (amendment pending at #130).
+- Rule 4: Phase budget with retroactive sub-phase amendments.
+- Rule 5: Backlog hard cap.
+- `WIRED_LEVER_LEDGER_COUNT` = 0; DORMANT-N gate inert.
+
+### Held chain (v10)
+
+`#111 (P4) READY corpus-gated → #112 (P5) BLOCKED → #131 (v10.x cycle frame) BLOCKED → #124 + #125 (ADR-18 freeze-lift deliverables) BLOCKED`.
+
+### Hot zones (current)
+
+- `src/stream_manager/governance.py`, `message_bus.py`, `cli_governance.py`, `model_router.py` — FROZEN pre-CLI seam until #131 cycle frame fires.
+- `rl/` — v10 RL track surfaces; EVOLVING per ADR-18.
+- `dashboard/server.py`, `dashboard/static/index.html` — actively touched per cycle.
+- `tools/soak_driver.py`, `tools/cassette_record.py` — EVOLVING; cassette CI guard pending (#132).
+
+### Authoritative status references
+
+- `docs/v10-mvp-status.md` — v10 track ledger (post-hold-lift).
+- `docs/v2.2-backlog.md` — v2.2 seed list (1 item: remote-CLI monitoring).
+- `docs/v2.1-backlog.md` §"Carry-forwards from v2.1" — 4 v2.2 cycle-handoff items.
+- `docs/jobs/MASTER.md` — cross-cycle issue tracker (note: still rows-stale on #111 hold-lift; update pending).
+- `CHANGELOG.md` — Keep-a-Changelog tagged ship history.
