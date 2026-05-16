@@ -27,12 +27,17 @@ cycle frame **NOT yet minted**. ADR-18 surface freeze in force;
       A (#130 Rule 3 LOC ceiling) + B (#133 Rule 6 memory pre-flight).
       Prompt: [phase-0-cycle-frame.md](docs/prompts/v2.2-orchestration/phase-0-cycle-frame.md).
       Closes #130 + #133.
-- [ ] **Stale-issue hygiene** (fold into v2.2 P0 PR or paired hygiene
-      PR): close #128 (DECIDED 2026-05-08, P1 shipped at PR #138);
-      close #129 (P3 shipped at PR #145, task moot).
+- [x] **Stale-issue hygiene** — CLOSED 2026-05-16 (PM sweep, no
+      successors minted, zero residual scope):
+      - #128 (v2.1 P1 probe transport — shipped PR #138).
+      - #129 (v2.1 P3 candidate-discovery surfaces — shipped PR #145).
+      - #107 (v10 P0 formal design — shipped PR #121).
+      - #108 (v10 P1 episode logging — shipped PR #121).
+      - #109 (v10 P2 corpus augmentation — shipped PR #122).
 - [ ] **Correct `docs/jobs/MASTER.md`** row for #111 — "HELD (Q4)" →
       "READY corpus-gated" to mirror `docs/v10-mvp-status.md` §2.
-      Fold into v2.2 P0.
+      Also reconcile MASTER.md rows for #107 / #108 / #109 / #128 /
+      #129 (now CLOSED). Fold into v2.2 P0.
 
 ### 🟡 Carry-forwards from v2.1 (re-triage at v2.2 P0)
 
@@ -120,8 +125,11 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    if v2.2 P0 reproduces on fresh control.
 4. **MASTER.md is stale** on #111 status (still says HELD Q4; reality
    is hold lifted). One row edit; fold into v2.2 P0.
-5. **#128 + #129 GH issues are stale-OPEN.** Decisions made + work
-   shipped; closure is the only remaining step. Hygiene PR.
+5. ~~**#128 + #129 GH issues are stale-OPEN.**~~ RESOLVED 2026-05-16.
+   PM hygiene sweep closed five stale-OPEN issues: #107, #108, #109
+   (v10 P0/P1/P2 — all shipped via PRs #106/#121/#122) + #128, #129
+   (v2.1 P1/P3 — shipped via PRs #138/#145). MASTER.md reconciliation
+   remains (sticking point #4).
 6. **v2.2 cycle type undecided.** Feature vs consolidation — affects
    LOC budget, whether carry-forwards can fold in, and whether v2.x
    blocks the v10.x cycle slot (per #131 trigger cond 2). Operator
