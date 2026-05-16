@@ -169,3 +169,12 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    `tools/soak_driver.py` flag set unchanged. v2.1-backlog 🟡 item
    marked RESOLVED. If a future cycle prefers Path A (add the flag),
    reopen as a feature-cycle item.
+9. **INTENT.md ↔ todo.md gap analysis (2026-05-16).** 12 gaps logged
+   in [`docs/intent-todo-gap-2026-05-16.md`](docs/intent-todo-gap-2026-05-16.md).
+   Gaps 1–4 (cadence FR / sub-agent scope-escalation FR / dashboard
+   regression watch / API-timeout invariant test) are v2.2 P0 phase
+   candidates. Gaps 5–9 graduate to `docs/v2.2-backlog.md` at P0
+   mint (promotion criteria stated per seed). Gaps 10–12 are
+   bookkeeping drift — refresh at INTENT pre-flight pass per #133.
+   Operator decisions required at P0 mint: cycle type, ADR-18 Rule 5
+   cap-bump acceptance for backlog growth 1→6.

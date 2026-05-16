@@ -51,6 +51,31 @@ v2.2 P0 task plan at cycle frame minting.
 
 ---
 
+## 1.4a — INTENT.md gap-analysis fold-in (operator-only at P0)
+
+**Root cause.** Agent gap-synthesis pass (2026-05-16) over INTENT.md
++ todo.md surfaced 12 gaps. Gaps 1–4 (cadence FR / sub-agent scope-
+escalation FR / dashboard regression watch / API-timeout invariant
+test) are P0 phase candidates. Gaps 5–9 graduate to v2.2-backlog.
+Fold-in decision depends on cycle-type (1.1) AND ADR-18 Rule 1 carve-
+out (gap 2 touches FROZEN `governance.py`) AND Rule 5 backlog cap-
+bump acceptance (1 → 6 seeds).
+
+**Recommended solution.** Operator reads
+```
+docs/intent-todo-gap-2026-05-16.md
+```
+at v2.2 P0 fire and decides per-gap at §"Backlog graduation
+procedure".
+
+**Closes.** Gap-analysis tracking artifact (file deletes when gaps
+1–4 land or reject).
+
+**Next.** Operator fires P0 → reads gap-analysis doc → per-gap
+decisions inline in P0 prompt response.
+
+---
+
 ## 1.4 — Remote-CLI monitoring (backlog seed)
 
 **Root cause.** Promotion-gated. Stays as backlog seed until a
@@ -119,6 +144,7 @@ and either signs off (→ agent writes 12 tests + code) or rejects
 |---|---|---|---|
 | 1.1 | Cycle-type decision | Operator | Yes — v2.2 P0 prompt |
 | 1.2 | Sequential on 1.1 | None until 1.1 | No (folds into v2.2 P0 task plan) |
+| 1.4a | Gap-analysis fold-in | Operator at P0 | Yes — intent-todo-gap-2026-05-16 |
 | 1.4 | Promotion criterion | Operator | N/A (backlog seed) |
 | 2.1 | Operational fire | Operator | Yes — task-p4-corpus-fill |
 | 2.2 | Sequential on 2.1 | Wait | Yes — phase-4-bandit-trainer |
