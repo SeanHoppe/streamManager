@@ -72,7 +72,12 @@ procedure".
 `docs/prompts/v2.2-orchestration/gap-*.md` (12 files, one per gap).
 Operator dispatches each at P0:
 
-| Gap | Prompt | Disposition at P0 |
+**Note.** Lifetime rule says operator decides per-gap at P0. The
+column below is **recommended** disposition based on cycle-type
+defaults — operator records final disposition at P0 fire and may
+override any row.
+
+| Gap | Prompt | Recommended at P0 |
 |---|---|---|
 | 1 | `gap-1-cadence-enforcement-fr.md` | Fold IF cycle = feature AND Rule 1 carve-out accepted (same evaluate seam as gap-2 — shared carve-out wording) |
 | 2 | `gap-2-subagent-scope-escalation-fr.md` | Fold IF cycle = feature AND Rule 1 carve-out accepted |

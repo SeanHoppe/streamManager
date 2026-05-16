@@ -40,8 +40,10 @@ must falsify-before-extend at next cycle if not promoted).
 - New module: `src/stream_manager/cadence_detector.py` (~50–80 LOC).
 - Wired at evaluate seam; emits `governance_signal` envelope with
   `kind="cadence_warning"` (NOT a verdict modifier).
-- `WIRED_LEVER_LEDGER_COUNT`: 0 → 1 (this counts as a wired lever
-  per ADR-18 Rule 2; record at cycle close).
+- Counts as a wired lever per ADR-18 Rule 2; record at cycle
+  close. **Do NOT assert a numeric `WIRED_LEVER_LEDGER_COUNT`
+  delta here** — gap-11 is the canonical inventory site (see
+  §"ADR-18 posture" below).
 
 ### 3. Regression test
 

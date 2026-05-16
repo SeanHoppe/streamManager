@@ -27,6 +27,9 @@ prohibits color-alone).
 def test_dashboard_serves_three_frame_index():
     # Boot dashboard server (in-process) on ephemeral port.
     # GET /  → 200; body contains three frame anchors.
+    from fastapi.testclient import TestClient  # or starlette equivalent
+    from dashboard.server import app
+    client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.text
@@ -35,9 +38,10 @@ def test_dashboard_serves_three_frame_index():
     assert "Background Jobs" in body
 ```
 
-Boot strategy: import `dashboard.server` app handle directly; use
-`httpx` or `requests` with `TestClient` shim (whichever already in
-test deps). Avoid subprocess to keep test cheap.
+Boot strategy: import `dashboard.server` app handle directly; pick
+the `TestClient` shim that matches the actual server framework at
+P-N promotion (FastAPI/Starlette vs Flask vs aiohttp). Avoid
+subprocess to keep test cheap.
 
 ### 2. Badge-discipline lint
 

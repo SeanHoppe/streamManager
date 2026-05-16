@@ -23,9 +23,18 @@ catches it pre-ship.
 
 - Simulate `claude -p` subprocess timeout via fake CLI shim that
   blocks > timeout-fallback budget.
-  - Strategy: patch `cli_governance` subprocess.Popen to return a
-    fake that sleeps past timeout, OR inject a sentinel CLI binary
-    path that hangs indefinitely.
+  - **Preferred patch target:** monkey-patch
+    `src.stream_manager.cli_governance.CliWorker.send` (or the
+    equivalent worker-pool method actually invoked from the
+    evaluate seam — grep at promotion to confirm symbol name). The
+    worker-pool layer is the deterministic injection site; patching
+    bare `subprocess.Popen` is brittle under `CliPool` worker reuse
+    per `feedback_soak_cli_pool_flag.md` (v1.0 cold-start regression
+    precedent).
+  - Fallback if pool semantics still bite: inject a sentinel CLI
+    binary path that hangs indefinitely (set via
+    `BRIDGE_CLI_PATH` env or pool-config injection at fixture
+    setup).
 - Simulate API 500 / 502 / 503 fault via similar shim returning
   non-zero exit with stderr error payload.
 - Assert two invariants for both fault classes:
