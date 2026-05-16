@@ -34,7 +34,7 @@ See [`docs/adr/ADR-17-soak-tiers.md`](adr/ADR-17-soak-tiers.md).
 Quick reference:
 
 - **Tier 1**: `python tools/soak_driver.py --cli-replay <cassette.jsonl>` — 0 quota.
-- **Tier 1.5**: `python tools/soak_driver.py --cli-pool-size 2 --total-events 6 --total-seconds 120` — ~6 real calls, ~90 s wall-clock. Binary gate (pool warmed + clean shutdown). NOT a latency gate; NOT an alignment gate.
+- **Tier 1.5**: `python tools/soak_driver.py --cli-pool-size 2 --total-seconds 120 --interval-seconds 20` — ~6 real calls, ~90 s wall-clock. Binary gate (pool warmed + clean shutdown). NOT a latency gate; NOT an alignment gate.
 - **Tier 3**: `python tools/soak_driver.py --cli-pool-size 2` — full ship-gate, ~32 min, ~60 calls. Source-of-truth for ADR-5.
 
 ## Operator obligations
@@ -50,7 +50,7 @@ For every PR that touches a row marked **Tier 1.5** above:
 
 For every PR that cuts a release tag (i.e. ship-gate PRs):
 
-1. Run Tier 3 (`--cli-pool-size 2`, default `--total-events`).
+1. Run Tier 3 (`--cli-pool-size 2`, default `--total-seconds`).
 2. Run alignment-eval `--ci-gate` (sonnet ≥ 0.95, haiku ≥ 0.85,
    0 FR-OG-7 regressions, 0 haiku regressions vs sonnet).
 3. Both pass before tagging.
@@ -95,6 +95,6 @@ backlog-cap discipline):
   Tier-1.5-required rows). Block on matrix proving stable in v2.0
   with no false positives.
 - Add Tier 4 (large-n smoke for tail-variance triage, e.g.
-  `--total-events 240 --total-seconds 480`) — flagged in v1.9
+  `--total-seconds 480 --interval-seconds 2`) — flagged in v1.9
   ship-gate report. Not minted in v2.0 per ADR-18 Rule 4 phase
   budget cap.

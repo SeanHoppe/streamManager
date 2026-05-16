@@ -124,10 +124,10 @@ flag — `tools/soak_driver.py` flag surface is unchanged.
 ### Invocation
 
 ```
-python tools/soak_driver.py --cli-pool-size 2 --total-events 6 --total-seconds 120
+python tools/soak_driver.py --cli-pool-size 2 --total-seconds 120 --interval-seconds 20
 ```
 
-- Wall-clock: ~90 s.
+- Wall-clock: ~90 s (~6 publish ticks at `--interval-seconds 20`).
 - Token cost: ~6 real `claude -p` calls (Haiku at typical L4 alignment
   band; mix may shift if `_L2_L3_TRIGGER` corpus selects different
   bands).
@@ -177,8 +177,9 @@ It is not a cassette consumer. Per
 `feedback_cassette_must_cover_new_envelopes.md`, the cassette
 recorder + replay path must cover every new envelope **type** the
 soak emits — Tier 1.5 introduces no new envelope types (it runs the
-same `engine.evaluate` loop as Tier 3 with smaller `--total-events`),
-so no `cassette_record.py` extension is required.
+same `engine.evaluate` loop as Tier 3 with a smaller
+`--total-seconds` window), so no `cassette_record.py` extension is
+required.
 
 ### Trigger matrix
 
