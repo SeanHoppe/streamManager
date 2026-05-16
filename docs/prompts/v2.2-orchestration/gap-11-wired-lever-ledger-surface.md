@@ -1,5 +1,12 @@
 # Gap 11 — WIRED_LEVER_LEDGER_COUNT surface (bookkeeping conditional watch)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: LANDED — NO-OP.**
+> v2.2 cycle type = consolidation; wires ZERO new levers
+> (gap-1 + gap-2 + gap-3 all deferred to v2.3; gap-4 is a regression
+> test, not a runtime lever). `WIRED_LEVER_LEDGER_COUNT` stays at 0
+> entering AND exiting v2.2. DORMANT-N gate stays inert. No todo
+> watch-row needed. No INTENT counter-line edit needed.
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 11. Bookkeeping
 > drift, **conditional** — only fires if v2.2 wires a new lever
 > (counter bumps 0 → ≥ 1).

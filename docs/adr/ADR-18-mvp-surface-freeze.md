@@ -330,3 +330,95 @@ this envelope MUST be additive optional fields only. A FROZEN →
 EVOLVING demotion of `governance_decision` requires explicit user
 approval per Rule 1 §"State transitions"; this amendment does not
 pre-authorize one.
+
+### 2026-05-16 — v2.2 P0 Amendment A: Rule 3 extension — feature-cycle LOC soft target (closes #130)
+
+**Rule 3 extension (v2.2 P0 Amendment A).** Consolidation cycles
+retain net LOC ≤ 0 (unchanged). Feature cycles target ≤ 1500 LOC
+by default; exceeding the soft target requires operator override
+recorded verbatim in the cycle-frame doc. Soft target is
+**PROVISIONAL** through v2.3 P0 — re-calibrate at ≥ 4 feature-
+cycle data points (recompute via p75 or median + stddev across
+{v1.9 ≈ +2800, v2.1 = +3874, v2.3 …, v2.4 …}).
+
+**Net-LOC measurement scope = 3 buckets:**
+
+- **Production** (`src/`) — load-bearing for the cap.
+- **Test** (`tests/`) — advisory; reported alongside production.
+- **Docs** (`docs/` + `*.md`) — advisory; reported but excluded
+  from the cap per ADR-18 §"Open questions" (capping docs creates
+  perverse incentive against ADR coverage).
+
+`tools/` and `dashboard/` continue counting toward production for
+Rule 3 measurement (unchanged from §Rule 3 main text).
+
+**Cycle-start commit anchor.** Prior cycle's release-tag SHA.
+v2.1.0 = `8303f38`; v2.2 measurement window = `8303f38..HEAD` at
+ship-gate.
+
+**Ship-gate diff command:**
+
+```
+git diff <prior-tag>...HEAD --stat -- src tests tools dashboard
+```
+
+**BLOCK threshold.** 1.5× soft target (= 2250 LOC for the 1500
+default). Hard cap is NOT 2× (2× would retro-permit v1.9's +2800
+which was the precedent driving Rule 3 in the first place).
+
+**Why this shape.** v1.9 +2800, v2.1 +3874 set the precedent
+that feature cycles drift unbounded without a soft anchor.
+Soft + override + cap escalation (1× soft → 1.5× block) gives
+operator room to recognise legitimate slope (e.g. PPP harness
+end-to-end was structural; lever wiring is typically much smaller)
+while making sub-cycle overage visible at cycle frame rather than
+ship-gate. Provisional through v2.3 lets one more feature data
+point refine the threshold before locking.
+
+**Acceptance (#130).**
+
+- [x] Amendment text in `docs/adr/ADR-18-mvp-surface-freeze.md`
+      §"Amendments" (this entry).
+- [x] §C1–C5 fold-ins per #130 issue body (addressed inline
+      above — no separate §C subsections needed; threshold,
+      override, anchor, and provisional-window decisions all
+      captured in this Amendment body).
+- [x] §C2 per-phase sub-question explicitly DROPPED (deferred
+      post-v2.3; cycle-wide measurement only at v2.2).
+- [ ] `tools/soak_driver.py` post-soak LOC delta summary updated
+      against new threshold (P2 ship-gate scope — additive output
+      only).
+
+### 2026-05-16 — v2.2 P0 Amendment B: Rule 6 (NEW) — memory pre-flight at cycle frame (closes #133)
+
+**Rule 6. Memory pre-flight at cycle frame.** Every cycle-frame
+P0 PR verifies every load-bearing project memory cited in the
+phase prompt against ground-truth code/repo state (grep / file
+existence / status doc cross-check). Stale memories are updated
+in the same P0 PR before cycle proceeds. INTENT.md is in pre-
+flight scope (its §"Current cycle posture" / §"Authoritative
+status references" rot at the same rate as project memories).
+
+**Required output.** P0 PR body carries a "Memory pre-flight
+stamp" block enumerating each verified memory + verdict
+(fresh / updated-in-this-PR / superseded-by-X). Empty stamp =
+non-compliant.
+
+**Reason.** v2.1 P0 surfaced 5-day-stale `project_sync_comms.md`
+that misled lever selection (recommended PPP only after
+ground-truth-walking the sync-comms ship state). Cost: ~1
+cycle-frame round-trip. Codifying the pre-flight prevents
+recurrence and bounds the next round-trip cost to zero.
+
+**Self-application.** This very amendment self-applies — the
+v2.2 P0 PR body carries the first compliant pre-flight stamp.
+
+**Acceptance (#133).**
+
+- [x] Amendment text in `docs/adr/ADR-18-mvp-surface-freeze.md`
+      §"Amendments" (this entry).
+- [x] Cycle-frame prompt template
+      (`docs/prompts/v2.2-orchestration/phase-0-cycle-frame.md`)
+      already carries the DOD line enforcing pre-flight (minted
+      at v2.1 P4 ship-gate).
+- [x] First applied: this PR.

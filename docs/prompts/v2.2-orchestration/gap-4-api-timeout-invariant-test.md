@@ -1,5 +1,11 @@
 # Gap 4 — API-timeout invariant test (v2.2 P0 phase candidate)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: FOLDED v2.2 P1.**
+> v2.2 = consolidation cycle; gap-4 P1 requires mandatory pre-P1
+> deletion offset survey ≥ 80 LOC to keep cycle net LOC ≤ 0.
+> See `docs/prompts/v2.2-orchestration/phase-1-gap-4-api-timeout-
+> invariant.md` for the P1 phase prompt.
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 4. **Either
 > cycle type acceptable** — pure additive test + Tier-3 ledger
 > column extension. ADR-18-clean.
@@ -94,6 +100,9 @@ LOC impact.
 
 - Test-only + one additive observability line. Zero FROZEN surface
   touched. EXPERIMENTAL on land.
-- LOC estimate: ~60 tests + ~10 driver = ~70 LOC. Negligible vs
-  either cycle budget.
+- LOC estimate: ~70 tests + ~10 driver = ~80 LOC. Negligible vs
+  either cycle budget. **Deletion-offset target in
+  `phase-1-gap-4-api-timeout-invariant.md` rounds to ≥ 80 LOC**
+  to give P1 a single integer threshold (do not split-hair between
+  70 vs 80 at P1 review).
 - No DORMANT-N implication.

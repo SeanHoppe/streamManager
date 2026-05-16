@@ -1,5 +1,12 @@
 # Gap 12 — MASTER.md stale reference in INTENT (bookkeeping)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: LANDED.** INTENT.md
+> §"Authoritative status references" MASTER.md line struck of its
+> "(note: still rows-stale on #111 hold-lift; update pending)"
+> parenthetical. MASTER.md row state verified per PR #158 — #111
+> reads `READY corpus-gated`; LANDED rows present for #107/#108/
+> #109/#128/#129.
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 12. Bookkeeping
 > drift. Apply at v2.2 P0 INTENT-refresh pass per ADR-18 Rule 6 (#133).
 

@@ -1,5 +1,11 @@
 # Gap 10 — Feature-cycle LOC ceiling carry-forward asymmetry (bookkeeping)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: LANDED — Option B
+> applied.** INTENT.md §"Authoritative status references" now
+> points to v2.2-backlog + v2.2-task-plan for cycle-state of truth;
+> feature-cycle LOC ceiling tracked at #130 (closed by Amendment A
+> this P0). Option A (4th todo bullet) not taken — pointer is leaner.
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 10. Bookkeeping
 > drift. Refresh at v2.2 P0 INTENT pre-flight pass per ADR-18 Rule 6
 > (#133).
