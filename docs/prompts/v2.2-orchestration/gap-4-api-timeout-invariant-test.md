@@ -100,6 +100,9 @@ LOC impact.
 
 - Test-only + one additive observability line. Zero FROZEN surface
   touched. EXPERIMENTAL on land.
-- LOC estimate: ~60 tests + ~10 driver = ~70 LOC. Negligible vs
-  either cycle budget.
+- LOC estimate: ~70 tests + ~10 driver = ~80 LOC. Negligible vs
+  either cycle budget. **Deletion-offset target in
+  `phase-1-gap-4-api-timeout-invariant.md` rounds to ≥ 80 LOC**
+  to give P1 a single integer threshold (do not split-hair between
+  70 vs 80 at P1 review).
 - No DORMANT-N implication.

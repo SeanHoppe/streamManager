@@ -39,10 +39,18 @@ in the same buckets to satisfy Rule 3 at ship-gate P2.
 
 **Survey procedure (run FIRST, before any test code lands):**
 
-1. Grep for dead exports / TODO-ripout markers:
+1. Grep for dead exports / TODO-ripout markers. Project Grep tool
+   uses ripgrep — alternation works natively without `-E`:
    ```
-   grep -rn 'TODO.*remove\|TODO.*rip\|@deprecated\|# DEAD' src/ tests/ tools/ dashboard/
+   # Via project Grep tool (ripgrep):
+   pattern: 'TODO.*(remove|rip)|@deprecated|# DEAD'
+   path: src/ tests/ tools/ dashboard/
    ```
+   If running raw on the command line, use ripgrep
+   (`rg 'TODO.*(remove|rip)|@deprecated|# DEAD' src/ tests/ tools/ dashboard/`)
+   OR `grep -rEn` (GNU grep with `-E` for alternation; bare
+   `grep -rn 'A\|B'` works on GNU grep only and silently matches
+   the literal `\|` elsewhere).
 2. Identify any test fixtures no longer referenced by tests in
    `tests/`. Pattern: fixtures under `tests/fixtures/` whose path
    doesn't appear in any `tests/test_*.py` import or `open(...)`.

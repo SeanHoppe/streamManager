@@ -79,13 +79,16 @@ test + soak observability line.
 
 ### S1 — Wipe soak state
 
-```
-rm -f .bridge/soak-driver/* .bridge/cli-pool.pids reports/soak-*.md
+Project CLAUDE.md pins the dev shell to PowerShell. Use:
+
+```powershell
+Remove-Item -Force .bridge/soak-driver/*, .bridge/cli-pool.pids, reports/soak-*.md -ErrorAction SilentlyContinue
 ```
 
 (Preserve historical reports under git tracking — only wipe
 working-directory artifacts; the v2.1 ship-gate report stays in
-git history.)
+git history. `-ErrorAction SilentlyContinue` matches `rm -f`
+semantics for missing files.)
 
 ### S2 — Fire Tier-3 soak
 
@@ -93,13 +96,17 @@ Per ADR-17 Tier-3 + `feedback_subagent_long_task_abandonment.md`,
 launch from main thread with `run_in_background` +
 `ScheduleWakeup`:
 
-```
-python tools/soak_driver.py \
-  --cli-pool-size 2 \
-  --ppp-auto-probe \
-  --total-seconds 1800 \
+```powershell
+python tools/soak_driver.py `
+  --cli-pool-size 2 `
+  --ppp-auto-probe `
+  --total-seconds 1800 `
   --interval-seconds 20
 ```
+
+(PowerShell backtick continuation; POSIX `\` does NOT continue
+lines in PowerShell. If running under bash, flatten to one line or
+swap backticks for `\`.)
 
 Monitor template: `feedback_monitoring_live_sessions.md`. Expected
 soak duration ~30 min. Schedule wake-up at 35 min for completion
@@ -191,6 +198,12 @@ test.md` header: `FOLDED v2.2 P1 — LANDED PR #<n>` becomes
 Delete `docs/intent-todo-gap-2026-05-16.md` per its lifetime rule
 (P0 mint + gap-4 land both satisfied at v2.2 ship-gate close).
 
+**Also strike** the corresponding bullet from
+`INTENT.md` §"Authoritative status references" — the bullet
+points to the deleted file and dangles without this strike. The
+bullet text is `- \`docs/intent-todo-gap-2026-05-16.md\` — 12-gap
+synthesis pass …`; remove the entire `- ` line.
+
 ### S12 — Mint-new-phase rule
 
 If S2-S5 surface any new must-fix item, mint a v2.2.1 patch-cycle
@@ -210,6 +223,8 @@ Default: no follow-up; ship clean.
 - [ ] `project_v22_cycle_close.md` memory + MEMORY.md index.
 - [ ] Gap-4 prompt header stamped LANDED.
 - [ ] `docs/intent-todo-gap-2026-05-16.md` deleted.
+- [ ] `INTENT.md` §"Authoritative status references" bullet
+      pointing to the deleted gap doc removed (same PR).
 - [ ] Single PR `ship(v2.2):` against `main`.
 
 Report back when v2.2.0 tag is pushed with: tag SHA, soak report
