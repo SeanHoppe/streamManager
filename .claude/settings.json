@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "deny": [
+      "Bash(sqlite3 *rl_episodes.db*)",
+      "Bash(sqlite3 *rl_shadow.db*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -7,6 +13,10 @@
           {
             "type": "command",
             "command": "python tools/hook_evaluate.py"
+          },
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File .claude/hooks/robin-bash-timeout.ps1"
           }
         ]
       }
