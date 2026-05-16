@@ -23,17 +23,24 @@ from stream_manager.envelope_kinds import ENVELOPE_KINDS
 
 ROOT = Path(__file__).resolve().parent.parent
 CASSETTE_RECORD = ROOT / "tools" / "cassette_record.py"
-BUS_WRITERS = [
-    ROOT / "src" / "stream_manager" / "governance.py",
-    ROOT / "src" / "stream_manager" / "jsonl_tail.py",
-    ROOT / "dashboard" / "server.py",
-    ROOT / "tools" / "soak_driver.py",
-    ROOT / "tools" / "cassette_record.py",
+SCAN_ROOTS = [
+    ROOT / "src",
+    ROOT / "tools",
+    ROOT / "dashboard",
 ]
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _all_python_sources() -> list[Path]:
+    paths: list[Path] = []
+    for root in SCAN_ROOTS:
+        if not root.exists():
+            continue
+        paths.extend(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
+    return paths
 
 
 def test_cassette_records_every_envelope_kind() -> None:
@@ -53,11 +60,9 @@ def test_every_write_envelope_callsite_uses_allowlisted_kind() -> None:
     """
     import re
 
-    pattern = re.compile(r'write_envelope\(\s*"([^"]+)"')
+    pattern = re.compile(r'write_envelope\(\s*["\']([^"\']+)["\']')
     found: set[str] = set()
-    for path in BUS_WRITERS:
-        if not path.exists():
-            continue
+    for path in _all_python_sources():
         for match in pattern.finditer(_read(path)):
             found.add(match.group(1))
     rogue = sorted(found - ENVELOPE_KINDS)
