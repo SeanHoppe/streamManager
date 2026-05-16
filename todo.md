@@ -178,3 +178,18 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    bookkeeping drift — refresh at INTENT pre-flight pass per #133.
    Operator decisions required at P0 mint: cycle type, ADR-18 Rule 5
    cap-bump acceptance for backlog growth 1→6.
+
+   **Individual prompts minted 2026-05-16** under
+   `docs/prompts/v2.2-orchestration/`:
+   - Gap 1: [gap-1-cadence-enforcement-fr.md](docs/prompts/v2.2-orchestration/gap-1-cadence-enforcement-fr.md) — P0 phase candidate (feature-cycle gated).
+   - Gap 2: [gap-2-subagent-scope-escalation-fr.md](docs/prompts/v2.2-orchestration/gap-2-subagent-scope-escalation-fr.md) — P0 phase candidate (feature-cycle + ADR-18 Rule 1 carve-out gated).
+   - Gap 3: [gap-3-dashboard-regression-watch.md](docs/prompts/v2.2-orchestration/gap-3-dashboard-regression-watch.md) — P0 phase candidate (either cycle type).
+   - Gap 4: [gap-4-api-timeout-invariant-test.md](docs/prompts/v2.2-orchestration/gap-4-api-timeout-invariant-test.md) — P0 phase candidate (either cycle type).
+   - Gap 5: [gap-5-context-rank-budget-invariant.md](docs/prompts/v2.2-orchestration/gap-5-context-rank-budget-invariant.md) — backlog seed (promotion-gated).
+   - Gap 6: [gap-6-learn-mode-allow-promotion.md](docs/prompts/v2.2-orchestration/gap-6-learn-mode-allow-promotion.md) — backlog seed.
+   - Gap 7: [gap-7-topology-discovery-coverage.md](docs/prompts/v2.2-orchestration/gap-7-topology-discovery-coverage.md) — backlog seed.
+   - Gap 8: [gap-8-out-of-scope-guard-scans.md](docs/prompts/v2.2-orchestration/gap-8-out-of-scope-guard-scans.md) — backlog seed (security-class).
+   - Gap 9: [gap-9-messages-not-transitions-boundary.md](docs/prompts/v2.2-orchestration/gap-9-messages-not-transitions-boundary.md) — backlog seed.
+   - Gap 10: [gap-10-loc-ceiling-asymmetry.md](docs/prompts/v2.2-orchestration/gap-10-loc-ceiling-asymmetry.md) — bookkeeping (INTENT-refresh).
+   - Gap 11: [gap-11-wired-lever-ledger-surface.md](docs/prompts/v2.2-orchestration/gap-11-wired-lever-ledger-surface.md) — bookkeeping (conditional on lever bump).
+   - Gap 12: [gap-12-master-stale-ref-strike.md](docs/prompts/v2.2-orchestration/gap-12-master-stale-ref-strike.md) — bookkeeping strike.

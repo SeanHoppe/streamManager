@@ -68,11 +68,31 @@ docs/intent-todo-gap-2026-05-16.md
 at v2.2 P0 fire and decides per-gap at §"Backlog graduation
 procedure".
 
+**Individual prompts minted 2026-05-16** under
+`docs/prompts/v2.2-orchestration/gap-*.md` (12 files, one per gap).
+Operator dispatches each at P0:
+
+| Gap | Prompt | Disposition at P0 |
+|---|---|---|
+| 1 | `gap-1-cadence-enforcement-fr.md` | Fold into v2.2 P-N IF cycle = feature; else defer v2.3 |
+| 2 | `gap-2-subagent-scope-escalation-fr.md` | Fold IF cycle = feature AND Rule 1 carve-out accepted |
+| 3 | `gap-3-dashboard-regression-watch.md` | Fold either cycle type (cheap) |
+| 4 | `gap-4-api-timeout-invariant-test.md` | Fold either cycle type (ADR-18-clean) |
+| 5 | `gap-5-context-rank-budget-invariant.md` | Graduate to v2.2-backlog (already pre-seeded) |
+| 6 | `gap-6-learn-mode-allow-promotion.md` | Graduate to v2.2-backlog |
+| 7 | `gap-7-topology-discovery-coverage.md` | Graduate to v2.2-backlog |
+| 8 | `gap-8-out-of-scope-guard-scans.md` | Graduate to v2.2-backlog |
+| 9 | `gap-9-messages-not-transitions-boundary.md` | Graduate to v2.2-backlog |
+| 10 | `gap-10-loc-ceiling-asymmetry.md` | Apply at INTENT-refresh (Option A vs B) |
+| 11 | `gap-11-wired-lever-ledger-surface.md` | Apply IF lever counter bumps in P0 |
+| 12 | `gap-12-master-stale-ref-strike.md` | Apply at INTENT-refresh (single-line strike) |
+
 **Closes.** Gap-analysis tracking artifact (file deletes when gaps
 1–4 land or reject).
 
 **Next.** Operator fires P0 → reads gap-analysis doc → per-gap
-decisions inline in P0 prompt response.
+decisions inline in P0 prompt response, dispatching individual
+gap-N prompts as decided.
 
 ---
 
