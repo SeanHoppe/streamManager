@@ -1,5 +1,10 @@
 # Gap 5 — Project-context rank + 400-token budget invariant (backlog seed)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: GRADUATED to
+> `docs/v2.2-backlog.md`** §"INTENT.md gap-analysis seeds (GRADUATED
+> 2026-05-16 at v2.2 P0)". Promotion criterion below remains the
+> gate before this prompt fires.
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 5. **Backlog
 > seed** — promotion-gated. Stays in `docs/v2.2-backlog.md` until
 > criterion fires.

@@ -1,5 +1,11 @@
 # Gap 3 — Dashboard regression watch (v2.2 P0 phase candidate)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: DEFERRED to v2.3.**
+> v2.2 cycle = consolidation (net LOC ≤ 0); folding gap-3 +
+> gap-4 would overshoot the budget without offsetting deletion.
+> Only gap-4 fits with a mandatory deletion offset survey. Gap-3
+> defers; re-triage at v2.3 P0 (either cycle type still works).
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 3. **Either
 > cycle type acceptable** — ADR-18-clean additive tests. Cheapest
 > of the four gap-1..4 phase candidates.
