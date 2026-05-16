@@ -379,8 +379,10 @@ point refine the threshold before locking.
 
 - [x] Amendment text in `docs/adr/ADR-18-mvp-surface-freeze.md`
       §"Amendments" (this entry).
-- [ ] §C1–C5 fold-ins per #130 issue body (deferred — addressed
-      inline above; no separate §C subsections).
+- [x] §C1–C5 fold-ins per #130 issue body (addressed inline
+      above — no separate §C subsections needed; threshold,
+      override, anchor, and provisional-window decisions all
+      captured in this Amendment body).
 - [x] §C2 per-phase sub-question explicitly DROPPED (deferred
       post-v2.3; cycle-wide measurement only at v2.2).
 - [ ] `tools/soak_driver.py` post-soak LOC delta summary updated
