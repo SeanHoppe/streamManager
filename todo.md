@@ -53,9 +53,12 @@ cycle frame **NOT yet minted**. ADR-18 surface freeze in force;
 - [ ] **Dormant `JsonlTailWorker.start()` production wiring.** 🟢
       ~30 LOC non-additive runtime-shape change. No prompt yet — fold
       into v2.2 P1 task plan at cycle frame.
-- [ ] **Soak-summary probe-emit counter.** 🟢 ~5 LOC additive in
-      `tools/soak_driver.py`. Trivial; no prompt — pick up at any
-      sub-phase drain or v2.2 P0 hygiene.
+- [x] **Soak-summary probe-emit counter.** LANDED 2026-05-16 (chore
+      branch `chore/soak-summary-probe-counter`). 7 LOC additive in
+      `tools/soak_driver.py`: `_DriverState.ppp_auto_probes_emitted`
+      counter, callsite bump in `--ppp-auto-probe` block, soak-summary
+      closing print `[soak] PPP auto-probes emitted: N`. Closes v2.1
+      carry-forward observability gap per ADR-5 §"PPP cadence note".
 
 ### 🟢 Standalone hardening (parallel to v2.2 substance)
 

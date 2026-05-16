@@ -50,18 +50,21 @@
   forwards").
 - **Next.** Wait for v2.2 P0 disposition.
 
-### 1.3 🟢 Soak-summary probe-emit counter
+### 1.3 ✅ Soak-summary probe-emit counter — LANDED 2026-05-16
 
 - **Scope.** Wire `_emit_ppp_auto_probe` to bump a counter; print
   `PPP auto-probes emitted: N` in soak-summary closing block.
 - **Owner-bind.** Main agent. Trivial additive.
 - **Blocker.** None.
-- **Est LOC.** ~5 additive in `tools/soak_driver.py`.
+- **Est LOC.** 7 additive in `tools/soak_driver.py` (close to ~5
+  estimate).
 - **Prompt.** None needed.
 - **Closes.** v2.1 carry-forward 🟢. Observability gap per ADR-5
   §"PPP cadence note".
-- **Next.** Can land as standalone PR anytime. Could fold into
-  v2.2 P0 hygiene PR.
+- **Status.** SHIPPED via branch `chore/soak-summary-probe-counter`
+  (PR pending). `_DriverState.ppp_auto_probes_emitted` field added;
+  callsite bumps inside `args.ppp_auto_probe` block; summary closing
+  block prints `[soak] PPP auto-probes emitted: N`.
 
 ### 1.4 🟢 Remote-CLI monitoring seed
 
@@ -193,7 +196,7 @@ horizon.
 Items doable in any order vs the v10 chain:
 - 1.1 v2.2 P0 cycle frame (operator-bound).
 - 1.2 JsonlTailWorker wiring (post-1.1).
-- 1.3 Soak-summary probe-emit counter (anytime).
+- ~~1.3 Soak-summary probe-emit counter~~ — LANDED 2026-05-16.
 - 1.5 `--total-events` flag (anytime; trivial).
 - 3.1 PR #154 sign-off (operator-bound).
 
@@ -211,7 +214,7 @@ Cannot be dispatched by an agent dev session:
 ### Agent-dispatchable items
 
 Could be picked up by a future dispatch pass without operator gating:
-- 1.3 soak-summary probe-emit counter (~5 LOC additive).
+- ~~1.3 soak-summary probe-emit counter~~ — LANDED 2026-05-16.
 - 1.5 path B (docs-only ADR-17 amendment) if operator picks B.
 
 ### Memory + doc anchors
