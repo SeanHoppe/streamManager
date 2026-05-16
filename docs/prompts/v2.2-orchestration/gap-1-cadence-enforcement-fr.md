@@ -1,5 +1,10 @@
 # Gap 1 — Cadence enforcement FR (v2.2 P0 phase candidate)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: DEFERRED to v2.3.**
+> v2.2 cycle type = consolidation; gap-1 is feature-gated. Re-triage
+> at v2.3 P0 (if v2.3 is feature, this prompt fires; if consolidation
+> again, defer further).
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 1. **TWO gates**
 > before promotion: (a) v2.2 cycle type = **feature** AND (b) ADR-18
 > Rule 1 carve-out for FROZEN `governance.py` evaluate seam. Operator

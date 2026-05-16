@@ -102,16 +102,17 @@ Desktop orchestration. SM governs messages, not transitions.
 
 ### Two parallel tracks
 
-1. **v2.x main cycle** — governance feature stream. **v2.1.0 SHIPPED.** v2.2 cycle frame **NOT yet minted**. Two ADR-18 §"Amendments" entries queued for v2.2 P0 (feature-cycle LOC ceiling [#130]; memory pre-flight Rule 6 [#133]). Carry-forwards from v2.1 P4: dormant `JsonlTailWorker.start()` production wiring, soak-summary probe-emit counter, Sonnet 0.95 → 0.8636 alignment dip (🟡), feature-cycle LOC ceiling.
+1. **v2.x main cycle** — governance feature stream. **v2.1.0 SHIPPED.** v2.2 P0 cycle frame **MINTED 2026-05-16 as consolidation cycle** (net LOC ≤ 0). ADR-18 §"Amendments" v2.2 P0 Amendment A (feature-cycle LOC soft target ≤ 1500; closes #130) + Amendment B (Rule 6 memory pre-flight; closes #133) landed in this P0. Carry-forwards from v2.1 P4: dormant `JsonlTailWorker.start()` production wiring DEFERRED v2.3, soak-summary probe-emit counter LANDED PR #163, Sonnet alignment dip Step 1 LANDED PR #161 / Step 2 operator-bound (re-assessed at v2.2 P2 ship-gate), feature-cycle LOC ceiling (see #130).
 2. **v10 RL companion track** — deterministic-Python contextual bandit over L4 confidence threshold. **P0–P3 SHIPPED** (5/7 phases; ~60% MVP). P4 Q4 hold **LIFTED 2026-05-11**; real blocker is now **corpus-fill** (`rl_episodes.db` < 200 live episodes; currently 0). Live subscriber (PR #155) + backfill extractor (PR #156) just landed to enable corpus-fill paths.
 
 ### ADR-18 governance regime (in force)
 
 - Rule 1: Surface freeze (FROZEN / EVOLVING / EXPERIMENTAL).
 - Rule 2: DORMANT-N falsify-before-extend (cumulative).
-- Rule 3: Consolidation cycles net LOC ≤ 0; feature cycles uncapped (amendment pending at #130).
+- Rule 3: Consolidation cycles net LOC ≤ 0; feature cycles target ≤ 1500 LOC (soft, PROVISIONAL through v2.3 P0 per Amendment A; BLOCK at 1.5×); see #130.
 - Rule 4: Phase budget with retroactive sub-phase amendments.
 - Rule 5: Backlog hard cap.
+- Rule 6 (NEW v2.2 P0): Memory pre-flight at cycle frame (INTENT.md in scope); see #133.
 - `WIRED_LEVER_LEDGER_COUNT` = 0; DORMANT-N gate inert.
 
 ### Held chain (v10)
@@ -128,8 +129,9 @@ Desktop orchestration. SM governs messages, not transitions.
 ### Authoritative status references
 
 - `docs/v10-mvp-status.md` — v10 track ledger (post-hold-lift).
-- `docs/v2.2-backlog.md` — v2.2 seed list (1 item: remote-CLI monitoring).
+- `docs/v2.2-backlog.md` — v2.2 seed list (6 items post-v2.2 P0: remote-CLI monitoring + 5 INTENT.md gap-analysis seeds graduated 2026-05-16).
+- `docs/v2.2-task-plan.md` — v2.2 cycle task plan (consolidation; 2 work phases).
 - `docs/v2.1-backlog.md` §"Carry-forwards from v2.1" — 4 v2.2 cycle-handoff items.
-- `docs/jobs/MASTER.md` — cross-cycle issue tracker (note: still rows-stale on #111 hold-lift; update pending).
+- `docs/jobs/MASTER.md` — cross-cycle issue tracker.
 - `CHANGELOG.md` — Keep-a-Changelog tagged ship history.
 - `docs/intent-todo-gap-2026-05-16.md` — 12-gap synthesis pass; per-gap prompts under `docs/prompts/v2.2-orchestration/`. Operator dispositions all 12 at v2.2 P0 fire (table at `docs/prompts/operator-decisions-2026-05-16.md`).

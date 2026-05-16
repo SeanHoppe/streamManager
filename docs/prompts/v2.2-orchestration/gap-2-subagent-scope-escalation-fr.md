@@ -1,5 +1,9 @@
 # Gap 2 — Sub-agent scope-escalation FR (v2.2 P0 phase candidate)
 
+> **Disposition 2026-05-16 at v2.2 P0 mint: DEFERRED to v2.3.**
+> v2.2 cycle type = consolidation; gap-2 is feature-gated AND
+> Rule 1 carve-out gated. Re-triage at v2.3 P0.
+>
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 2. **TWO
 > gates** before promotion: (a) v2.2 cycle type = feature AND (b)
 > ADR-18 Rule 1 carve-out for FROZEN `governance.py`. Operator

@@ -17,16 +17,16 @@
 
 ## Non-v10 (v2.x main cycle)
 
-**State:** v2.1.0 shipped 2026-05-11 (tag `8303f38`, PR #150). v2.2
-cycle frame **NOT yet minted**. ADR-18 surface freeze in force;
-`WIRED_LEVER_LEDGER_COUNT` = 0; DORMANT-N gate inert.
+**State:** v2.1.0 shipped 2026-05-11 (tag `8303f38`, PR #150).
+**v2.2 P0 cycle frame MINTED 2026-05-16** as consolidation cycle.
+ADR-18 surface freeze in force; `WIRED_LEVER_LEDGER_COUNT` = 0;
+DORMANT-N gate inert. v2.2 task plan: `docs/v2.2-task-plan.md`.
 
 ### 🔴 Cycle-gate (must move before v2.2 substantive work)
 
-- [ ] **Mint v2.2 P0 cycle frame** with paired ADR-18 §"Amendments"
+- [x] **Mint v2.2 P0 cycle frame** with paired ADR-18 §"Amendments"
       A (#130 Rule 3 LOC ceiling) + B (#133 Rule 6 memory pre-flight).
-      Prompt: [phase-0-cycle-frame.md](docs/prompts/v2.2-orchestration/phase-0-cycle-frame.md).
-      Closes #130 + #133.
+      **LANDED 2026-05-16** (this cycle-frame PR). Closes #130 + #133.
 - [x] **Stale-issue hygiene** — CLOSED 2026-05-16 (PM sweep, no
       successors minted, zero residual scope):
       - #128 (v2.1 P1 probe transport — shipped PR #138).
@@ -51,8 +51,9 @@ cycle frame **NOT yet minted**. ADR-18 surface freeze in force;
       stamp. Disposition options: golden update / REQUIREMENTS
       amendment / transient re-run — operator decides after Step 2.
 - [ ] **Dormant `JsonlTailWorker.start()` production wiring.** 🟢
-      ~30 LOC non-additive runtime-shape change. No prompt yet — fold
-      into v2.2 P1 task plan at cycle frame.
+      **DEFERRED v2.3 at v2.2 P0** — runtime-shape change is feature
+      surface, doesn't fit consolidation LOC ≤ 0 budget. Re-triage
+      at v2.3 P0.
 - [x] **Soak-summary probe-emit counter.** LANDED 2026-05-16 (chore
       branch `chore/soak-summary-probe-counter`). 7 LOC additive in
       `tools/soak_driver.py`: `_DriverState.ppp_auto_probes_emitted`
@@ -155,10 +156,11 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    (v10 P0/P1/P2 — all shipped via PRs #106/#121/#122) + #128, #129
    (v2.1 P1/P3 — shipped via PRs #138/#145). MASTER.md reconciliation
    shipped in PR #158.
-6. **v2.2 cycle type undecided.** Feature vs consolidation — affects
-   LOC budget, whether carry-forwards can fold in, and whether v2.x
-   blocks the v10.x cycle slot (per #131 trigger cond 2). Operator
-   decision at v2.2 P0 fire.
+6. ~~**v2.2 cycle type undecided.**~~ RESOLVED 2026-05-16 at v2.2
+   P0 fire. **Consolidation cycle** (net LOC ≤ 0). 2 work phases
+   (P1 = gap-4 API-timeout invariant fold; P2 = ship-gate). v10.x
+   slot stays free for #112-close + #131 mint once corpus-fill
+   completes (per #131 trigger cond 2).
 7. ~~**#116 PreToolUse pre-spike**~~ RESOLVED 2026-05-16 (PR #160).
    `agent_type` field in PreToolUse JSON discriminates main vs robin
    cleanly per [docs](https://code.claude.com/docs/en/hooks). Full
@@ -169,15 +171,14 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    `tools/soak_driver.py` flag set unchanged. v2.1-backlog 🟡 item
    marked RESOLVED. If a future cycle prefers Path A (add the flag),
    reopen as a feature-cycle item.
-9. **INTENT.md ↔ todo.md gap analysis (2026-05-16).** 12 gaps logged
-   in [`docs/intent-todo-gap-2026-05-16.md`](docs/intent-todo-gap-2026-05-16.md).
-   Gaps 1–4 (cadence FR / sub-agent scope-escalation FR / dashboard
-   regression watch / API-timeout invariant test) are v2.2 P0 phase
-   candidates. Gaps 5–9 graduate to `docs/v2.2-backlog.md` at P0
-   mint (promotion criteria stated per seed). Gaps 10–12 are
-   bookkeeping drift — refresh at INTENT pre-flight pass per #133.
-   Operator decisions required at P0 mint: cycle type, ADR-18 Rule 5
-   cap-bump acceptance for backlog growth 1→6.
+9. ~~**INTENT.md ↔ todo.md gap analysis (2026-05-16).**~~ DISPOSITIONED
+   2026-05-16 at v2.2 P0 fire. 12 gaps logged in
+   [`docs/intent-todo-gap-2026-05-16.md`](docs/intent-todo-gap-2026-05-16.md);
+   per-gap dispositions in `docs/v2.2-task-plan.md` §"INTENT.md
+   gap-analysis dispositions". Gaps 1/2/3 DEFERRED v2.3; gap-4
+   FOLDED v2.2 P1; gaps 5–9 GRADUATED to v2.2-backlog; gaps 10/12
+   LANDED at this P0; gap-11 LANDED NO-OP (consolidation wires no
+   levers).
 
    **Individual prompts minted 2026-05-16** under
    `docs/prompts/v2.2-orchestration/`:
