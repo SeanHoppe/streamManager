@@ -61,10 +61,10 @@
 - **Prompt.** None needed.
 - **Closes.** v2.1 carry-forward 🟢. Observability gap per ADR-5
   §"PPP cadence note".
-- **Status.** SHIPPED via branch `chore/soak-summary-probe-counter`
-  (PR pending). `_DriverState.ppp_auto_probes_emitted` field added;
-  callsite bumps inside `args.ppp_auto_probe` block; summary closing
-  block prints `[soak] PPP auto-probes emitted: N`.
+- **Status.** SHIPPED via PR #163 (branch
+  `chore/soak-summary-probe-counter`). `_DriverState.ppp_auto_probes_emitted`
+  field added; callsite bumps inside `args.ppp_auto_probe` block;
+  summary closing block prints `[soak] PPP auto-probes emitted: N`.
 
 ### 1.4 🟢 Remote-CLI monitoring seed
 
