@@ -52,3 +52,8 @@ reports/dashboard*.log
 reports/soak_*
 reports/replay-*.md
 reports/replay_*.md
+
+# Local-only dev artifacts (per-session, ephemeral)
+.claude/worktrees/
+tmp/
+tmpv2-*.log
