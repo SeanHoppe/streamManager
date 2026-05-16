@@ -42,6 +42,16 @@ Until then: speculative. No PoC = no priority.
 - Fail if hit found in tracked file.
 - Cross-reference: INTENT §"Out of scope" item 2.
 
+**Allowlist coordination with gap-7.** If gap-7 promotes first (or
+in same cycle), the topology fixture corpus at
+`tests/fixtures/topology/` may contain synthetic token-shaped
+decoys for inference testing. The generic "exclude test fixtures"
+allowlist must explicitly cover that subtree, AND gap-7 fixture
+authors must NOT bake real token shapes into synth payloads
+(use `synth-sk-ant-FAKE-…` patterns or similar). Confirm allowlist
++ fixture-shape coordination at gap-8 promotion-time review. Cross-
+ref gap-7 prompt §"Topology fixture corpus".
+
 ### 2. transport/ modification fence
 
 `tests/test_security_transport_fence.py`:

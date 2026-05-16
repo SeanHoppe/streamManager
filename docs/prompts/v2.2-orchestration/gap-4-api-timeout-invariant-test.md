@@ -32,9 +32,14 @@ catches it pre-ship.
   1. Final governance verdict = `OBSERVE` (NOT `INTERVENE`,
      `BLOCK`, or unset).
   2. Bridge forward latency from message-in → forward-out <
-     `BRIDGE_FALLBACK_LATENCY_BUDGET_MS` (default 2000 ms or
-     whatever ADR-5 latency baseline declares; pull from
-     `model_router` or `governance` constants).
+     `BRIDGE_FALLBACK_LATENCY_BUDGET_MS`. **Pin the threshold at
+     promotion** to the live constant in `governance.py` or
+     `model_router.py` (grep at promotion-time; ADR-5 latency
+     baseline as of v1.7 cycle-close is ~11s p95, NOT 2 s). Do
+     NOT hard-code a literal ms value in this test — fetch from
+     the runtime constant so future ADR-5 re-baselines propagate
+     automatically. If no such constant exists yet, mint one at
+     P-N as part of the deliverable.
 
 ### 2. Tier-3 ship-gate ledger extension
 
@@ -52,8 +57,10 @@ Add third column **invariant-degrade**:
 ## Cross-refs
 
 - INTENT safety priority #5 verbatim.
-- ADR-5 latency baseline (cross-ref for `BRIDGE_FALLBACK_LATENCY_
-  BUDGET_MS` value).
+- ADR-5 latency baseline (~11s p95 per `project_v17_cycle_close.md`).
+  `BRIDGE_FALLBACK_LATENCY_BUDGET_MS` resolves to live constant in
+  `governance.py` / `model_router.py` at test runtime — do NOT hard-
+  code.
 - `src/stream_manager/cli_governance.py` — fault injection site.
 - `tools/soak_driver.py` — Tier-3 ledger render site.
 - Gap doc §"Gap 4 — API-timeout invariant test".

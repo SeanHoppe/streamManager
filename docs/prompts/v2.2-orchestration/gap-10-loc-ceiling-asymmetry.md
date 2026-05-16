@@ -22,7 +22,17 @@ into cycle-gate). One source of truth, two presentations.
 
 ### Option A — Re-add feature-cycle LOC ceiling as its own todo row
 
-Add a fourth bullet to todo.md §"Carry-forwards from v2.1":
+**Verification step (before edit).** Open `todo.md` §"🟡 Carry-
+forwards from v2.1" and confirm the section is rendered as a
+bulleted list with N items (N currently 3 as of 2026-05-16). If
+the section has drifted to paragraph form or a different bullet
+count, "add a fourth bullet" is non-actionable as written — re-
+plan the edit shape (e.g. convert paragraph → list first, OR target
+a different anchor) before proceeding. Record the verified N in P0
+PR body.
+
+Add a fourth bullet to todo.md §"Carry-forwards from v2.1" (only
+if verification passes):
 
 ```
 - [ ] **Feature-cycle LOC ceiling.** Tracked at #130; paired with

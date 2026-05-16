@@ -44,6 +44,17 @@ Until then: speculative.
 - `unknown_session.jsonl` — synth agent that intentionally does NOT
   match any known role pattern.
 
+**Slug pin (mandatory).** Every fixture JSONL MUST carry a
+`project_slug` field set to a non-SM value (e.g. `"certPortal"` or
+a synthetic `"fixture-topology"`). The SM polarity-flip rule
+(`CLAUDE.md` §"Session-source exception rule") excludes any session
+whose slug is in `STREAM_MANAGER_PROJECT_SLUGS` (default
+`{"streamManager"}`). A fixture without a slug, or one that defaults
+to an SM-pattern slug, will be silently filtered out at the SQL
+`WHERE` boundary and ingest-path tests will return zero rows. Add an
+assertion in the test harness that confirms the slug field is
+present + non-SM before running inference.
+
 ### 2. Inference-roundtrip test
 
 `tests/test_topology_inference.py`:

@@ -3,6 +3,13 @@
 > Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 11. Bookkeeping
 > drift, **conditional** — only fires if v2.2 wires a new lever
 > (counter bumps 0 → ≥ 1).
+>
+> **Canonical-inventory rule.** This prompt is the SINGLE source of
+> truth for the v2.2 lever-count delta. Sibling prompts (gap-1,
+> gap-2, future lever-introducing prompts) MUST NOT assert numeric
+> counter deltas themselves; they declare "lever-bump delta recorded
+> at P0 per gap-11" and defer the actual count to the Step 1
+> inventory below.
 
 ## Why
 

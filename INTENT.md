@@ -132,4 +132,4 @@ Desktop orchestration. SM governs messages, not transitions.
 - `docs/v2.1-backlog.md` §"Carry-forwards from v2.1" — 4 v2.2 cycle-handoff items.
 - `docs/jobs/MASTER.md` — cross-cycle issue tracker (note: still rows-stale on #111 hold-lift; update pending).
 - `CHANGELOG.md` — Keep-a-Changelog tagged ship history.
-- `docs/intent-todo-gap-2026-05-16.md` — 12-gap synthesis pass; individual prompts minted under `docs/prompts/v2.2-orchestration/gap-*.md` (gaps 1–4 P0 phase candidates; 5–9 backlog seeds; 10–12 bookkeeping). Operator dispositions all 12 at v2.2 P0 fire.
+- `docs/intent-todo-gap-2026-05-16.md` — 12-gap synthesis pass; per-gap prompts under `docs/prompts/v2.2-orchestration/`. Operator dispositions all 12 at v2.2 P0 fire (table at `docs/prompts/operator-decisions-2026-05-16.md`).

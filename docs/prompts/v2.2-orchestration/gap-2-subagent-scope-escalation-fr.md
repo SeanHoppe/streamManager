@@ -45,12 +45,28 @@ Suggested defaults (operator finalizes at P0):
 
 - New column on `agent_profiles` table: `escalated_mode TEXT`
   (NULL = use default; non-NULL = governance.evaluate uses
-  escalated value for this agent_type).
+  escalated value).
 - Migration: standard `bus.upgrade_schema_if_needed` shape.
 - Hook: in `governance.evaluate`, after baseline verdict computed,
-  if `agent_type` row has `escalated_mode`, override mode field.
-- Decay: optional auto-reset after N idle days (operator decides
-  at P0 — recommend defer to v2.3).
+  if matching row has `escalated_mode`, override mode field.
+
+**Schema shape — P0 operator decision (record verbatim at P0 fire):**
+
+1. **Row granularity.** `escalated_mode` applies per-`agent_type`
+   (one row per agent class, `UNIQUE(agent_type)` constraint) OR
+   per-instance row (one row per agent instance, no unique
+   constraint). Default lean: per-`agent_type` — instance-level
+   bookkeeping has no consumer in v2.2.
+2. **Decay column shape.** Choose ONE at P0:
+   - (a) No decay column; manual operator reset only.
+   - (b) `escalated_at INTEGER` (epoch); auto-reset after N idle
+         days computed at evaluate-time read.
+   - (c) `escalated_until INTEGER` (epoch); explicit expiry timestamp
+         written at escalation, NULL after manual clear.
+   Default lean: (a) for v2.2 (minimal surface); (b) or (c) deferred
+   to v2.3 as a separate FR.
+3. **Decay window value** (only if (b) or (c) chosen): N days. No
+   default — operator picks at P0 or defers to v2.3.
 
 ### 3. Regression tests
 
@@ -99,8 +115,9 @@ Suggested defaults (operator finalizes at P0):
 - New column on `agent_profiles` = EVOLVING surface change. Schema
   migration well-trodden (precedent: v2.1 P1 `provenance_assertions`).
 - LOC estimate: ~120 src + ~150 tests = ~270 LOC. Material slice of
-  feature-cycle LOC budget per Amendment A (#130 1500 soft target).
+  feature-cycle LOC budget per ADR-18 Amendment A (#130, queued —
+  soft target value TBD at P0 mint).
 - DORMANT-N: at ship, mode-override hook starts wired-active (not
   DORMANT) since tests demand fire on first reviewer-CLI offense.
-  `WIRED_LEVER_LEDGER_COUNT`: 0 → 1 (or 0 → 2 if combined with
-  gap-1 detector).
+  Lever-bump delta recorded at P0 per gap-11 (canonical inventory
+  site). This prompt does NOT assert a numeric counter delta.

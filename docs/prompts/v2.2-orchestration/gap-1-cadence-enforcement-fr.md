@@ -1,8 +1,10 @@
 # Gap 1 — Cadence enforcement FR (v2.2 P0 phase candidate)
 
-> Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 1. Promotion-
-> gated on operator declaring v2.2 cycle type = **feature**. If v2.2
-> = consolidation, defer to v2.3.
+> Minted from `docs/intent-todo-gap-2026-05-16.md` §Gap 1. **TWO gates**
+> before promotion: (a) v2.2 cycle type = **feature** AND (b) ADR-18
+> Rule 1 carve-out for FROZEN `governance.py` evaluate seam. Operator
+> records both decisions at P0. If v2.2 = consolidation, defer to v2.3.
+> Same seam as gap-2; carve-out wording should be shared verbatim.
 
 ## Why
 
@@ -57,12 +59,16 @@ must falsify-before-extend at next cycle if not promoted).
 - `docs/REQUIREMENTS.md` — destination for FR-cadence-N rows.
 - ADR-18 Rule 2 (DORMANT-N falsify-before-extend) — wiring policy.
 - Gap doc §"Gap 1 — Cadence enforcement FR".
-- Companion advisory-only precedent: `cli_governance.py` verdict path.
 
-## Promotion criterion (re-stated)
+## Promotion criteria (BOTH must hold)
 
-Operator confirms v2.2 cycle type = **feature** at P0 fire. If
-consolidation, this prompt sleeps until v2.3 P0.
+1. Operator confirms v2.2 cycle type = **feature**.
+2. Operator records ADR-18 Rule 1 carve-out for `governance.py`
+   evaluate-seam touch at P0 PR body (same seam as gap-2 — shared
+   carve-out wording recommended). "Additive call site ≠ FROZEN
+   break" is NOT auto-policy; each prompt that touches the seam
+   requires its own explicit operator OK until/unless codified in
+   ADR-18 as a general rule.
 
 ## DOD
 
@@ -70,6 +76,8 @@ consolidation, this prompt sleeps until v2.3 P0.
 - [ ] `cadence_detector.py` module added + wired advisory-only.
 - [ ] `tests/test_cadence_detector.py` covering positive + negative
       fixture.
+- [ ] ADR-18 Rule 1 carve-out text in v2.2 P0 PR body verbatim
+      (shared with gap-2 if both promote).
 - [ ] Memory note: `project_v22_cadence_detector.md` (or fold into
       v2.2 cycle-close memory) — declare detector DORMANT-1.
 - [ ] Cycle-close LOC ledger column updated for this phase.
@@ -80,9 +88,11 @@ consolidation, this prompt sleeps until v2.3 P0.
 
 - New surface: `cadence_detector.py` EXPERIMENTAL on land; ratchet
   to EVOLVING after one falsify cycle.
-- Touches FROZEN `governance.py` evaluate seam — additive call site,
-  not behavioral modification on existing verdicts. Operator records
-  Rule 1 disposition at P0 (additive call ≠ FROZEN break per
-  precedent set in v2.0 P1 cli_pool A/B).
+- Touches FROZEN `governance.py` evaluate seam. **Hard gate** —
+  operator must carve out at P0 explicitly. No silent FROZEN edit.
+- Lever-bump delta recorded at P0 per gap-11 (canonical inventory
+  site). This prompt does NOT assert a numeric counter delta — see
+  gap-11 for the single source of truth.
 - LOC estimate: ~80 src + ~100 tests = ~180 LOC. Counts against
-  feature-cycle LOC budget per Amendment A (#130).
+  feature-cycle LOC soft target per ADR-18 Amendment A (#130,
+  queued — soft target value TBD at P0 mint).

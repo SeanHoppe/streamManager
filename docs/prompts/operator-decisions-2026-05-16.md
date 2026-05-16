@@ -74,7 +74,7 @@ Operator dispatches each at P0:
 
 | Gap | Prompt | Disposition at P0 |
 |---|---|---|
-| 1 | `gap-1-cadence-enforcement-fr.md` | Fold into v2.2 P-N IF cycle = feature; else defer v2.3 |
+| 1 | `gap-1-cadence-enforcement-fr.md` | Fold IF cycle = feature AND Rule 1 carve-out accepted (same evaluate seam as gap-2 — shared carve-out wording) |
 | 2 | `gap-2-subagent-scope-escalation-fr.md` | Fold IF cycle = feature AND Rule 1 carve-out accepted |
 | 3 | `gap-3-dashboard-regression-watch.md` | Fold either cycle type (cheap) |
 | 4 | `gap-4-api-timeout-invariant-test.md` | Fold either cycle type (ADR-18-clean) |
