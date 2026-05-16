@@ -3,7 +3,7 @@
 Cross-cycle issue tracker. Per-issue detail in `docs/jobs/issue-NNN.md`.
 Daily task lists in `reports/YYYY-MM-DD.md`.
 
-Status legend: `OPEN` / `IN-PROGRESS` / `LANDED` / `HELD` / `BLOCKED`.
+Status legend: `OPEN` / `IN-PROGRESS` / `LANDED` / `HELD` / `BLOCKED` / `READY` (gated on data/non-policy condition).
 
 ---
 
