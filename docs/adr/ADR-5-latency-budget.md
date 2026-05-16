@@ -1262,10 +1262,12 @@ ADR-18 remain in force unchanged.
   additional row regressed from stable+pass to unstable
   (`ambig-block-truncate-db-13` — was 3/3 `SUGGEST`, now
   `NONE,NONE,SUGGEST`), offset by `frog7-wirecli-literal-09`
-  becoming newly stable+pass; net stable +2, net pass 0. Both
-  stable-wrong rows drift in the same direction (toward weaker
-  verdict), favouring **H2 Sonnet behavioural shift** over H1
-  corpus rot on first inspection. Replay-against-cassette
+  becoming newly stable+pass; net stable +2, net pass 0. Across
+  the 2 audited rows the drift direction is consistent (both toward
+  weaker verdict), which points away from random row-specific
+  calibration error. H1 (corpus rot) and H2 (Sonnet shift) are
+  observationally the same phenomenon at this stage — replay-against-
+  cassette disambiguates them. Replay-against-cassette
   disambiguation (per `docs/v2.1-backlog.md` §"Alignment-recovery"
   Step 2) is **operator-bound** — pending. Disposition options:
   (a) golden update via `chore(alignment):` PR if cassette replay
