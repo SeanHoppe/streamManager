@@ -9,6 +9,13 @@
 > gaps 1–4 have either landed as P0 phase items or been explicitly
 > rejected by operator with rationale recorded. Gaps 5–9 graduate to
 > `docs/v2.2-backlog.md` at v2.2 P0 mint (see §"Backlog graduation").
+>
+> **Status 2026-05-16 (post-mint pass).** All 12 gaps have individual
+> task prompts minted at `docs/prompts/v2.2-orchestration/gap-N-*.md`.
+> Operator dispatches each at v2.2 P0 fire per the disposition table
+> in `docs/prompts/operator-decisions-2026-05-16.md` §1.4a. Each gap
+> section below carries a `**Minted prompt:**` cross-link. LANDED
+> stamps gate on prompt fire (PR merge), NOT prompt mint.
 
 ---
 
@@ -33,6 +40,8 @@
 
 ### Gap 1 — Cadence enforcement FR
 
+**Minted prompt:** [`gap-1-cadence-enforcement-fr.md`](prompts/v2.2-orchestration/gap-1-cadence-enforcement-fr.md).
+
 **INTENT claim.** §"Safety priorities" frame: "SM enforces two things
 beyond raw safety: plan alignment and cadence (is the session making
 forward progress?)."
@@ -56,6 +65,8 @@ type = **feature** (consolidation cycle = defer).
 ---
 
 ### Gap 2 — Sub-agent scope-escalation FR
+
+**Minted prompt:** [`gap-2-subagent-scope-escalation-fr.md`](prompts/v2.2-orchestration/gap-2-subagent-scope-escalation-fr.md).
 
 **INTENT claim.** §"Sub-agent governance principles": "Agent profiles
 that repeatedly exceed scope MUST escalate governance mode for that
@@ -83,6 +94,8 @@ surface `governance.py` — needs ADR-18 Rule 1 carve-out decision at P0.
 
 ### Gap 3 — Dashboard regression watch
 
+**Minted prompt:** [`gap-3-dashboard-regression-watch.md`](prompts/v2.2-orchestration/gap-3-dashboard-regression-watch.md).
+
 **INTENT claim.** §"Hot zones (current)": "`dashboard/server.py`,
 `dashboard/static/index.html` — actively touched per cycle." §"UI /
 HITL principles" lists monitor-first three-frame, `desktop_pause`/
@@ -108,6 +121,8 @@ consolidation cycle.
 ---
 
 ### Gap 4 — API-timeout invariant test
+
+**Minted prompt:** [`gap-4-api-timeout-invariant-test.md`](prompts/v2.2-orchestration/gap-4-api-timeout-invariant-test.md).
 
 **INTENT claim.** Safety priority #5: "API timeouts must never block
 forwarding. A governance API failure degrades to OBSERVE; it does
@@ -138,11 +153,15 @@ or (c) defer some to v2.3.
 
 ### Gap 5 — Project-context rank + 400-token budget invariant test
 
+**Minted prompt:** [`gap-5-context-rank-budget-invariant.md`](prompts/v2.2-orchestration/gap-5-context-rank-budget-invariant.md).
+
 **Promotion criterion.** Any PR touches `project_context.py` OR
 INTENT-priority field rank changes OR alignment dip recurs and root
 cause traces to context-loading drift. Until then: seed.
 
 ### Gap 6 — Learn-mode ALLOW-promotion regression
+
+**Minted prompt:** [`gap-6-learn-mode-allow-promotion.md`](prompts/v2.2-orchestration/gap-6-learn-mode-allow-promotion.md).
 
 **Promotion criterion.** Learn Mode telemetry shows promotion count
 drop ≥ 30% week-over-week OR user reports a routine command (e.g.
@@ -151,6 +170,8 @@ then: seed.
 
 ### Gap 7 — Topology-discovery coverage
 
+**Minted prompt:** [`gap-7-topology-discovery-coverage.md`](prompts/v2.2-orchestration/gap-7-topology-discovery-coverage.md).
+
 **Promotion criterion.** New unknown-agent pattern surfaces in
 production logs (i.e. `agent_profiles` row with `role = "unknown"`
 persists > 1 cycle) OR a known-agent profile mis-classifies in a
@@ -158,12 +179,16 @@ ship-gate run. Until then: seed.
 
 ### Gap 8 — Out-of-scope guard scans
 
+**Minted prompt:** [`gap-8-out-of-scope-guard-scans.md`](prompts/v2.2-orchestration/gap-8-out-of-scope-guard-scans.md).
+
 **Promotion criterion.** Security review surfaces a concrete
 attack-vector PoC against one of the three INTENT §"Out of scope"
 items (transport modification, plaintext token storage, bus DB
 exfil) OR a related CVE-class issue is filed. Until then: seed.
 
 ### Gap 9 — "Governs messages, not transitions" boundary regression
+
+**Minted prompt:** [`gap-9-messages-not-transitions-boundary.md`](prompts/v2.2-orchestration/gap-9-messages-not-transitions-boundary.md).
 
 **Promotion criterion.** A todo / PR review surfaces a code path
 where SM gates one agent on another's completion (the exact INTENT-
@@ -175,6 +200,8 @@ gating helpers. Until then: seed.
 ## Low — bookkeeping drift (refresh at v2.2 P0, no new tracking)
 
 ### Gap 10 — Feature-cycle LOC ceiling carry-forward asymmetry
+
+**Minted prompt:** [`gap-10-loc-ceiling-asymmetry.md`](prompts/v2.2-orchestration/gap-10-loc-ceiling-asymmetry.md).
 
 **State.** INTENT §"Current cycle posture" lists 4 v2.2 carry-forwards
 including "feature-cycle LOC ceiling". todo.md folds it into #130
@@ -188,6 +215,8 @@ soak counter / alignment dip; or (b) trim the INTENT bullet to "see
 
 ### Gap 11 — `WIRED_LEVER_LEDGER_COUNT` = 0 surface
 
+**Minted prompt:** [`gap-11-wired-lever-ledger-surface.md`](prompts/v2.2-orchestration/gap-11-wired-lever-ledger-surface.md).
+
 **State.** INTENT §"ADR-18 governance regime" records counter = 0,
 DORMANT-N gate inert. Not surfaced as a plan-alignment-watch in todo.
 
@@ -196,6 +225,8 @@ v2.2 P0 mint IF v2.2 wires any new lever (counter bumps 0→1).
 Otherwise no-op.
 
 ### Gap 12 — `docs/jobs/MASTER.md` stale reference in INTENT
+
+**Minted prompt:** [`gap-12-master-stale-ref-strike.md`](prompts/v2.2-orchestration/gap-12-master-stale-ref-strike.md).
 
 **State.** INTENT §"Authoritative status references" still reads
 "still rows-stale on #111 hold-lift; update pending". todo sticking
