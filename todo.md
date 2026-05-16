@@ -34,16 +34,22 @@ cycle frame **NOT yet minted**. ADR-18 surface freeze in force;
       - #107 (v10 P0 formal design — shipped PR #121).
       - #108 (v10 P1 episode logging — shipped PR #121).
       - #109 (v10 P2 corpus augmentation — shipped PR #122).
-- [ ] **Correct `docs/jobs/MASTER.md`** row for #111 — "HELD (Q4)" →
+- [x] **Correct `docs/jobs/MASTER.md`** row for #111 — "HELD (Q4)" →
       "READY corpus-gated" to mirror `docs/v10-mvp-status.md` §2.
-      Also reconcile MASTER.md rows for #107 / #108 / #109 / #128 /
-      #129 (now CLOSED). Fold into v2.2 P0.
+      LANDED PR #158 (2026-05-16). MASTER.md rows for #107 / #108 /
+      #109 / #128 / #129 reconciled in same PR (LANDED bucket added,
+      legend extended with READY).
 
 ### 🟡 Carry-forwards from v2.1 (re-triage at v2.2 P0)
 
-- [ ] **Sonnet 0.95 → 0.8636 alignment dip row-level audit.** 🟡
-      severity per `docs/v2.1-backlog.md`. Prompt:
-      [task-alignment-dip-row-audit.md](docs/prompts/v2.2-orchestration/task-alignment-dip-row-audit.md).
+- [x] **Sonnet 0.95 → 0.8636 alignment dip row-level audit.** 🟡
+      LANDED PR #161 (2026-05-16, Step 1 of audit DOD). Two newly-
+      stably-wrong rows identified: `frog7-wirecli-module-10` and
+      `ambig-block-rm-reports-15` — both drift toward weaker verdict.
+      Step 2 (cassette replay) operator-bound; ADR-5 §"Caveats" + v2.1-
+      backlog §"Alignment-recovery" updated with row table + AUDITED
+      stamp. Disposition options: golden update / REQUIREMENTS
+      amendment / transient re-run — operator decides after Step 2.
 - [ ] **Dormant `JsonlTailWorker.start()` production wiring.** 🟢
       ~30 LOC non-additive runtime-shape change. No prompt yet — fold
       into v2.2 P1 task plan at cycle frame.
@@ -53,11 +59,21 @@ cycle frame **NOT yet minted**. ADR-18 surface freeze in force;
 
 ### 🟢 Standalone hardening (parallel to v2.2 substance)
 
-- [ ] **Cassette CI guard (#132).** Bootstrap baseline now available
-      from v2.1 P1–P3 envelope kinds. Prompt:
-      [task-cassette-ci-guard.md](docs/prompts/v2.2-orchestration/task-cassette-ci-guard.md).
-- [ ] **Robin capability hooks (#116 + #117).** Low pri. Prompt:
-      [task-robin-capability-hooks.md](docs/prompts/v2.2-orchestration/task-robin-capability-hooks.md).
+- [x] **Cassette CI guard (#132).** LANDED PR #159 (2026-05-16).
+      `src/stream_manager/envelope_kinds.py` allowlist + 
+      `tests/test_envelope_coverage.py` (2 assertions: cassette
+      coverage + write_envelope backfill audit). Scoped to
+      `bus.write_envelope` kinds; `Message.type` coverage remains
+      convention. Memory `feedback_cassette_must_cover_new_envelopes.md`
+      updated convention → enforced rule.
+- [x] **Robin capability hooks (#116 + #117).** LANDED PR #160
+      (2026-05-16). Pre-spike confirmed: PreToolUse hooks can target
+      `agent_type == "robin"` cleanly. `.claude/hooks/robin-bash-
+      timeout.ps1` rejects robin Bash with timeout > 300_000 ms; main
+      thread exempt. `permissions.deny` extended with
+      `Bash(sqlite3 *rl_episodes.db*)` + `Bash(sqlite3 *rl_shadow.db*)`
+      symmetric to main + robin (Python sqlite3 module remains
+      allowed).
 
 ### 🟢 v2.2 backlog seeds (do not promote without concrete use case)
 
@@ -121,22 +137,29 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    may be a multi-month horizon.
 3. **v2.1 P4 alignment dip (🟡)** is the open quality regression
    carried out of v2.1. Causally NOT PPP-attributable per close-out
-   analysis, but ADR-5 caveat documents the drop. Promote to 🔴 only
-   if v2.2 P0 reproduces on fresh control.
-4. **MASTER.md is stale** on #111 status (still says HELD Q4; reality
-   is hold lifted). One row edit; fold into v2.2 P0.
+   analysis. **Step 1 of audit DOD landed (PR #161, 2026-05-16)**:
+   2 newly-stably-wrong rows identified (`frog7-wirecli-module-10`
+   golden=SUGGEST → live=NONE; `ambig-block-rm-reports-15` golden=
+   GUIDE → live=SUGGEST) — both drift toward weaker. Step 2
+   (cassette replay) operator-bound. Promote to 🔴 only if v2.2 P0
+   reproduces on fresh control.
+4. ~~**MASTER.md is stale**~~ RESOLVED 2026-05-16 (PR #158). Row for
+   #111 corrected (HELD Q4 → READY corpus-gated); LANDED rows added
+   for #107 / #108 / #109 / #128 / #129; status legend extended with
+   `READY`.
 5. ~~**#128 + #129 GH issues are stale-OPEN.**~~ RESOLVED 2026-05-16.
    PM hygiene sweep closed five stale-OPEN issues: #107, #108, #109
    (v10 P0/P1/P2 — all shipped via PRs #106/#121/#122) + #128, #129
    (v2.1 P1/P3 — shipped via PRs #138/#145). MASTER.md reconciliation
-   remains (sticking point #4).
+   shipped in PR #158.
 6. **v2.2 cycle type undecided.** Feature vs consolidation — affects
    LOC budget, whether carry-forwards can fold in, and whether v2.x
    blocks the v10.x cycle slot (per #131 trigger cond 2). Operator
    decision at v2.2 P0 fire.
-7. **#116 PreToolUse pre-spike** (can hooks distinguish robin vs
-   main?) is BLOCKING for #116 capability-layer fix. If NO, fallback
-   is partial coverage; document the limit.
+7. ~~**#116 PreToolUse pre-spike**~~ RESOLVED 2026-05-16 (PR #160).
+   `agent_type` field in PreToolUse JSON discriminates main vs robin
+   cleanly per [docs](https://code.claude.com/docs/en/hooks). Full
+   capability-layer fix shipped (Bash timeout hook + sqlite3 deny).
 8. **No `--total-events` flag** in `tools/soak_driver.py` despite
    ADR-17 + soak-trigger matrix reference (v2.1-backlog 🟡 item).
    Disposition deferred from v2.1 to v2.2. Trivial PR either
