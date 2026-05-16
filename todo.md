@@ -163,7 +163,9 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    `agent_type` field in PreToolUse JSON discriminates main vs robin
    cleanly per [docs](https://code.claude.com/docs/en/hooks). Full
    capability-layer fix shipped (Bash timeout hook + sqlite3 deny).
-8. **No `--total-events` flag** in `tools/soak_driver.py` despite
-   ADR-17 + soak-trigger matrix reference (v2.1-backlog 🟡 item).
-   Disposition deferred from v2.1 to v2.2. Trivial PR either
-   direction.
+8. ~~**No `--total-events` flag**~~ RESOLVED 2026-05-16 (path B,
+   docs-only). ADR-17 + `docs/soak-trigger-matrix.md` rewritten to
+   reference `--total-seconds 120 --interval-seconds 20` form;
+   `tools/soak_driver.py` flag set unchanged. v2.1-backlog 🟡 item
+   marked RESOLVED. If a future cycle prefers Path A (add the flag),
+   reopen as a feature-cycle item.

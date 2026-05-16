@@ -76,18 +76,21 @@
 - **Prompt.** N/A.
 - **Next.** No action. Re-triage at v2.2 P0.
 
-### 1.5 🟡 `--total-events` flag drift — ADR-17 vs `soak_driver.py`
+### 1.5 ✅ `--total-events` flag drift — RESOLVED Path B 2026-05-16
 
 - **Scope.** Option A: add `--total-events` flag to `tools/soak_driver.py`
   matching ADR-17 + matrix wording. Option B: amend ADR-17 + matrix
   to reference `--total-seconds` form (drop flag from docs).
 - **Owner-bind.** Either path. Operator picks A vs B.
-- **Blocker.** Disposition choice (A vs B) pending.
-- **Est LOC.** ~15 (A: flag handler + arg parse + n-event-bounded loop)
-  OR ~5 docs (B).
-- **Prompt.** None. Trivial PR either direction.
+- **Disposition.** Path B chosen (docs-only). Reversible — if Path A
+  becomes preferred, reopen as a feature-cycle item.
+- **Est LOC.** ~16 docs (B); 0 src/test.
 - **Closes.** v2.1-backlog 🟡 §"`--total-events` flag drift".
-- **Next.** Wait for operator A/B pick at v2.2 P0.
+- **Status.** SHIPPED via PR #164 (branch
+  `docs/total-events-flag-drift-path-b`). ADR-17 Tier 1.5 + Tier
+  4-candidate + matrix quick-ref + Tier 3 default flag-name updated
+  to `--total-seconds`/`--interval-seconds` form. v2.1-backlog
+  entry rewritten to RESOLVED.
 
 ---
 
@@ -197,7 +200,7 @@ Items doable in any order vs the v10 chain:
 - 1.1 v2.2 P0 cycle frame (operator-bound).
 - 1.2 JsonlTailWorker wiring (post-1.1).
 - ~~1.3 Soak-summary probe-emit counter~~ — LANDED 2026-05-16.
-- 1.5 `--total-events` flag (anytime; trivial).
+- ~~1.5 `--total-events` flag~~ — LANDED 2026-05-16 (path B).
 - 3.1 PR #154 sign-off (operator-bound).
 
 ### Operator-bound items
@@ -214,8 +217,22 @@ Cannot be dispatched by an agent dev session:
 ### Agent-dispatchable items
 
 Could be picked up by a future dispatch pass without operator gating:
-- ~~1.3 soak-summary probe-emit counter~~ — LANDED 2026-05-16.
-- 1.5 path B (docs-only ADR-17 amendment) if operator picks B.
+- ~~1.3 soak-summary probe-emit counter~~ — LANDED 2026-05-16 (PR #163).
+- ~~1.5 path B (docs-only ADR-17 amendment)~~ — LANDED 2026-05-16 (this branch).
+
+### Operator-decision prompt minted 2026-05-16
+
+After the agent-dispatch pass shipped 1.3 (PR #163) + 1.5 path B,
+the remaining items are blocked on operator decisions / operator-
+only operational fires. A consolidated decision prompt covers them:
+
+```
+docs/prompts/operator-decisions-2026-05-16.md
+```
+
+Sections: 1.1 cycle-type, 1.2 wiring (post-1.1), 1.4 promotion
+seed, 2.1 corpus-fill fire, 2.2–2.6 v10 chain (sequentially gated),
+3.1 PR #154 sign-off.
 
 ### Memory + doc anchors
 
