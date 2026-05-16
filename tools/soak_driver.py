@@ -221,6 +221,11 @@ class _DriverState:
     samples: list[_MinuteSample] = field(default_factory=list)
     events_emitted: int = 0
     decision_actions: dict[str, int] = field(default_factory=dict)
+    # v2.2 carry-forward from v2.1: count of synthetic `audit.probe`
+    # envelopes fanned by `--ppp-auto-probe`. Printed in the soak-summary
+    # closing block so cassette-coverage cadence is observable per ADR-5
+    # §"PPP cadence note".
+    ppp_auto_probes_emitted: int = 0
 
 
 def _safe_db_count(db_path: Path, table: str) -> int | None:
@@ -1707,6 +1712,7 @@ def main() -> int:
             # Cassette envelope subscriber captures the wire shape.
             if args.ppp_auto_probe and next_idx > 0 and next_idx % 10 == 0:
                 _emit_ppp_auto_probe(bus, session_id, next_idx)
+                state.ppp_auto_probes_emitted += 1
 
             # Sleep a short tick; do not over-sleep so deadline-honor stays tight.
             time.sleep(0.5)
@@ -1802,6 +1808,7 @@ def main() -> int:
         f"rss_drift_mb={summary['rss_drift_mb']} verdict="
         f"{'PASS' if summary['overall_pass'] else 'FAIL'}"
     )
+    print(f"[soak] PPP auto-probes emitted: {state.ppp_auto_probes_emitted}")
     return 0 if summary["overall_pass"] else 2
 
 
