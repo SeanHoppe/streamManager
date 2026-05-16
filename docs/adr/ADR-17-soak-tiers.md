@@ -127,7 +127,9 @@ flag — `tools/soak_driver.py` flag surface is unchanged.
 python tools/soak_driver.py --cli-pool-size 2 --total-seconds 120 --interval-seconds 20
 ```
 
-- Wall-clock: ~90 s (~6 publish ticks at `--interval-seconds 20`).
+- Wall-clock: ~90 s (~6 publish ticks at `--interval-seconds 20`;
+  `soak_driver.py` default is 30 s, the override hits the ~6-tick
+  target inside the 120 s window).
 - Token cost: ~6 real `claude -p` calls (Haiku at typical L4 alignment
   band; mix may shift if `_L2_L3_TRIGGER` corpus selects different
   bands).

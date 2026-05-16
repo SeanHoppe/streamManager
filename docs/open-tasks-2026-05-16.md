@@ -86,11 +86,11 @@
   becomes preferred, reopen as a feature-cycle item.
 - **Est LOC.** ~16 docs (B); 0 src/test.
 - **Closes.** v2.1-backlog 🟡 §"`--total-events` flag drift".
-- **Status.** SHIPPED via branch `docs/total-events-flag-drift-path-b`
-  (PR pending). ADR-17 Tier 1.5 + Tier 4-candidate + matrix
-  quick-ref + Tier 3 default flag-name updated to
-  `--total-seconds`/`--interval-seconds` form. v2.1-backlog entry
-  rewritten to RESOLVED.
+- **Status.** SHIPPED via PR #164 (branch
+  `docs/total-events-flag-drift-path-b`). ADR-17 Tier 1.5 + Tier
+  4-candidate + matrix quick-ref + Tier 3 default flag-name updated
+  to `--total-seconds`/`--interval-seconds` form. v2.1-backlog
+  entry rewritten to RESOLVED.
 
 ---
 

@@ -50,7 +50,8 @@ For every PR that touches a row marked **Tier 1.5** above:
 
 For every PR that cuts a release tag (i.e. ship-gate PRs):
 
-1. Run Tier 3 (`--cli-pool-size 2`, default `--total-seconds`).
+1. Run Tier 3 (`--cli-pool-size 2`, default `--total-seconds`
+   = 1800 s / ~32 min wall-clock).
 2. Run alignment-eval `--ci-gate` (sonnet ≥ 0.95, haiku ≥ 0.85,
    0 FR-OG-7 regressions, 0 haiku regressions vs sonnet).
 3. Both pass before tagging.
