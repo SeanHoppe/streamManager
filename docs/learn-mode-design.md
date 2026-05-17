@@ -190,6 +190,19 @@ source cannot interrupt the ingest loop. The check runs at every
 expansion so a self-monitor file appearing under a watched glob *after*
 config load is still rejected.
 
+### 7.2.1 Production wiring env contract (v2.3 P1 Seed 6)
+
+`JsonlTailWorker` is wired at `dashboard/server.py`
+`@app.on_event("startup")` (peer to `session_watcher`). Env vars read
+at startup:
+
+| Env | Default | Purpose |
+|-----|---------|---------|
+| `BRIDGE_PROJECTS_DIR` | `~/.claude/projects` | Root directory tailed by the worker. |
+| `BRIDGE_PROJECT_SLUG` | `default` | Sub-directory under `BRIDGE_PROJECTS_DIR` selected as the tail target (single slug per worker; one worker per process). |
+| `BRIDGE_SM_PROJECT_SLUGS` | `streamManager` | Comma-separated SM-self slug set. **Polarity-flip refusal**: if `BRIDGE_PROJECT_SLUG` ∈ this set, the wire-site refuses to start the worker and logs WARNING — leakage is the loud failure path per CLAUDE.md §"Session-source exception rule". |
+| `SM_OWN_SESSION_ID` | empty | Per-record SM-self filter (`_is_sm_originated`). Unset = no per-record filter; defense reduces to wire-site refusal alone. |
+
 ### 7.3 Label propagation
 
 Each emitted envelope (`desktop_prompt` / `user_reply`) carries

@@ -14,23 +14,35 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture
-def reloaded_server(tmp_path, monkeypatch):
-    """Reload ``dashboard.server`` with a tmp gov.db and tmp projects_dir."""
+def _reload_server(tmp_path, monkeypatch, project_slug="test-slug"):
+    """Reload ``dashboard.server`` + ``jsonl_tail`` with fresh state.
+
+    Reloading ``jsonl_tail`` clears the per-process ``_ACTIVE_WORKER``
+    global between tests so ``get_active_worker()`` returns ``None``
+    pre-startup in every run.
+    """
     db = tmp_path / "gov.db"
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
     monkeypatch.setenv("GOV_DB", str(db))
     monkeypatch.setenv("BRIDGE_PROJECTS_DIR", str(projects_dir))
-    monkeypatch.setenv("BRIDGE_PROJECT_SLUG", "test-slug")
+    monkeypatch.setenv("BRIDGE_PROJECT_SLUG", project_slug)
     monkeypatch.setenv("SM_OWN_SESSION_ID", "test-own-session")
-    if "dashboard.server" in sys.modules:
-        del sys.modules["dashboard.server"]
-    if "stream_manager.desktop_commands" in sys.modules:
-        del sys.modules["stream_manager.desktop_commands"]
+    for mod in (
+        "dashboard.server",
+        "stream_manager.desktop_commands",
+        "stream_manager.jsonl_tail",
+    ):
+        if mod in sys.modules:
+            del sys.modules[mod]
     importlib.import_module("stream_manager.desktop_commands")
-    server = importlib.import_module("dashboard.server")
-    return server
+    importlib.import_module("stream_manager.jsonl_tail")
+    return importlib.import_module("dashboard.server")
+
+
+@pytest.fixture
+def reloaded_server(tmp_path, monkeypatch):
+    return _reload_server(tmp_path, monkeypatch)
 
 
 def test_jsonl_tail_worker_started_at_startup(reloaded_server):
@@ -62,3 +74,21 @@ def test_jsonl_tail_worker_stopped_at_shutdown(reloaded_server):
         "JsonlTailWorker still registered after dashboard shutdown. "
         "Check @app.on_event('shutdown') wiring + worker.stop() call."
     )
+
+
+def test_polarity_flip_refusal_when_slug_is_sm(tmp_path, monkeypatch):
+    """Refuse to start when project_slug is in SM exclusion set.
+
+    Per CLAUDE.md §"Session-source exception rule (polarity-flip)":
+    default-exclude SM by project-slug. If operator misconfigures
+    BRIDGE_PROJECT_SLUG to streamManager (or a worktree variant), the
+    wire-site MUST refuse and log loudly rather than tail SM-self.
+    """
+    server = _reload_server(tmp_path, monkeypatch, project_slug="streamManager")
+    from stream_manager.jsonl_tail import get_active_worker
+
+    with TestClient(server.app):
+        assert get_active_worker() is None, (
+            "JsonlTailWorker started despite project_slug=streamManager. "
+            "Polarity-flip wire-site refusal failed."
+        )

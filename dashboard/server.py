@@ -268,15 +268,45 @@ async def _startup_cli_pool() -> None:
     # v2.3 P1 Seed 6: JsonlTailWorker production wiring (lever wire;
     # WIRED_LEVER_LEDGER_COUNT 0 -> 1). Tails Desktop<->user dialogue
     # from `~/.claude/projects/` JSONL per the learn-mode design.
-    # SM-self filter binds via `SM_OWN_SESSION_ID` env + the
-    # polarity-flip project-slug exclusion in `_is_sm_originated`
-    # (per `feedback_no_self_monitor.md`). Daemon thread; idempotent.
-    # Best-effort — failure must never block dashboard startup.
+    #
+    # Polarity-flip enforcement (per CLAUDE.md §"Session-source
+    # exception rule" + `feedback_no_self_monitor.md`):
+    # 1. Wire-site refusal: if `BRIDGE_PROJECT_SLUG` is in the SM
+    #    slug set (`BRIDGE_SM_PROJECT_SLUGS`, default `{"streamManager"}`),
+    #    refuse to start. Default-exclude SM by project-slug — leakage
+    #    is the loud failure path (log + skip), not silent corpus poison.
+    # 2. Per-record defense: `_is_sm_originated` filters individual
+    #    JSONL records by cached `SM_OWN_SESSION_ID` (second layer).
+    #
+    # Governance ref intentionally `None` for v2.3 wire — the dashboard
+    # process does not own per-session engines (see `_get_engine_registry`
+    # comment). v2.1 P2 canary timeout re-fire degrades to envelope-only
+    # failure as a result; v2.4 candidate is to wire a process-wide
+    # governance ref or hand the canary registry a different injection
+    # point. Daemon thread; idempotent. Best-effort — failure must never
+    # block dashboard startup.
     try:
         from stream_manager.jsonl_tail import JsonlTailWorker
         bus = _get_bus()
         registry = _get_registry()
-        if bus is not None and registry is not None:
+        project_slug = os.environ.get("BRIDGE_PROJECT_SLUG", "default")
+        # Polarity-flip wire-site refusal.
+        _sm_slugs_raw = os.environ.get(
+            "BRIDGE_SM_PROJECT_SLUGS", "streamManager"
+        )
+        _sm_slugs = frozenset(
+            s.strip() for s in _sm_slugs_raw.split(",") if s.strip()
+        )
+        if project_slug in _sm_slugs:
+            log.warning(
+                "jsonl_tail: REFUSED to start — project_slug=%s is in "
+                "SM exclusion set %s (polarity-flip per CLAUDE.md). "
+                "Set BRIDGE_PROJECT_SLUG to a non-SM project (e.g. the "
+                "monitored target) before restarting.",
+                project_slug,
+                sorted(_sm_slugs),
+            )
+        elif bus is not None and registry is not None:
             projects_dir = Path(
                 os.environ.get(
                     "BRIDGE_PROJECTS_DIR",
@@ -290,14 +320,14 @@ async def _startup_cli_pool() -> None:
                 governance=None,
             )
             session_id = os.environ.get("SM_OWN_SESSION_ID", "")
-            project_slug = os.environ.get("BRIDGE_PROJECT_SLUG", "default")
             worker.start(session_id=session_id, project_slug=project_slug)
             log.info(
                 "jsonl_tail: started (projects_dir=%s, slug=%s, "
-                "own_session=%s)",
+                "own_session=%s, excl_slugs=%s)",
                 projects_dir,
                 project_slug,
                 session_id or "<unset>",
+                sorted(_sm_slugs),
             )
     except Exception:
         log.exception("jsonl_tail: startup raised; continuing")
