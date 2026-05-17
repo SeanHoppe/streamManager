@@ -265,6 +265,42 @@ async def _startup_cli_pool() -> None:
             start_session_watcher(bus)
     except Exception:
         log.exception("session_watcher: startup raised; continuing")
+    # v2.3 P1 Seed 6: JsonlTailWorker production wiring (lever wire;
+    # WIRED_LEVER_LEDGER_COUNT 0 -> 1). Tails Desktop<->user dialogue
+    # from `~/.claude/projects/` JSONL per the learn-mode design.
+    # SM-self filter binds via `SM_OWN_SESSION_ID` env + the
+    # polarity-flip project-slug exclusion in `_is_sm_originated`
+    # (per `feedback_no_self_monitor.md`). Daemon thread; idempotent.
+    # Best-effort — failure must never block dashboard startup.
+    try:
+        from stream_manager.jsonl_tail import JsonlTailWorker
+        bus = _get_bus()
+        registry = _get_registry()
+        if bus is not None and registry is not None:
+            projects_dir = Path(
+                os.environ.get(
+                    "BRIDGE_PROJECTS_DIR",
+                    str(Path.home() / ".claude" / "projects"),
+                )
+            )
+            worker = JsonlTailWorker(
+                projects_dir=projects_dir,
+                registry=registry,
+                bus=bus,
+                governance=None,
+            )
+            session_id = os.environ.get("SM_OWN_SESSION_ID", "")
+            project_slug = os.environ.get("BRIDGE_PROJECT_SLUG", "default")
+            worker.start(session_id=session_id, project_slug=project_slug)
+            log.info(
+                "jsonl_tail: started (projects_dir=%s, slug=%s, "
+                "own_session=%s)",
+                projects_dir,
+                project_slug,
+                session_id or "<unset>",
+            )
+    except Exception:
+        log.exception("jsonl_tail: startup raised; continuing")
 
 
 @app.on_event("shutdown")
@@ -283,6 +319,15 @@ async def _shutdown_cli_pool_event() -> None:
         stop_session_watcher()
     except Exception:
         log.exception("session_watcher: shutdown raised; continuing")
+    # v2.3 P1 Seed 6: stop JsonlTailWorker (daemon thread; 2s join in
+    # worker.stop() each on tail + sweep threads).
+    try:
+        from stream_manager.jsonl_tail import get_active_worker
+        w = get_active_worker()
+        if w is not None:
+            w.stop()
+    except Exception:
+        log.exception("jsonl_tail: shutdown raised; continuing")
     # v10 P4 B': release rl.bus_subscriber's EpisodeLogger WAL handle on
     # rl_episodes.db. Idempotent no-op when env was unset (_rl_logger_close
     # stays None). Run before _shutdown_cli_pool() so any final
