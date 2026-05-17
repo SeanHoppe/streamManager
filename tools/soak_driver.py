@@ -182,6 +182,71 @@ def _build_payload_sequence(seed: int = 4242) -> list[tuple[str, str]]:
     return items
 
 
+# ---- v2.3 P1 Seed 4: cycle-discipline LOC delta dual-anchor --------------
+# ADR-18 Amendment C binding gate = cycle-tip (`BRIDGE_CYCLE_TIP_SHA`).
+# Amendment A narrative comparator = predecessor-tag
+# (`BRIDGE_PREDECESSOR_TAG_SHA`). Cycle classification via
+# `BRIDGE_CYCLE_TYPE` ∈ {"consolidation", "feature"}; sets gate verdict.
+# Output is purely additive in the post-soak summary; no surface change.
+
+import re as _re
+
+_LOC_RE_INS = _re.compile(r"(\d+) insertion")
+_LOC_RE_DEL = _re.compile(r"(\d+) deletion")
+
+
+def _git_diff_loc(anchor_sha: str) -> tuple[int, int, int] | str:
+    """Return ``(insertions, deletions, net)`` or a sentinel string.
+
+    Sentinels: ``"UNSET"`` (env not provided), ``"INVALID-SHA"`` (anchor
+    not in this repo), ``"NOT-A-GIT-REPO"`` (no git binary or not a
+    checkout). Empty diff returns ``(0, 0, 0)``.
+    """
+    if not anchor_sha:
+        return "UNSET"
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--shortstat", f"{anchor_sha}..HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=str(ROOT),
+        )
+    except FileNotFoundError:
+        return "NOT-A-GIT-REPO"
+    except subprocess.CalledProcessError:
+        return "INVALID-SHA"
+    out = proc.stdout.strip()
+    if not out:
+        return (0, 0, 0)
+    ins = _LOC_RE_INS.search(out)
+    dele = _LOC_RE_DEL.search(out)
+    ins_n = int(ins.group(1)) if ins else 0
+    del_n = int(dele.group(1)) if dele else 0
+    return (ins_n, del_n, ins_n - del_n)
+
+
+def _gate_verdict(result: tuple[int, int, int] | str, cycle_type: str) -> str:
+    """Cycle-discipline gate verdict from LOC result + cycle type."""
+    if isinstance(result, str):
+        return "UNKNOWN"
+    _, _, net = result
+    if cycle_type == "consolidation":
+        return "PASS" if net <= 0 else "BLOCK"
+    if cycle_type == "feature":
+        return "PASS" if net < 2250 else "BLOCK"
+    return "UNKNOWN"
+
+
+def _fmt_loc_cell(result: tuple[int, int, int] | str) -> str:
+    """Render a LOC result for table / stdout."""
+    if isinstance(result, str):
+        return result
+    ins, dele, net = result
+    sign = "+" if net >= 0 else ""
+    return f"+{ins} / -{dele} / {sign}{net}"
+
+
 # ---- metrics bookkeeping -------------------------------------------------
 
 @dataclass
@@ -876,6 +941,31 @@ def _write_report(
             lines.append(f"- {action}: {n} ({n/total*100:.1f}%)")
     else:
         lines.append("- (none recorded)")
+    lines.append("")
+
+    # v2.3 P1 Seed 4: cycle-discipline LOC delta dual-anchor block.
+    # Binding gate (Amendment C) = cycle-tip; narrative (Amendment A) =
+    # predecessor-tag. Env-driven so ship-gate operator does not have to
+    # thread CLI flags through P2 prompts each cycle.
+    _tip_sha = os.environ.get("BRIDGE_CYCLE_TIP_SHA", "")
+    _pred_sha = os.environ.get("BRIDGE_PREDECESSOR_TAG_SHA", "")
+    _ctype = os.environ.get("BRIDGE_CYCLE_TYPE", "")
+    _tip_res = _git_diff_loc(_tip_sha)
+    _pred_res = _git_diff_loc(_pred_sha)
+    _verdict = _gate_verdict(_tip_res, _ctype)
+    _tip_short = _tip_sha[:7] if _tip_sha else "UNSET"
+    _pred_short = _pred_sha[:7] if _pred_sha else "UNSET"
+    lines.append("## Cycle-discipline LOC delta")
+    lines.append("")
+    lines.append("| Anchor              | SHA          | Gate?     | LOC delta (insertions / deletions / net) |")
+    lines.append("|---------------------|--------------|-----------|------------------------------------------|")
+    lines.append(f"| Cycle-tip (Amend C) | {_tip_short:<12} | BINDING   | {_fmt_loc_cell(_tip_res)} |")
+    lines.append(f"| Predecessor-tag (A) | {_pred_short:<12} | NARRATIVE | {_fmt_loc_cell(_pred_res)} |")
+    lines.append("")
+    lines.append(f"**Gate verdict (Amendment C):** {_verdict}")
+    lines.append("- Consolidation cycle: net ≤ 0 vs cycle-tip = PASS.")
+    lines.append("- Feature cycle: net < 2250 (1.5× soft target) vs cycle-tip = PASS; ≥ 2250 = BLOCK.")
+    lines.append(f"- Cycle type from `BRIDGE_CYCLE_TYPE`: `{_ctype or 'UNSET'}` (UNKNOWN if unset).")
     lines.append("")
 
     lines.append("## Latency (engine.evaluate wall-clock)")
@@ -1817,6 +1907,15 @@ def main() -> int:
     print(f"[soak] PPP auto-probes emitted: {state.ppp_auto_probes_emitted}")
     canary = "PASS" if state.synthetic_timeout_degrades == 0 else "FAIL"
     print(f"[soak] invariant-degrade canary: {canary} (degrade_count={state.synthetic_timeout_degrades})")
+    # v2.3 P1 Seed 4: dual-anchor LOC delta stdout lines.
+    _tip_sha_s = os.environ.get("BRIDGE_CYCLE_TIP_SHA", "")
+    _pred_sha_s = os.environ.get("BRIDGE_PREDECESSOR_TAG_SHA", "")
+    _ctype_s = os.environ.get("BRIDGE_CYCLE_TYPE", "")
+    _tip_r = _git_diff_loc(_tip_sha_s)
+    _pred_r = _git_diff_loc(_pred_sha_s)
+    _v = _gate_verdict(_tip_r, _ctype_s)
+    print(f"[soak] cycle-tip LOC delta (Amend C): {_fmt_loc_cell(_tip_r)}  [{_v}]")
+    print(f"[soak] predecessor-tag LOC delta (Amend A): {_fmt_loc_cell(_pred_r)}  [narrative]")
     return 0 if summary["overall_pass"] else 2
 
 
