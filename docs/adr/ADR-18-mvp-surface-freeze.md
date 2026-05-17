@@ -393,9 +393,12 @@ point refine the threshold before locking.
       captured in this Amendment body).
 - [x] §C2 per-phase sub-question explicitly DROPPED (deferred
       post-v2.3; cycle-wide measurement only at v2.2).
-- [ ] `tools/soak_driver.py` post-soak LOC delta summary updated
+- [x] `tools/soak_driver.py` post-soak LOC delta summary updated
       against new threshold (P2 ship-gate scope — additive output
-      only).
+      only). **LANDED v2.3 P1 Seed 4** (`task-amendment-soak-summary-
+      dual-anchor.md`); dual-anchor block + stdout lines render
+      cycle-tip (binding gate) + predecessor-tag (narrative) at
+      every soak summary.
 
 ### 2026-05-16 — v2.2 P0 Amendment B: Rule 6 (NEW) — memory pre-flight at cycle frame (closes #133)
 
@@ -504,8 +507,7 @@ P0 prompts MUST cite both anchors verbatim.
 - [x] Rule 3 main text cross-link added (see §"Rule 3" / Amendment-C
       pointer below).
 - [x] First applied: this PR (v2.2 P2 ship-gate).
-- [ ] `tools/soak_driver.py` post-soak LOC delta summary updated to
-      emit both anchors (cycle-tip + predecessor-tag) — Amendment A
-      open acceptance item L388 carries forward to v2.3 (no code
-      edit at v2.2 P2 per ADR-18 surface freeze + P2 prompt
-      do-not-touch guard).
+- [x] `tools/soak_driver.py` post-soak LOC delta summary updated to
+      emit both anchors (cycle-tip + predecessor-tag). **LANDED v2.3
+      P1 Seed 4** (`task-amendment-soak-summary-dual-anchor.md`);
+      shared acceptance with Amendment A L388 above.
