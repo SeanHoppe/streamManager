@@ -94,6 +94,7 @@ Phase-weighted (P0 + P0a + P1 + P2 + P3 = 5 of 7 phases shipped):
   - TODO(v10-P4): no shipped helper to extract `governance_decision` from soak-sse ndjson; either land helper or wire `EpisodeLogger` as live bus subscriber (P1 live-subscriber gap).
 - Predecessor: P3 merged ✅ + ≥ 200 live episodes accumulated (NOT YET).
 - **Episode count 2026-05-12:** total=0, live=0 (`rl_episodes.db` absent — soak-fill pending).
+- **Episode count 2026-05-17 (post v2.2 ship-gate piggyback soak):** total=60, live=60 (`tmp/rl_episodes.db` populated by Tier-3 ship-gate soak run with `BRIDGE_RL_LOGGER_ENABLED=1`). **30 % of the 200-row gate.** Phase 4 still BLOCKED on data; next dispatch chooses Path A re-soak (continued live capture) or Path B backfill from `tmp/soak_gov.db` per `task-p4-corpus-fill.md`. Note: `tools/soak_driver.py:1574` imports `rl.bus_subscriber` unconditionally; run with `PYTHONPATH=.` until pyproject-package or import-guard fix lands.
 
 ### P5 — Shadow A/B + ship criteria (🔒 BLOCKED on #111, 0%)
 

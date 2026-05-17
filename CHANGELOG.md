@@ -6,6 +6,91 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-05-17
+
+Tagged ship of the v2.2 consolidation cycle — **gap-4 API-timeout
+invariant test + Tier-3 invariant-degrade canary**, plus the
+operator-discipline amendments that landed at cycle frame and
+ship-gate. See `docs/v2.2-task-plan.md` for the cycle frame +
+phase ledger and `docs/adr/ADR-5-latency-budget.md` §"v2.2
+ship-gate baseline" for the ship-gate numbers.
+
+**ADR-18 surface freeze remains in force.** Consolidation cycle:
+net cycle LOC = **−6** vs P0-merge tip (`fbd0fb2`); narrative
+delta vs v2.1.0 tag (`8303f38`) = +1251 LOC (decomposed in
+ADR-5 baseline). `WIRED_LEVER_LEDGER_COUNT` unchanged at 0;
+DORMANT-N gate inert for the 3rd consecutive cycle.
+
+### Added
+
+- **Gap-4 API-timeout invariant test**
+  ([PR #168](https://github.com/SeanHoppe/streamManager/pull/168)) —
+  `tests/test_api_timeout_invariant.py`: 4 cases covering CLI timeout
+  + 5xx (500/502/503) fault classes, asserting fallthrough verdict
+  `ALLOW` + `source="default"` + bounded latency under the
+  `BRIDGE_FALLBACK_LATENCY_BUDGET_MS` budget (35 000 ms).
+- **Latency-budget drift-guard test** — `tests/test_latency_budgets_invariant.py`.
+- **Single-export budget constant module** —
+  `src/stream_manager/latency_budgets.py` (ADR-18-non-FROZEN).
+- **Tier-3 soak invariant-degrade canary** — counter-backed,
+  markdown + stdout render sites in `tools/soak_driver.py`. v2.2.0
+  ship-gate soak measured `degrade_count = 0` (PASS).
+
+### Changed
+
+- **ADR-18 §"Amendments"**:
+  - **Amendment A** (v2.2 P0) — Rule 3 extension: feature-cycle LOC
+    soft target ≤ 1500 (BLOCK at 1.5× = 2250); provisional through
+    v2.3 P0. Closes #130.
+  - **Amendment B** (v2.2 P0) — Rule 6 (NEW): memory pre-flight at
+    cycle frame mints. Closes #133.
+  - **Amendment C** (v2.2 P2; this ship-gate PR) — Rule 3 anchor:
+    cycle-discipline gate binds at the **P0-merge tip** of the
+    cycle being shipped, not at the predecessor cycle's release
+    tag. Predecessor tag retained as narrative comparator only.
+    Resolves the v2.2 P2 false-BLOCK observed at literal
+    `8303f38..HEAD` reading (+1251 LOC) vs the actual cycle delta
+    against `fbd0fb2..HEAD` (−6 LOC).
+- **INTENT.md** — Gap-10 (Option B: LOC ceiling pointer) and gap-12
+  (bookkeeping) strikes applied at P0. Gap-doc bullet retired at
+  P2 ship-gate per its own lifetime rule.
+- **Engine fallthrough semantics — documented.** Gap-4 test
+  asserts that `cli_decision = None` produces verdict `ALLOW` +
+  `source="default"` (matches `governance.py` engine fallthrough;
+  spec-vs-implementation reconciled at PR #168 review).
+
+### Removed
+
+- `tools/replay_transcript.py` (121 LOC) — gap-4 P1 deletion offset.
+- `tools/README.md` pointers to the removed script (2 LOC).
+- `docs/intent-todo-gap-2026-05-16.md` — retired at v2.2 P2
+  ship-gate per its own lifetime clause (P0 cycle frame minted +
+  gap-4 landed at v2.2.0). INTENT.md §"Authoritative status
+  references" bullet stripped in the same PR.
+
+### Deferred / carry-forward
+
+- **p95 regression watch.** Overall p95 +4.54 s vs v2.1 ship-gate
+  (driver localised to `cli_pool_send_ms` +1570 ms p95). Most
+  plausible cause is Sonnet endpoint round-trip variance at n=49.
+  Re-measure at v2.3 ship-gate.
+- **Haiku floor watch.** Haiku alignment pass rate dipped 0.95 →
+  0.85 (floor exactly). One row flip from this position triggers
+  a haiku-floor breach.
+- **v10 P4 corpus-fill** — soak piggyback yielded 60 live episodes
+  in `tmp/rl_episodes.db` (30 % of the 200-row gate). Phase 4
+  remains BLOCKED on data; operator-bound for next dispatch.
+- **Soak-driver PYTHONPATH bug** — `tools/soak_driver.py:1574`
+  imports `rl.bus_subscriber` unconditionally while `rl/` is not
+  a pyproject-declared package. Workaround: prepend `PYTHONPATH=.`.
+  Fix at v2.3 P1 or hardening.
+- **Alignment-recovery investigation** — CLOSED at v2.2 ship-gate
+  (`docs/v2.1-backlog.md` §"Alignment-recovery investigation"
+  disposition update).
+- **`JsonlTailWorker.start()` production wiring** — DEFERRED v2.3
+  (runtime-shape change is feature surface; out of v2.2
+  consolidation scope).
+
 ## [2.1.0] — 2026-05-11
 
 Tagged ship of the v2.1 feature cycle — **PPP audit harness ships

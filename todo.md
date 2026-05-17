@@ -175,10 +175,10 @@ PRs #155 + #156 just merged to enable corpus-fill paths.
    2026-05-16 at v2.2 P0 fire. 12 gaps logged in
    [`docs/intent-todo-gap-2026-05-16.md`](docs/intent-todo-gap-2026-05-16.md);
    per-gap dispositions in `docs/v2.2-task-plan.md` §"INTENT.md
-   gap-analysis dispositions". Gaps 1/2/3 DEFERRED v2.3; gap-4
-   FOLDED v2.2 P1; gaps 5–9 GRADUATED to v2.2-backlog; gaps 10/12
-   LANDED at this P0; gap-11 LANDED NO-OP (consolidation wires no
-   levers).
+   gap-analysis dispositions". Gaps 1/2/3 DEFERRED v2.3; **gap-4
+   LANDED v2.2 P1 (PR #168, 2026-05-17)**; gaps 5–9 GRADUATED to
+   v2.2-backlog; gaps 10/12 LANDED at this P0; gap-11 LANDED NO-OP
+   (consolidation wires no levers).
 
    **Individual prompts minted 2026-05-16** under
    `docs/prompts/v2.2-orchestration/`:

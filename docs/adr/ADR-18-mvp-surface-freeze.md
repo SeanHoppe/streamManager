@@ -161,6 +161,14 @@ Exceeding the target requires either:
 v1.9 added ~2800 LOC. v2.0 is declared a **consolidation cycle**:
 target ≤ 0 LOC net add (deletion-positive). See `docs/v2.0-task-plan.md`.
 
+**v2.2 P2 Amendment C anchor clarification.** The `origin/main..HEAD`
+diff command above is the cycle-discipline gate. v2.2 P0 Amendment A
+§"Cycle-start commit anchor" cited the predecessor cycle's release-
+tag SHA; v2.2 P2 Amendment C clarifies that **gate** measurement
+anchors at the **P0-merge tip** of the cycle being shipped (cycle
+budget binds cycle-authored work only — pre-cycle drift is reported
+as narrative figure, not gated). See §"Amendments" 2026-05-17.
+
 ### Rule 4: phase budget
 
 Maximum **3 numbered phases** per cycle (excluding P0 cycle frame and
@@ -422,3 +430,82 @@ v2.2 P0 PR body carries the first compliant pre-flight stamp.
       already carries the DOD line enforcing pre-flight (minted
       at v2.1 P4 ship-gate).
 - [x] First applied: this PR.
+
+### 2026-05-17 — v2.2 P2 Amendment C: Rule 3 anchor — cycle-tip vs predecessor-tag (post-hoc clarification)
+
+**Problem.** Rule 3 main text and v2.2 P0 Amendment A both anchor the
+ship-gate LOC measurement at the prior cycle's release-tag SHA (v2.1.0
+= `8303f38` for v2.2). v2.2 P2 ship-gate measurement against
+`8303f38..HEAD` registered **+1251 LOC** despite the v2.2 cycle itself
+(P0 + P1 measured at `fbd0fb2..HEAD`) coming in at **−6 LOC**. The
++1257 difference is post-v2.1.0-tag inter-cycle commits landed on
+`main` between the v2.1 release tag and the v2.2 P0 cycle frame mint:
+
+- PR #155 — v10 P4 B' live MessageBus → `rl_episodes.db` subscriber.
+- PR #156 — backfill extractor (gov.db → rl-episodes JSONL).
+- PR #159 — cassette CI guard for FR-PPP envelope kinds (#132).
+- PR #163 — soak-summary probe-emit counter (~5 LOC additive).
+
+None of those were v2.2-cycle work; they landed without cycle
+classification (v10 RL companion track + minor v2.1-follow-up
+hardening). The predecessor-tag anchor counted them against v2.2's
+consolidation budget, producing a false BLOCK signal at the literal
+`8303f38..HEAD` reading.
+
+**Clarification.** Cycle-LOC discipline at ship-gate is measured at
+the **P0-merge tip** of the cycle being shipped, NOT the
+predecessor-cycle release tag. For v2.2 that is `fbd0fb2` (commit of
+PR #167 `chore(v2.2): P0 cycle frame`). The predecessor-tag anchor
+is retained for **cycle-impact narrative** in the close memory +
+CHANGELOG (so operators read the full delta-since-last-tag), but the
+**net-LOC BLOCK gates** (consolidation ≤ 0, feature ≤ 1500 soft /
+2250 BLOCK per Amendment A) bind to the cycle-tip anchor.
+
+**Why this shape.** Cycle budget is a *cycle-discipline* lever — its
+job is to bind work done *within* the cycle's authored scope, not
+work that drifted onto main between tag and frame. Pre-cycle drift
+is real and worth tracking (post-tag PRs that landed without cycle
+classification), but a cycle's discipline gate cannot police it
+retroactively. ADR-18 Amendment B Rule 6 memory pre-flight covers
+the operator-awareness side at frame time; this amendment makes the
+gate-arithmetic side match.
+
+**Cycle-tip anchor commands.**
+
+- Consolidation cycle gate: `git diff <P0-merge-sha>..HEAD --stat --
+  src tests tools dashboard` — net ≤ 0.
+- Feature cycle gate (per Amendment A): same command, with net ≤
+  1500 soft / 2250 BLOCK.
+- Narrative figure (CHANGELOG + close memory): `git diff <prior-
+  tag>..HEAD --stat -- src tests tools dashboard` — reported as
+  cycle-impact-plus-drift, decomposed if material.
+
+**v2.2 application (this PR).**
+
+- Cycle delta vs `fbd0fb2` = **−6 LOC** (P1 gap-4 net deletion;
+  consolidation gate PASS).
+- Inter-cycle drift `8303f38..fbd0fb2` = **+1257 LOC** (PRs
+  #155/#156/#159/#163; all EVOLVING-surface RL track + minor
+  hardening, out of v2.2 scope).
+- Predecessor-tag narrative `8303f38..HEAD` = **+1251 LOC**.
+
+Cycle-tip anchor cleared; ship v2.2.0.
+
+**Carry-forward.** v2.3 P0 cycle frame inherits this clarification.
+Amendment A §"Cycle-start commit anchor" text reads as if predecessor-
+tag is the gate anchor; that subsection is **superseded by Amendment
+C** for gate purposes (anchor moves to P0-merge tip) and retained for
+narrative purposes (anchor moves to prior tag). Future feature-cycle
+P0 prompts MUST cite both anchors verbatim.
+
+**Acceptance.**
+
+- [x] Amendment text in this entry.
+- [x] Rule 3 main text cross-link added (see §"Rule 3" / Amendment-C
+      pointer below).
+- [x] First applied: this PR (v2.2 P2 ship-gate).
+- [ ] `tools/soak_driver.py` post-soak LOC delta summary updated to
+      emit both anchors (cycle-tip + predecessor-tag) — Amendment A
+      open acceptance item L388 carries forward to v2.3 (no code
+      edit at v2.2 P2 per ADR-18 surface freeze + P2 prompt
+      do-not-touch guard).
