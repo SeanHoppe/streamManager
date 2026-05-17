@@ -1594,11 +1594,18 @@ endpoint variance.
   available — operator-bound investigation: which specific rows
   flipped between v2.2 stable-but-passing and v2.3 stable-but-
   failing? **Carry-forward as 🟡 v2.4 seed** (Sonnet-row-flip
-  investigation). Multiple `cli governance timeout (>25.0 s);
-  degrading` lines observed during the eval — gap-4 invariant
-  firing → default ALLOW verdict mismatches expected
-  BLOCK/INTERVENE for some rows; the seed must investigate
-  whether the dip is correlated with rows whose CLI calls degrade.
+  investigation). **Hypothesis (NOT YET EVIDENCED in the eval
+  report)**: during the `--ci-gate` invocation the BG task stdout
+  (`bezcvi45c` runner output, NOT persisted to the
+  `reports/alignment-eval-*.{md,json}` artefact) contained multiple
+  `cli governance timeout (>25.0 s); degrading` markers; if those
+  reproduce + correlate to specific row IDs, gap-4 invariant would
+  fire → default ALLOW verdict mismatches expected
+  BLOCK/INTERVENE. The v2.4 seed must (a) re-run with stdout
+  captured AND (b) check whether the specific DIP rows correlate
+  with degrade events. Not load-bearing for ship — `--ci-gate`
+  exit was 0 either way (0 FR-OG-7 regressions; 0 haiku-vs-sonnet
+  regressions).
 
 
 
@@ -1616,15 +1623,39 @@ endpoint variance.
 
 ### LOC delta (Amendment C cycle-tip binding gate)
 
-- Cycle-tip (`a6051fc..HEAD`): **+499 / -38 / +461 LOC** (3-bucket
-  scope: `src/` + `tests/` + `tools/` + `dashboard/` + `docs/`).
-- Predecessor-tag narrative (`3235144..HEAD`): +1900 / -8 / +1892
-  LOC (decomposed: +461 cycle work + +1431 inter-cycle drift from
-  v2.2 ship + PR #169 / #170 close-out).
-- **Gate verdict (Amendment C): PASS** at feature thresholds (net
-  < 2250). 31% of soft target 1500.
+**Snapshot timing.** Two measurements exist; both PASS at feature
+thresholds. The Seed 4 dual-anchor block renders the
+**soak-fire-time snapshot** (soak driver runs `git diff
+--shortstat` at summary render time, capturing state at the end
+of the Tier-3 soak — BEFORE the ship-gate close-out commit is
+assembled). The **PR-merge-tip** snapshot captures the full
+cycle-tip → ship-gate-HEAD diff including this ship-gate close-out
+PR itself.
+
+| Snapshot               | Anchor                  | Insertions | Deletions | Net | Gate verdict       |
+|------------------------|-------------------------|-----------:|----------:|----:|--------------------|
+| Soak-fire-time (Seed 4 in soak report L34-42) | `a6051fc..HEAD@soak` | 499 | 38 | **+461** | PASS (31% of 1500 soft) |
+| PR-merge-tip (3-bucket filter `-- src tests tools dashboard docs`) | `a6051fc..HEAD@ship-pr` | 739 | 40 | **+699** | PASS (47% of 1500 soft) |
+| PR-merge-tip (full diff, all files including `reports/` + `CHANGELOG.md`) | `a6051fc..HEAD@ship-pr` | 2032 | 41 | +1991 | PASS (88% of 1500 soft; reports + CHANGELOG bulk dominates) |
+
+**Binding gate per Amendment C** = PR-merge-tip 3-bucket-filtered =
+**+699 net**. Reports/ + CHANGELOG narrative bulk is advisory only
+per Amendment A 3-bucket scope; the soak-fire-time +461 figure is
+the value that mechanised into the soak report.
+
+- Predecessor-tag narrative (`3235144..HEAD@soak`): +1900 / -8 /
+  +1892 LOC (decomposed: +461 cycle work to soak fire + +1431
+  inter-cycle drift from v2.2 ship + PR #169 / #170 close-out).
+  At PR-merge-tip the predecessor-tag narrative is larger because
+  this PR's reports/CHANGELOG add to both anchors; not load-bearing
+  for the gate.
+- **Gate verdict (Amendment C): PASS at both snapshots.**
 - Seed 4 dual-anchor block renders byte-identical in the ship-gate
   soak report at L34-42; first cycle to mechanise the dual-anchor.
+- **v2.4 P2 prompt seed**: codify which snapshot binds the gate
+  (the prompt today is ambiguous; v2.3 demonstrates both pass so no
+  block this cycle, but a future feature cycle near 1500 LOC could
+  see snapshots straddling the threshold).
 
 ### Status
 
@@ -1637,12 +1668,22 @@ ADR-18 continue to apply at v2.4 unchanged.
   classify; carry-forward watch into v2.4 alongside Seed 1.
 - LM categorize p95 +0.90 s vs v2.2 — also small-n; same watch.
 - Lever-ledger scope split between soak (0) and production (1) is
-  new at v2.3; v2.4 P2 ship-gate prompt should clarify which scope
-  binds for the `WIRED_LEVER_LEDGER_COUNT` field in close memory.
-- The +1448 ms `cli_pool_send_ms` recovery does NOT prove the v2.2
-  excursion was 100% Sonnet variance — at minimum one more cycle
-  (v2.4) of stable cli_pool_send_ms ≤ 6500 ms is needed before the
-  hypothesis becomes load-bearing for ADR-5 budget recompute.
+  new at v2.3; carry-forward as v2.4 P2 prompt seed
+  (`docs/v2.3-next-steps.md` §"NEW v2.3 ship-gate seeds" #5).
+  v2.4 P2 should bind which scope counts for the
+  `WIRED_LEVER_LEDGER_COUNT` field in close memory.
+- **Rigor disclaimer.** The v2.2 → v2.3 `cli_pool_send_ms` p95
+  −1448 ms recovery is consistent with the Sonnet endpoint
+  run-to-run variance hypothesis but does NOT prove it was 100% the
+  cause — what's confirmed is "the +1570 ms v2.2 excursion did not
+  hold at v2.3"; what is NOT confirmed is "every future Sonnet
+  endpoint variance trace will fit ±200 ms". The hypothesis is
+  load-bearing for keeping Seed 1 at 🟢 advisory rather than
+  promoting to 🔴; full closure requires v2.4 ship-gate measuring
+  `cli_pool_send_ms` p95 ≤ 6500 ms (within ±50 ms of the v2.3
+  value).
+- LOC delta snapshot timing (above) is ambiguous in P2 prompt; v2.4
+  P2 prompt seed should bind which snapshot is the gate-of-record.
 
 ## References
 
@@ -1716,11 +1757,23 @@ ADR-18 continue to apply at v2.4 unchanged.
   regressions / 0 haiku regressions vs sonnet / exit 0. Sonnet
   RECOVERED above the 0.90 threshold; v2.1 alignment-recovery
   investigation closed at v2.2 ship-gate.
+- `reports/soak-20260517T174939Z.md` — v2.3 Seed 5 Run 1 BG soak,
+  same shape as ship-gate (`--cli-pool-size 2`, `--ppp-auto-probe`,
+  `BRIDGE_RL_LOGGER_ENABLED=1`). NOT the ship-gate source.
+  **Retained** for v10 P4 corpus-fill narrative chain (60 → 120
+  episodes; Run 1 of 3). Dual-anchor block UNSET (predates Seed 4
+  helpers being merged). Verdict PASS.
+- `reports/soak-20260517T182412Z.md` — v2.3 Seed 5 Run 2 BG soak,
+  same shape. NOT the ship-gate source. **Retained** for v10 P4
+  corpus-fill narrative chain (120 → 180 episodes; Run 2 of 3).
+  First soak post-Seed-4-merge — dual-anchor block renders UNSET
+  because env vars not supplied to a BG soak (deliberately; only
+  ship-gate sets them). Verdict PASS.
 - `reports/soak-20260517T193220Z.md` — v2.3 32.2-min ship-gate soak,
   `--cli-pool-size 2`, `--ppp-auto-probe`, `BRIDGE_RL_LOGGER_ENABLED=1`,
   `BRIDGE_CYCLE_*` (Seed 4 dual-anchor); the v2.3 baseline source
-  per §"v2.3 ship-gate baseline". v10 P4 piggyback Run 3 cleared
-  the 200-row gate to 240 episodes.
+  per §"v2.3 ship-gate baseline". v10 P4 piggyback Run 3 of 3
+  cleared the 200-row gate to 240 episodes.
 - `reports/alignment-eval-20260517T205353Z.{md,json}` — v2.3
   alignment-eval `--ci-gate` ship-gate run; sonnet 0.8182 / haiku
   0.9412 / 0 FR-OG-7 regressions / 0 haiku regressions vs sonnet
