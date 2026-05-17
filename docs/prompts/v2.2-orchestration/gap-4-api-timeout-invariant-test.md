@@ -1,5 +1,8 @@
 # Gap 4 — API-timeout invariant test (v2.2 P0 phase candidate)
 
+> **LANDED v2.2.0 ship-gate.** P1 PR #168 (`2b4f1b3`) shipped the
+> invariant test + Tier-3 invariant-degrade canary; v2.2.0 ship-gate
+> soak PASS with canary degrade_count=0 confirmed the canary wire.
 > **Disposition 2026-05-16 at v2.2 P0 mint: FOLDED v2.2 P1.**
 > v2.2 = consolidation cycle; gap-4 P1 requires mandatory pre-P1
 > deletion offset survey ≥ 80 LOC to keep cycle net LOC ≤ 0.
