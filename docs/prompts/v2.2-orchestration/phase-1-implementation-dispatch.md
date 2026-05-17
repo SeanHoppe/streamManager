@@ -26,8 +26,9 @@ Read access for IMPORT and PATCH TARGET resolution is fine. Editing is
 the violation; importing from these in a test file is not.
 
 Consolidation cycle (Rule 3) — net LOC ≤ 0 across `src/` + `tests/` +
-`tools/` + `dashboard/`. Accounting already done in
-`docs/v2.2-p1-task-list.md` §"LOC accounting"; expected delta ≈ −33.
+`tools/` + `dashboard/`. Accounting in `docs/v2.2-p1-task-list.md`
+§"LOC accounting". Pre-review estimate was ≈ −33; actual landed at
+−7 (tests heavier than budget but still under the ceiling).
 
 Firewall (project CLAUDE.md) — do NOT read anything under
 `**/certPortal/**`. If a deny rule fires, surface immediately, do NOT

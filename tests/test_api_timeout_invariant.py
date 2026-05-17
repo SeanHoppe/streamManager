@@ -1,19 +1,7 @@
-"""gap-4 / INTENT §"Safety priorities" #5 — API-timeout invariant.
-
-CLI timeout + 5xx must NOT stall the bridge: ``CliGovernor`` returns
-``None`` on degrade and ``GovernanceEngine.evaluate`` falls through to
-default ALLOW (governance.py:1055-1061), inside
-``BRIDGE_FALLBACK_LATENCY_BUDGET_MS``.
-
-Assertion is at the bridge boundary (``decision.action == "ALLOW"``
-+ ``decision.source == "default"``) so the test protects against
-future engine refactors that might mistranslate the CLI degrade signal.
-
-Patch site: ``CliGovernor._runner`` (spawn path; pool=None). Both fault
-classes exercise cleanly without warm-pool scaffolding. TimeoutExpired
-is raised immediately by the fake runner; total wall-clock is
-millisecond order, not 25 real seconds.
-"""
+"""gap-4 / INTENT §"Safety priorities" #5 — CLI timeout + 5xx must not
+stall the bridge. CliGovernor returns None on degrade; evaluate falls
+through to default ALLOW (governance.py:1055-1061) within the budget.
+Patch site: CliGovernor._runner (spawn path)."""
 
 from __future__ import annotations
 
@@ -27,7 +15,7 @@ from stream_manager.cli_governance import CliGovernor, TIMEOUT_SECONDS
 from stream_manager.governance import GovernanceEngine
 from stream_manager.latency_budgets import BRIDGE_FALLBACK_LATENCY_BUDGET_MS
 from stream_manager.messages import Message
-from stream_manager.project_context import ProjectContextSnapshot
+from stream_manager.project_context import _ACTIONABLE_SIGNAL, ProjectContextSnapshot
 
 
 @dataclass
@@ -37,14 +25,16 @@ class _FakeCompletedProcess:
     stderr: str = ""
 
 
-# "cp /tmp/a /tmp/b" carries an actionable shell signal (``cp`` is in
-# project_context._ACTIONABLE_SIGNAL) so precheck does not fast-ALLOW
-# via the no-actionable-signal path. It matches no destructive pattern,
-# no force-push rule, no plaintext-token rule. With a fresh engine
-# (empty graph), the message reaches the CLI layer; the faulted runner
-# then makes the engine fall through to default ALLOW at
-# governance.py:1055-1061.
+# Actionable-signal payload that no destructive / force-push / token
+# rule matches; with empty graph the engine reaches the faulted CLI
+# and falls through to default ALLOW.
 _SAFE = "cp /tmp/a /tmp/b"
+
+def test_precheck_contract_locked() -> None:
+    # If _SAFE stops matching _ACTIONABLE_SIGNAL, fast_precheck short-
+    # circuits to ALLOW and the degrade-path tests below silently pass
+    # via the wrong code path. Surface the regression as a clean fail.
+    assert _ACTIONABLE_SIGNAL.search(_SAFE), "precheck contract broken; pick new _SAFE"
 
 
 def _engine(runner) -> GovernanceEngine:
