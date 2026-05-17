@@ -107,7 +107,7 @@ launch from main thread with `run_in_background` + `ScheduleWakeup`:
 ```powershell
 $env:BRIDGE_API_GOV = "1"
 $env:BRIDGE_RL_LOGGER_ENABLED = "1"       # v10 P4 corpus piggyback
-$env:BRIDGE_CYCLE_TIP_SHA = "<P0-merge-SHA>"      # Seed 4 dual-anchor
+$env:BRIDGE_CYCLE_TIP_SHA = "a6051fc"      # Seed 4 dual-anchor
 $env:BRIDGE_PREDECESSOR_TAG_SHA = "3235144"       # v2.2.0
 $env:BRIDGE_CYCLE_TYPE = "feature"        # OR "consolidation"
 # If Seed 3 NOT yet landed: $env:PYTHONPATH = "."
@@ -153,7 +153,7 @@ anchor narrative (matches Seed 4 soak-summary block):
 
 ```
 # Binding (Amendment C):
-git diff <P0-merge-SHA>...HEAD --stat -- src tests tools dashboard
+git diff a6051fc...HEAD --stat -- src tests tools dashboard
 
 # Narrative (Amendment A):
 git diff 3235144...HEAD --stat -- src tests tools dashboard
