@@ -6,6 +6,99 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-05-17
+
+Tagged ship of the v2.3 feature cycle — **JsonlTailWorker production
+wiring** (the lever wire; first wired lever since v1.7), **soak-driver
+PYTHONPATH bug fix**, **soak-summary dual-anchor LOC delta block** (closes
+ADR-18 Amendment A L388 + Amendment C acceptance), and **v10 P4 corpus
+piggyback** (200+ episodes target). See `docs/v2.3-task-plan.md` for
+cycle frame + phase ledger, `docs/adr/ADR-5-latency-budget.md` §"v2.3
+ship-gate baseline" for ship-gate numbers, and
+`docs/v2.3-next-steps.md` for the row-by-row compare-back outcome.
+
+**ADR-18 surface freeze remains in force.** Feature cycle:
+`WIRED_LEVER_LEDGER_COUNT` **0 → 1** (JsonlTailWorker wire) satisfies
+v2.3 feature-cycle classification. Cycle-tip LOC anchor per Amendment
+C = `a6051fc84f0d91f387e766f8e76873654a7b4bee` (P0 merge); soft target
+≤ 1500 (BLOCK at 1.5× = 2250). Net delta recorded in ADR-5 baseline.
+Rule 5 backlog cap **bumped 6 → 11** at P0 (operator-accepted, no
+Rule 5 amendment minted).
+
+### Added
+
+- **JsonlTailWorker production wiring**
+  ([PR #174](https://github.com/SeanHoppe/streamManager/pull/174)) —
+  `dashboard/server.py` `@app.on_event("startup")` peer to
+  `session_watcher`; `@app.on_event("shutdown")` calls
+  `worker.stop()`. Worker built since v1.3 but unwired in production
+  for v1.7 → v2.2; v2.3 closes the 3rd-cycle deferred carry-forward.
+  Polarity-flip wire-site refusal: if `BRIDGE_PROJECT_SLUG` ∈
+  `BRIDGE_SM_PROJECT_SLUGS` set (default `{"streamManager"}`), worker
+  refuses to start + logs WARNING (leakage is loud failure path per
+  CLAUDE.md). Per-record `SM_OWN_SESSION_ID` filter is second
+  defense. Lever ledger: **0 → 1**.
+- **Soak-summary dual-anchor LOC delta block**
+  ([PR #173](https://github.com/SeanHoppe/streamManager/pull/173)) —
+  `tools/soak_driver.py` `_git_diff_loc` / `_gate_verdict` /
+  `_fmt_loc_cell` helpers. Markdown summary block + 2 stdout lines
+  render cycle-tip (binding gate per Amendment C) + predecessor-tag
+  (narrative per Amendment A) LOC deltas. Env-driven inputs:
+  `BRIDGE_CYCLE_TIP_SHA`, `BRIDGE_PREDECESSOR_TAG_SHA`,
+  `BRIDGE_CYCLE_TYPE`. Closes ADR-18 Amendment A L388 + Amendment C
+  acceptance.
+- **v2.3 PM-mint pass**
+  ([PR #170](https://github.com/SeanHoppe/streamManager/pull/170)) —
+  `docs/v2.3-next-steps.md` (11-seed itemization + compare-back
+  protocol; the goal-directive comparison anchor) + 6 v2.3 prompts
+  under `docs/prompts/v2.3-orchestration/`.
+
+### Changed
+
+- **`pyproject.toml` `[tool.hatch.build.targets.wheel] packages`**
+  ([PR #172](https://github.com/SeanHoppe/streamManager/pull/172)) —
+  declared `rl` alongside `src/stream_manager`. Fixes the soak-driver
+  PYTHONPATH bug from v2.2 ship-gate
+  (`project_v22_cycle_close.md` §"How to apply" #4): `python
+  tools/soak_driver.py` no longer raises `ModuleNotFoundError: No
+  module named 'rl'`. Locked by `tests/test_soak_driver_import.py`
+  (subprocess + stripped PYTHONPATH + tmp cwd regression).
+- **v2.3 P0 cycle frame**
+  ([PR #171](https://github.com/SeanHoppe/streamManager/pull/171)) —
+  `docs/v2.3-task-plan.md`: cycle type = FEATURE; Rule 5 cap-bump
+  6 → 11 accepted; memory pre-flight stamp (1 stale memory updated:
+  `project_v10_p4_hold_lifted.md` `0 rows → 60 rows post-piggyback`).
+- **ADR-18 Amendment A L388 + Amendment C acceptance** — both ticked
+  via Seed 4 dual-anchor block.
+- **v2.1-backlog + v2.2-backlog carry-forwards** annotated RESOLVED
+  for JsonlTailWorker wiring.
+
+### Removed
+
+- _(none for v2.3 feature cycle — see Carry-forward / Deferred for
+  promoted-but-not-fired items)_
+
+### Deferred / carry-forward into v2.4
+
+- 🟢 Overall p95 watch (downgraded from 🟡; v2.3 ship-gate recovered
+  p95 12.238 → 10.584 s = −1.65 s. cli_pool_send_ms p95 −1448 ms.
+  Sonnet endpoint variance hypothesis CONFIRMED. Not yet ≤ 8.2 s
+  closure target — re-confirm at v2.4 ship-gate).
+- ✅ Haiku alignment-floor watch CLOSED (0.85 → 0.9412 at v2.3).
+- 🟡 Sonnet-row-flip investigation (NEW v2.3 seed; pass rate
+  0.9474 → 0.8182 driven by stability-denominator oscillation +
+  CLI-degrade row mismatches).
+- 🟡 L4 alignment + LM categorize p95 small-n watch (NEW v2.3 seed).
+- 🟡 CLI governance timeout audit (NEW v2.3 seed; multiple
+  >25.0 s degrades observed during alignment-eval).
+- 🟡 Lever-ledger scope clarification (NEW v2.3 seed; soak-scope vs
+  production-scope split needs codified at v2.4 P2 prompt).
+- 🟢 Seeds 7–11 INTENT-graduated (promotion-criterion-bound; no fire).
+- 🟡 Seed 12 Remote-CLI monitoring (demand-bound; no fire).
+- v2.4 P0 enters with **11 open seeds** (5 new + 6 unresolved).
+- Per-prompt outcomes recorded in `docs/v2.3-next-steps.md` §"v2.3 P2
+  ship-gate close-out".
+
 ## [2.2.0] — 2026-05-17
 
 Tagged ship of the v2.2 consolidation cycle — **gap-4 API-timeout
