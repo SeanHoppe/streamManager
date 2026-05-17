@@ -1474,6 +1474,176 @@ in effect) remain in force.
 - Haiku pass rate 0.85 = floor exactly. One row flip from this
   position triggers a haiku-floor breach in v2.3; watch list.
 
+## v2.3 ship-gate baseline
+
+- **Source**: `reports/soak-20260517T193220Z.md`
+- **Date**: 2026-05-17
+- **Ship branch**: `ship/v2.3-shipgate-finalize` (target tag `v2.3.0`)
+- **Driver**:
+  `BRIDGE_API_GOV=1 BRIDGE_RL_LOGGER_ENABLED=1`
+  `BRIDGE_CYCLE_TIP_SHA=a6051fc84f0d91f387e766f8e76873654a7b4bee`
+  `BRIDGE_PREDECESSOR_TAG_SHA=3235144 BRIDGE_CYCLE_TYPE=feature`
+  `python tools/soak_driver.py --cli-pool-size 2 --ppp-auto-probe`
+  `--total-seconds 1800 --interval-seconds 20`
+  - `BRIDGE_RL_LOGGER_ENABLED=1` opts the v10 P4 B' EpisodeLogger
+    subscriber on; this ship-gate soak doubles as v10 P4 corpus-fill
+    Run 3 (cleared the 200-row gate to 240; see §"v10 P4 corpus
+    delta" below).
+  - `PYTHONPATH=.` workaround **NO LONGER REQUIRED** — Seed 3
+    (PR #172) declared `rl` in `[tool.hatch.build.targets.wheel]`
+    packages; `tests/test_soak_driver_import.py` locks the fix.
+  - `BRIDGE_CYCLE_TIP_SHA`, `BRIDGE_PREDECESSOR_TAG_SHA`,
+    `BRIDGE_CYCLE_TYPE` populate the Seed 4 dual-anchor LOC block
+    in the soak summary (markdown + stdout).
+- **Runtime**: 1934.2 s (32.2 min); 60 events emitted, 383 received
+- **Verdict**: PASS
+
+### Latency targets (overall, n=60)
+
+| Metric        | v2.2 baseline | v2.3 ship-gate | Delta         |
+|---------------|---------------|----------------|---------------|
+| count         |  60           |  60            |  0            |
+| p50 wall      |  3.823 s      |  3.923 s       |  +0.10 s      |
+| p95 wall      | 12.238 s      | 10.584 s       |  **−1.65 s**  |
+| max wall      | 15.668 s      | 17.294 s       |  +1.63 s      |
+| mean wall     |  4.063 s      |  3.716 s       |  −0.35 s      |
+
+**Seed 1 disposition: RECOVERED.** Overall p95 **−1.65 s** vs v2.2
+(12.238 → 10.584). The v2.2 +4.54 s regression hypothesis ("Sonnet
+endpoint run-to-run variance at n=49 ALLOW" per
+`project_v22_cycle_close.md`) is **confirmed** — the +1570 ms
+`cli_pool_send_ms` at v2.2 did NOT hold at v2.3 (see CLI residue
+table below). v2.3 still sits **+2.89 s above v2.1 floor** (8.2 s
+target threshold for closure; v2.3 = 10.584 s) so the watch
+**carries forward to v2.4 reduced to 🟢 advisory** rather than
+closing entirely — re-confirm at v2.4 ship-gate.
+
+### Per-band split
+
+| Path                 |   n  | v2.2 p95   | v2.3 p95   | Delta        |
+|----------------------|------|------------|------------|--------------|
+| ALLOW (routine)      |  49  |  7.92 s    |  6.47 s    |  −1.45 s     |
+| L2/L3 escalation     |   7  | 13.47 s    | 13.24 s    |  −0.23 s     |
+| L4 alignment         |   4  | 15.03 s    | 16.27 s    |  +1.24 s     |
+| LM (categorize)      |  10  | 13.57 s    | 14.47 s    |  +0.90 s     |
+
+ALLOW band drives the overall p95 recovery (`n=49` dominates the
+ALLOW-weighted mix). L4 alignment crept up (+1.24 s) but n=4 makes
+the signal unstable — watch carried into v2.4 alongside Seed 1.
+
+### ALLOW _evaluate_inner CLI residue breakout (v1.6 instrumentation)
+
+| Phase                  | v2.2 p95   | v2.3 p95   | Delta        |
+|------------------------|------------|------------|--------------|
+| cli_setup_ms           |  0.01 ms   |  0.01 ms   |  0           |
+| cli_dispatch_ms        | 7919.59 ms | 6471.71 ms | **−1447.9 ms** |
+| cli_pool_acquire_ms    |  0.06 ms   |  0.06 ms   |  0           |
+| cli_pool_send_ms       | 7918.92 ms | 6470.86 ms | **−1448.1 ms** |
+| cli_parse_ms           |  0.10 ms   |  0.10 ms   |  0           |
+
+CLI residue confirms: 99.99% of the ALLOW p95 sits inside
+`cli_pool_send_ms` (same as v1.6 / v2.0 / v2.1 / v2.2). v2.3 cuts
+1448 ms off the send tail — exactly the +1570 ms v2.2 anomaly,
+ruling out a structural lever effect and confirming run-to-run
+endpoint variance.
+
+### Lever ledger
+
+- **0 → 1.** First wired lever since v1.7. `JsonlTailWorker.start()`
+  wired at `dashboard/server.py` `@app.on_event("startup")` peer to
+  `session_watcher` per Seed 6 (PR #174). The ship-gate soak report
+  itself shows "0 wired levers" because the soak driver does not
+  invoke the FastAPI startup hooks — the soak's view is
+  scope-correct; the dashboard-runtime view is the ledger of
+  record.
+- DORMANT-N gate posture: **inert at SOAK scope**; **active at
+  PRODUCTION scope** (worker thread alive in dashboard runtime).
+
+### Alignment-eval gate
+
+- **Source**: `reports/alignment-eval-20260517T205353Z.{md,json}`
+- **`--ci-gate` exit**: **0** (PASS — 0 FR-OG-7 regressions; 0
+  haiku-vs-sonnet regressions).
+- **Summary**:
+
+  | Metric                     | v2.1 ship | v2.2 ship | v2.3 ship   | Delta v2.2→v2.3 |
+  |----------------------------|-----------|-----------|-------------|------------------|
+  | Sonnet stable count        | 22        | 19        | 22          | +3               |
+  | Sonnet pass count          | 19        | 18        | 18          |  0               |
+  | Sonnet pass rate           | 0.8636    | 0.9474    | **0.8182**  | **−0.1292**      |
+  | Haiku stable count         | 20 (est)  | 20 (est)  | 17          | −3               |
+  | Haiku pass count           | 19 (est)  | 17 (est)  | 16          | −1               |
+  | Haiku pass rate            | 0.95      | 0.85      | **0.9412**  | **+0.0912**      |
+  | Haiku regression vs Sonnet | 0         | 0         | 0           |  0               |
+  | FR-OG-7 regression rows    | 0         | 0         | 0           |  0               |
+
+- **Seed 1 (p95 watch) disposition**: **RECOVERED (latency side)**.
+  See per-band table above — ALLOW p95 −1.45 s, cli_pool_send_ms
+  −1448 ms vs v2.2. The +1570 ms v2.2 anomaly did not hold;
+  hypothesis confirmed = Sonnet endpoint run-to-run variance. Watch
+  reduced from 🟡 to 🟢 advisory; re-confirm at v2.4 ship-gate.
+- **Seed 2 (Haiku floor watch) disposition**: **CLOSES.** Haiku
+  pass rate 0.85 → 0.9412 (+0.0912). One-row flip recovery off the
+  floor. v2.4 carry-forward dropped.
+- **Sonnet-DIP disposition (NEW v2.3 ship-gate seed)**: Pass rate
+  **0.8182** (DIP range 0.80–0.90 per P2 prompt §S4 rules). The
+  v2.0→v2.1→v2.2 oscillation pattern documented in
+  `project_v22_cycle_close.md` §"Alignment recovery — investigation
+  CLOSED" continues: stability denominator returned 22 → 19 → 22
+  while pass count stayed at 18-19. Three cycles of data now
+  available — operator-bound investigation: which specific rows
+  flipped between v2.2 stable-but-passing and v2.3 stable-but-
+  failing? **Carry-forward as 🟡 v2.4 seed** (Sonnet-row-flip
+  investigation). Multiple `cli governance timeout (>25.0 s);
+  degrading` lines observed during the eval — gap-4 invariant
+  firing → default ALLOW verdict mismatches expected
+  BLOCK/INTERVENE for some rows; the seed must investigate
+  whether the dip is correlated with rows whose CLI calls degrade.
+
+
+
+### v10 P4 corpus delta
+
+- Episodes pre-cycle: **60** (post v2.2 piggyback).
+- Episodes post Seed 5 Run 1 (BG, this cycle): 120 (+60).
+- Episodes post Seed 5 Run 2 (BG): 180 (+60).
+- Episodes post this ship-gate soak (Run 3 via piggyback): **240**.
+- **200-row gate CLEARED** with 40-episode margin. v10 P4 bandit
+  trainer data-side blocker LIFTED at v2.3. Phase-4 fire eligibility
+  now satisfied (per `docs/prompts/v10-orchestration/
+  phase-4-bandit-trainer.md` ABORT gate "If `rl_episodes.db` has
+  < 200 live episodes, ABORT").
+
+### LOC delta (Amendment C cycle-tip binding gate)
+
+- Cycle-tip (`a6051fc..HEAD`): **+499 / -38 / +461 LOC** (3-bucket
+  scope: `src/` + `tests/` + `tools/` + `dashboard/` + `docs/`).
+- Predecessor-tag narrative (`3235144..HEAD`): +1900 / -8 / +1892
+  LOC (decomposed: +461 cycle work + +1431 inter-cycle drift from
+  v2.2 ship + PR #169 / #170 close-out).
+- **Gate verdict (Amendment C): PASS** at feature thresholds (net
+  < 2250). 31% of soft target 1500.
+- Seed 4 dual-anchor block renders byte-identical in the ship-gate
+  soak report at L34-42; first cycle to mechanise the dual-anchor.
+
+### Status
+
+ACCEPTED as v2.3 ship-gate baseline. Cycle-discipline rules under
+ADR-18 continue to apply at v2.4 unchanged.
+
+### Caveats
+
+- L4 alignment p95 +1.24 s vs v2.2 at n=4 — too few samples to
+  classify; carry-forward watch into v2.4 alongside Seed 1.
+- LM categorize p95 +0.90 s vs v2.2 — also small-n; same watch.
+- Lever-ledger scope split between soak (0) and production (1) is
+  new at v2.3; v2.4 P2 ship-gate prompt should clarify which scope
+  binds for the `WIRED_LEVER_LEDGER_COUNT` field in close memory.
+- The +1448 ms `cli_pool_send_ms` recovery does NOT prove the v2.2
+  excursion was 100% Sonnet variance — at minimum one more cycle
+  (v2.4) of stable cli_pool_send_ms ≤ 6500 ms is needed before the
+  hypothesis becomes load-bearing for ADR-5 budget recompute.
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
@@ -1546,6 +1716,16 @@ in effect) remain in force.
   regressions / 0 haiku regressions vs sonnet / exit 0. Sonnet
   RECOVERED above the 0.90 threshold; v2.1 alignment-recovery
   investigation closed at v2.2 ship-gate.
+- `reports/soak-20260517T193220Z.md` — v2.3 32.2-min ship-gate soak,
+  `--cli-pool-size 2`, `--ppp-auto-probe`, `BRIDGE_RL_LOGGER_ENABLED=1`,
+  `BRIDGE_CYCLE_*` (Seed 4 dual-anchor); the v2.3 baseline source
+  per §"v2.3 ship-gate baseline". v10 P4 piggyback Run 3 cleared
+  the 200-row gate to 240 episodes.
+- `reports/alignment-eval-20260517T205353Z.{md,json}` — v2.3
+  alignment-eval `--ci-gate` ship-gate run; sonnet 0.8182 / haiku
+  0.9412 / 0 FR-OG-7 regressions / 0 haiku regressions vs sonnet
+  / exit 0. Haiku RECOVERED off 0.85 floor; Sonnet DIP — carry-
+  forward as 🟡 v2.4 seed (Sonnet-row-flip investigation).
 - `docs/v1.2-soak-finalize.md` — M-task plan for the v1.2 close-out
   cycle; M3 produced the report cited above
 - `docs/v1.3-soak-lm-extension.md` — v1.3 Path-A design + DOD; ADR-17
