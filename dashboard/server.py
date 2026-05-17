@@ -265,6 +265,72 @@ async def _startup_cli_pool() -> None:
             start_session_watcher(bus)
     except Exception:
         log.exception("session_watcher: startup raised; continuing")
+    # v2.3 P1 Seed 6: JsonlTailWorker production wiring (lever wire;
+    # WIRED_LEVER_LEDGER_COUNT 0 -> 1). Tails Desktop<->user dialogue
+    # from `~/.claude/projects/` JSONL per the learn-mode design.
+    #
+    # Polarity-flip enforcement (per CLAUDE.md §"Session-source
+    # exception rule" + `feedback_no_self_monitor.md`):
+    # 1. Wire-site refusal: if `BRIDGE_PROJECT_SLUG` is in the SM
+    #    slug set (`BRIDGE_SM_PROJECT_SLUGS`, default `{"streamManager"}`),
+    #    refuse to start. Default-exclude SM by project-slug — leakage
+    #    is the loud failure path (log + skip), not silent corpus poison.
+    # 2. Per-record defense: `_is_sm_originated` filters individual
+    #    JSONL records by cached `SM_OWN_SESSION_ID` (second layer).
+    #
+    # Governance ref intentionally `None` for v2.3 wire — the dashboard
+    # process does not own per-session engines (see `_get_engine_registry`
+    # comment). v2.1 P2 canary timeout re-fire degrades to envelope-only
+    # failure as a result; v2.4 candidate is to wire a process-wide
+    # governance ref or hand the canary registry a different injection
+    # point. Daemon thread; idempotent. Best-effort — failure must never
+    # block dashboard startup.
+    try:
+        from stream_manager.jsonl_tail import JsonlTailWorker
+        bus = _get_bus()
+        registry = _get_registry()
+        project_slug = os.environ.get("BRIDGE_PROJECT_SLUG", "default")
+        # Polarity-flip wire-site refusal.
+        _sm_slugs_raw = os.environ.get(
+            "BRIDGE_SM_PROJECT_SLUGS", "streamManager"
+        )
+        _sm_slugs = frozenset(
+            s.strip() for s in _sm_slugs_raw.split(",") if s.strip()
+        )
+        if project_slug in _sm_slugs:
+            log.warning(
+                "jsonl_tail: REFUSED to start — project_slug=%s is in "
+                "SM exclusion set %s (polarity-flip per CLAUDE.md). "
+                "Set BRIDGE_PROJECT_SLUG to a non-SM project (e.g. the "
+                "monitored target) before restarting.",
+                project_slug,
+                sorted(_sm_slugs),
+            )
+        elif bus is not None and registry is not None:
+            projects_dir = Path(
+                os.environ.get(
+                    "BRIDGE_PROJECTS_DIR",
+                    str(Path.home() / ".claude" / "projects"),
+                )
+            )
+            worker = JsonlTailWorker(
+                projects_dir=projects_dir,
+                registry=registry,
+                bus=bus,
+                governance=None,
+            )
+            session_id = os.environ.get("SM_OWN_SESSION_ID", "")
+            worker.start(session_id=session_id, project_slug=project_slug)
+            log.info(
+                "jsonl_tail: started (projects_dir=%s, slug=%s, "
+                "own_session=%s, excl_slugs=%s)",
+                projects_dir,
+                project_slug,
+                session_id or "<unset>",
+                sorted(_sm_slugs),
+            )
+    except Exception:
+        log.exception("jsonl_tail: startup raised; continuing")
 
 
 @app.on_event("shutdown")
@@ -283,6 +349,15 @@ async def _shutdown_cli_pool_event() -> None:
         stop_session_watcher()
     except Exception:
         log.exception("session_watcher: shutdown raised; continuing")
+    # v2.3 P1 Seed 6: stop JsonlTailWorker (daemon thread; 2s join in
+    # worker.stop() each on tail + sweep threads).
+    try:
+        from stream_manager.jsonl_tail import get_active_worker
+        w = get_active_worker()
+        if w is not None:
+            w.stop()
+    except Exception:
+        log.exception("jsonl_tail: shutdown raised; continuing")
     # v10 P4 B': release rl.bus_subscriber's EpisodeLogger WAL handle on
     # rl_episodes.db. Idempotent no-op when env was unset (_rl_logger_close
     # stays None). Run before _shutdown_cli_pool() so any final
