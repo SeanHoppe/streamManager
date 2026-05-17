@@ -34,7 +34,7 @@ stream-manager = "stream_manager.__main__:main"
 sm = "tools.sm_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/stream_manager"]
+packages = ["src/stream_manager", "rl"]
 
 # Ship only sm_cli (operator CLI) from tools/; perf_probe, soak_driver,
 # cassette_record are dev-only scripts and must not enter the wheel.
