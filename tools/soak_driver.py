@@ -226,6 +226,10 @@ class _DriverState:
     # closing block so cassette-coverage cadence is observable per ADR-5
     # §"PPP cadence note".
     ppp_auto_probes_emitted: int = 0
+    # v2.2 P1 / gap-4: CLI synthetic-timeout / 5xx degrade count. Drives
+    # both invariant-degrade canary render sites (markdown + stdout); P2
+    # bumps at the probe firing site, value flips automatically.
+    synthetic_timeout_degrades: int = 0
 
 
 def _safe_db_count(db_path: Path, table: str) -> int | None:
@@ -851,6 +855,8 @@ def _write_report(
     lines.append(
         f"- No uncaught exceptions in server log: {'PASS' if pass_no_exc else 'FAIL'}"
     )
+    canary = "PASS" if state.synthetic_timeout_degrades == 0 else "FAIL"
+    lines.append(f"- Invariant-degrade canary: {canary} (degrade_count={state.synthetic_timeout_degrades})")
     lines.append("")
 
     lines.append("## Load mix (planned)")
@@ -1809,6 +1815,8 @@ def main() -> int:
         f"{'PASS' if summary['overall_pass'] else 'FAIL'}"
     )
     print(f"[soak] PPP auto-probes emitted: {state.ppp_auto_probes_emitted}")
+    canary = "PASS" if state.synthetic_timeout_degrades == 0 else "FAIL"
+    print(f"[soak] invariant-degrade canary: {canary} (degrade_count={state.synthetic_timeout_degrades})")
     return 0 if summary["overall_pass"] else 2
 
 
