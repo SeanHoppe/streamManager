@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -105,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         episodes = load_episodes_from_db(
             args.episodes_db, sources=("live", "soak"))
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, sqlite3.Error) as exc:
         print(f"[rl.train] DB read failed: {exc}", file=sys.stderr)
         return EXIT_ERROR
     episodes = _filter_self_monitor(episodes)
@@ -123,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
 
     candidates = [_candidate_for_arm(i) for i in range(len(L4_THRESHOLDS))]
     ips_per_candidate: dict[str, float] = {}
+    # v10.1: production is deterministic at baseline_thr → only the
+    # baseline arm has on-support episodes; IPS for off-baseline arms
+    # is structurally 0.0 here (off-support). v10.3+ stochastic
+    # propensities will populate these.
     for c in candidates:
         thr = c.l4_threshold()
         ips_per_candidate[f"{thr:.2f}"] = ips_estimate(
@@ -217,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_RETAIN_BASELINE
     if (ips_per_candidate[f"{best.l4_threshold():.2f}"]
             <= ips_per_candidate[f"{baseline_thr:.2f}"]):
+        print("[rl.train] non-baseline IPS off-support or no lift; retain baseline",
+              file=sys.stderr)
         return EXIT_RETAIN_BASELINE
     return EXIT_PROMOTE
 
