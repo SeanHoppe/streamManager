@@ -1,0 +1,53 @@
+{
+  "baseline": {
+    "arm": 5,
+    "ips": 1.0,
+    "posterior_ci_width_95": 0.3919927969080108,
+    "posterior_mean": 0.7,
+    "thresholds": {
+      "BRIDGE_L4_FALLBACK_CONFIDENCE": 0.75
+    }
+  },
+  "envelope": "rl_proposals",
+  "generated_at": "2026-05-18T06:56:20.288162+00:00",
+  "n_candidates": 9,
+  "n_episodes": 92,
+  "n_feasible": 5,
+  "promotion_gate": {
+    "best_arm": 8,
+    "best_arm_ci_width_95": 0.10604905025524727,
+    "ci_cap": 0.1,
+    "n_actual": 92,
+    "n_floor": 200,
+    "ready": false
+  },
+  "proposals": [
+    {
+      "arm": 8,
+      "ips": 1.0,
+      "posterior_ci_width_95": 0.10604905025524727,
+      "posterior_mean": 0.9099099099099099,
+      "thresholds": {
+        "BRIDGE_L4_FALLBACK_CONFIDENCE": 0.9
+      }
+    },
+    {
+      "arm": 5,
+      "ips": 1.0,
+      "posterior_ci_width_95": 0.3919927969080108,
+      "posterior_mean": 0.7,
+      "thresholds": {
+        "BRIDGE_L4_FALLBACK_CONFIDENCE": 0.75
+      }
+    },
+    {
+      "arm": 4,
+      "ips": 1.0,
+      "posterior_ci_width_95": 0.42555533647711624,
+      "posterior_mean": 0.55,
+      "thresholds": {
+        "BRIDGE_L4_FALLBACK_CONFIDENCE": 0.7
+      }
+    }
+  ]
+}
