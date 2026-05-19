@@ -67,9 +67,19 @@ Memories to verify (v2.4 P0):
      promotion. Lands when v10.3 stochastic propensities ship.
    - Scope: v10 EXPERIMENTAL track per ADR-18 row table L71. No FROZEN
      surface touched.
-   - Decision: draft Amendment D text in P0 PR body OR defer to
-     dedicated PR within v2.4 cycle? Default: draft in P0 PR body
-     (matches Amendments A/B/C pattern).
+   - Decision: relocate Amendment D text from staging file
+     `docs/adr/ADR-18-amendment-d-draft.md` (already drafted in
+     PR #178) into `docs/adr/ADR-18-mvp-surface-freeze.md`
+     §"Amendments" in P0 PR body, OR defer relocation to a
+     dedicated PR within v2.4 cycle. Default: relocate in P0 PR
+     (matches Amendments A/B/C pattern). Note: the draft text is
+     already authored — this decision is about **landing** it, not
+     re-drafting.
+   - **Invariance**: Amendment D landing is invariant across cycle
+     choice (consolidation or feature). Only Path-D synthetic-
+     fixture P5 implementation (Seed v2.4-C, ~600 LOC) is cycle-
+     conditional. Operator should not couple "consolidation" choice
+     to "defer Amendment D".
 
 4. **ADR-18 Rule 5 backlog cap.** Verify open-backlog count at P0
    fire. If above prior cycle's cap, operator must:
@@ -77,11 +87,12 @@ Memories to verify (v2.4 P0):
      OR
    - Mint Rule 5 amendment documenting cycle-handoff exemption.
 
-5. **v10 freeze-lift overlap.** Per ADR-18 Rule 1 + #131 trigger
-   cond 2, v10.x cycle cannot mint while v2.x is in P0–P3. State
-   whether v2.4 is short (≤ 4 phases) to free v10.x slot — but note
-   v10.x is now additionally gated on #177 resolution + #112 close,
-   so freeze-lift overlap is secondary.
+5. **v10 freeze-lift overlap.** (Informational — NOT operator-bound
+   at P0.) Per ADR-18 Rule 1 + #131 trigger cond 2, v10.x cycle
+   cannot mint while v2.x is in P0–P3. #131 is now double-gated on
+   #177 resolution + #112 close, so freeze-lift overlap is the
+   tertiary blocker; #177/#112 dominate. No P0 decision required —
+   recorded here for narrative continuity.
 
 6. **Issue #111 close**. P4 trainer DOD met (cf7d003) but gate
    semantics under #177 amendment. Decision: close #111 at P0 (DOD
@@ -94,11 +105,13 @@ Memories to verify (v2.4 P0):
 Disposition for each seed at P0 fire (default in parens, operator
 may override):
 
-1. 🟡 Seed v2.3-A — Sonnet-DIP investigation (0.9474 → 0.8182 at v2.3
+1. 🟡 Seed v2.4-D — Sonnet-DIP investigation (0.9474 → 0.8182 at v2.3
    ship-gate). WATCH default; FIRE if root-cause hypothesis ready.
-2. 🟡 Seed v2.3-B — Overall p95 partial-recovery watch (+4.54s vs
+   (Renumbered from v2.3-A in `docs/v2.4-next-steps.md`.)
+2. 🟢 Seed v2.4-E — Overall p95 partial-recovery watch (+4.54s vs
    v2.2; v2.3 Seed-1 partial recovery 12.238 → 10.584s). WATCH;
-   re-measure at P2.
+   re-measure at P2. (Renumbered from v2.3-B in
+   `docs/v2.4-next-steps.md`; downgraded 🟡→🟢 per next-steps row.)
 3. 🔴 Seed v2.4-A (NEW) — v10 P5 deadlock #177 disposition.
    - Default: FIRE Amendment D (docs-only, P0/P1 scope).
    - Parallel: FIRE Path-D P5 synthetic-fixture implementation (if
@@ -126,8 +139,10 @@ No P0 ADR-5 work.
 - [ ] Memory pre-flight stamp in PR body (Amendment B; self-applies).
 - [ ] `docs/v2.4-next-steps.md` drafted alongside this frame (mirror
       `docs/v2.3-next-steps.md` pattern).
-- [ ] All 6 P0-frame operator decisions recorded in
-      `docs/v2.4-task-plan.md` (mint at P0).
+- [ ] All 7 P0-frame operator decisions recorded in
+      `docs/v2.4-task-plan.md` (mint at P0) — matches the 7-row
+      checklist in `docs/v2.4-next-steps.md` §"P0 frame — operator-
+      bound decisions" (6 frame decisions + Issue #111 close).
 - [ ] `docs/v2.4-next-steps.md` §"P0 frame" checklist fully ticked
       with cross-link to P0 PR commit.
 - [ ] If cycle = feature: explicit lever-wire commitment recorded

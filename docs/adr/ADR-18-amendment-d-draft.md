@@ -20,8 +20,10 @@
 (`docs/prompts/v10-orchestration/phase-5-shadow-stop-conditions.md`
 L8) ABORTs if no manifest with `is_ready_for_shadow() == True`
 exists. `is_ready_for_shadow()` is defined in `rl/bandit.py` L99-101
-as `(self._total >= PROMOTION_N_FLOOR AND self.best_arm_posterior_ci()
-<= PROMOTION_CI_CAP)`. Under v10.1's deterministic production policy
+as `(self._total >= PROMOTION_N_FLOOR
+AND self.best_arm_posterior_ci() <= PROMOTION_CI_CAP)`, where
+`PROMOTION_N_FLOOR = 200` and `PROMOTION_CI_CAP = 0.10`
+(`rl/bandit.py` L23-24). Under v10.1's deterministic production policy
 (threshold fixed at baseline_thr=0.70), the trainer's offline-replay
 loop in `rl/cli/train.py` L120-123 only conjugate-updates the
 baseline arm — off-baseline arms receive zero on-support data and
@@ -107,6 +109,16 @@ v2.4 = feature cycle.
 - [ ] Amendment text in `docs/adr/ADR-18-mvp-surface-freeze.md`
       §"Amendments" (this entry, copied verbatim from this draft
       and re-located).
+- [ ] `docs/adr/ADR-18-amendment-d-draft.md` (this staging file)
+      deleted in the same PR that relocates the amendment text
+      into ADR-18 §"Amendments" — staging artefact must not
+      outlive the relocation, or it rots into a stale duplicate.
+- [ ] Verify `shadow_episodes` schema exposes the `soak_run_id`
+      column (currently designed in `phase-5-shadow-stop-
+      conditions.md` L71 as `soak_run_id TEXT NOT NULL`) BEFORE
+      Path-D synthetic-fixture P5 implementation fires. If the
+      schema lands without that column, Amendment D's
+      `--mode=v10.1` suffix mechanism has no carrier.
 - [ ] `rl/bandit.py` adds `is_ready_for_shadow_v10_1()` method;
       `is_ready_for_shadow()` semantics unchanged.
 - [ ] `rl/cli/train.py` `promotion_gate` envelope adds
