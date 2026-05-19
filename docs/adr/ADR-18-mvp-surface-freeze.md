@@ -511,3 +511,236 @@ P0 prompts MUST cite both anchors verbatim.
       emit both anchors (cycle-tip + predecessor-tag). **LANDED v2.3
       P1 Seed 4** (`task-amendment-soak-summary-dual-anchor.md`);
       shared acceptance with Amendment A L388 above.
+
+### 2026-05-18 — v2.4 P0 Amendment D: v10 P5 entry-gate split (v10.1-mode vs v10.3-mode) (closes #177)
+
+**Problem.** The v10 P5 phase prompt
+(`docs/prompts/v10-orchestration/phase-5-shadow-stop-conditions.md`
+L8) ABORTs if no manifest with `is_ready_for_shadow() == True`
+exists. `is_ready_for_shadow()` is defined in `rl/bandit.py` L99-101
+as `(self._total >= PROMOTION_N_FLOOR
+AND self.best_arm_posterior_ci() <= PROMOTION_CI_CAP)`, where
+`PROMOTION_N_FLOOR = 200` and `PROMOTION_CI_CAP = 0.10`
+(`rl/bandit.py` L23-24). Under v10.1's deterministic production policy
+(threshold fixed at baseline_thr=0.70), the trainer's offline-replay
+loop in `rl/cli/train.py` L120-123 only conjugate-updates the
+baseline arm — off-baseline arms receive zero on-support data and
+their posterior CI stays at the warm-start floor (~0.43 for
+`Beta(10,10)`). The 0.10 CI cap is therefore unreachable on any
+non-baseline arm regardless of episode count. Even if the baseline
+arm itself clears both conditions, the train CLI's exit-10 (PROMOTE)
+path requires `best_arm != baseline_arm` (`train.py:221`), so the P5
+entry signal remains unreachable.
+
+This creates a chicken-and-egg deadlock: P5 entry requires off-arm
+CI shrinkage → off-arm CI requires on-support updates → on-support
+updates require stochastic propensities → stochastic propensities
+arrive with v10.3 writeback → v10.3 writeback requires P5 ALL PASS.
+v10 RL track is pre-DORMANT deadlocked at the P5 entry, with no
+designed escape path. Live train evidence (2026-05-18,
+`rl_proposals/v10p4-live-20260518.json`): n_actual=79/200,
+best_arm_ci_width_95=0.119/0.10, ready=False.
+
+**Amendment.** Split the v10 P5 entry gate into two modes:
+
+| Mode | Active when | Gate condition | P5 outcome |
+|---|---|---|---|
+| **v10.1-mode** | v10.x track stages 0-2 (deterministic production policy) | baseline arm `_total >= 200` effective updates AND `posterior_ci_width(baseline_arm) <= 0.10` | P5 shadow harness fires as **infrastructure validation**: candidate = baseline (sanity), recorder writes a baseline-vs-baseline shadow run, harness exercises end-to-end without claiming promotion |
+| **v10.3-mode** | v10.3 stochastic propensity writeback active | original gate: non-baseline `best_arm` clears `_total >= 200 AND best_arm_posterior_ci() <= 0.10` | P5 shadow run measures real candidate-vs-production divergence; ship-criteria checker may exit 0 (ALL PASS) and open v10.3 writeback gate |
+
+`rl/bandit.py` adds a sibling method `is_ready_for_shadow_v10_1()`
+returning the v10.1-mode condition. `is_ready_for_shadow()` retains
+its current semantics (v10.3-mode). P5 phase prompt re-minted at
+v2.4 P0 with a header section disambiguating which mode is being
+exercised in the current cycle.
+
+The `proposals.promotion_gate` JSON envelope grows two additive
+keys: `ready_v10_1` (v10.1-mode bool) and `mode` (string literal
+`"v10.1"` or `"v10.3"` indicating which mode is active per the
+caller's `BRIDGE_RL_MODE` env or CLI flag). The existing `ready`
+key (v10.3-mode) is preserved verbatim — additive extension per
+ADR-18 Rule 1 §"Metadata-only extensions to FROZEN bus envelope
+schemas".
+
+The v10.1-mode shadow harness MUST record its mode in
+`shadow_episodes.soak_run_id` (string suffix `--mode=v10.1`) so
+post-hoc analysis can distinguish infrastructure-validation runs
+from real-data shadow runs. v10.3 ship-criteria checker
+(`rl.cli.check_criteria`) ignores rows with `--mode=v10.1` suffix
+when computing the 6 pre-registered ship criteria — those rows are
+infrastructure-only and cannot count toward writeback promotion.
+
+**Scope.** v10 EXPERIMENTAL track per ADR-18 row table L71. No
+FROZEN surface touched. `bandit.py`, `train.py`, `manifest.py`,
+phase-5 prompt — all are v10-track files in the EXPERIMENTAL
+classification.
+
+**Reason.** The v10 design doc §10 specifies 6 pre-registered ship
+criteria with the implicit assumption that stochastic propensities
+are available when criteria are evaluated. v10.1's deterministic
+policy violates that assumption silently — the gate compiles, runs,
+and returns False forever. Amendment D acknowledges the assumption
+gap explicitly and provides a documented v10.1-mode escape that:
+
+1. Lets the P5 shadow harness ship and be exercised end-to-end
+   without waiting on v10.3.
+2. Reserves the original (v10.3-mode) ship criteria verbatim,
+   preserving the pre-registration discipline of §10.
+3. Surfaces the mode boundary in the data (via `soak_run_id`
+   suffix) so v10.3 writeback promotion cannot be accidentally
+   triggered by infrastructure-validation runs.
+
+Without Amendment D, the v10 track either (a) stalls indefinitely
+at P5 entry, (b) tempts ad-hoc threshold relaxation (p-hacking
+against pre-registration), or (c) blocks until v10.3 stochastic
+writeback ships first — but v10.3 requires P5 ALL PASS, which
+loops to (a). Amendment D is the minimum-surface break of the
+loop that preserves all other invariants.
+
+**Self-application.** Amendment D body (docs-only) lands in the
+cycle's P0 PR. Implementation-side acceptance items below
+(bandit / train / phase-5 prompt / shadow harness) are
+cycle-conditional: they fire only when the cycle electing Path-D
+P5 implementation runs (`Seed v2.4-C` or successor). Consolidation
+cycles defer those items to the next feature cycle electing P5;
+the docs side of Amendment D self-applies regardless of cycle
+classification. Cycle-bound disposition for the v2.4 cycle is
+recorded in `docs/v2.4-task-plan.md`.
+
+**Acceptance (#177).**
+
+- [x] Amendment text in `docs/adr/ADR-18-mvp-surface-freeze.md`
+      §"Amendments" (this entry, copied verbatim from staging
+      draft and re-located).
+- [x] `docs/adr/ADR-18-amendment-d-draft.md` (staging file)
+      deleted in this PR — staging artefact must not outlive the
+      relocation, or it rots into a stale duplicate.
+- [x] ~~Verify `shadow_episodes` schema exposes the `soak_run_id`
+      column (currently designed in `phase-5-shadow-stop-
+      conditions.md` L71 as `soak_run_id TEXT NOT NULL`) BEFORE
+      Path-D synthetic-fixture P5 implementation fires. If the
+      schema lands without that column, Amendment D's
+      `--mode=v10.1` suffix mechanism has no carrier.~~ **DEFERRED
+      v2.5** (verified at Path-D P5 impl).
+- [x] ~~`rl/bandit.py` adds `is_ready_for_shadow_v10_1()` method;
+      `is_ready_for_shadow()` semantics unchanged.~~ **DEFERRED v2.5**
+      (consolidation cycle choice).
+- [x] ~~`rl/cli/train.py` `promotion_gate` envelope adds
+      `ready_v10_1` + `mode` keys; existing `ready` preserved.~~
+      **DEFERRED v2.5**.
+- [x] ~~Phase-5 prompt re-minted with mode-disambiguation header
+      OR new `phase-1-shadow-synthetic.md` prompt minted for
+      v2.5 (operator decides at v2.5 P0).~~ **DEFERRED v2.5**.
+- [x] ~~Path-D shadow harness records `soak_run_id` with
+      `--mode=v10.1` suffix for v10.1-mode runs.~~ **DEFERRED v2.5**.
+- [x] ~~`rl.cli.check_criteria` ignores `--mode=v10.1` rows when
+      computing ship criteria.~~ **DEFERRED v2.5**.
+- [x] Issue #177 auto-closes via this PR body `Closes #177`.
+- [x] ~~`project_v10_p5_gate_deadlock.md` memory updated to record
+      Amendment D as the resolution (status moves from OPEN to
+      AMENDMENT-LANDED; implementation DEFERRED v2.5).~~ **DEFERRED
+      v2.5** (memory update bundled with Path-D P5 implementation
+      PR; current memory body already records Amendment D as the
+      filed resolution path per PR #178 mint 2026-05-18).
+- [x] `docs/v10-rl-design.md` §10 footnote appended cross-
+      referencing Amendment D (one-line additive doc edit).
+
+### 2026-05-19 — v2.4 P0 Amendment E: Rule 5 cycle-handoff exemption for externally-triggered seeds
+
+**Problem.** Rule 5 (ADR-18 §"Decision" L189-201) caps 🟢 backlog
+at "2 cycles without graduation" and forces promote-to-phase,
+promote-to-ADR, or delete at the next cycle frame. The cap counts
+every carry-forward seed equally, but some carry-forwards are
+bound to **external triggers** (a documented promotion criterion
+OR a documented demand signal), not to operator inattention. v2.4
+enters with 14 open seeds: 8 newly minted at v2.4 P0, 6 carried
+from v2.3 (Seeds v2.4-I–N: 5 INTENT-graduated promotion-criterion-
+bound + 1 demand-bound). The 6 carry-forwards have explicit
+external waiting conditions; their continued presence is correctly-
+gated future work, not staleness.
+
+Without an exemption, the cap forces operators to either (a) accept
+escalating cap-bumps every cycle (v2.2=6, v2.3=11, v2.4=14, ad
+infinitum), or (b) prematurely promote/delete seeds whose external
+trigger has not yet fired, losing the original promotion-criterion
+record and creating churn without surfacing real prioritization
+decisions.
+
+**Amendment.** A backlog seed is **exempt from the Rule 5 2-cycle
+cap** at cycle-handoff if and only if BOTH of the following hold:
+
+1. The seed has a written **external trigger** (promotion criterion
+   OR demand signal) cited verbatim in the predecessor cycle's
+   next-steps file (`docs/vN.M-next-steps.md`).
+2. The trigger has not yet fired (criterion still false, or demand
+   still absent).
+
+Triggers MUST be **specific, falsifiable conditions** — not "review
+next cycle" or "consider in vN.M+1". Examples of valid triggers:
+
+- Promotion criterion: "promote on next regression of behavior X"
+  (INTENT-graduated regression-coverage seeds).
+- Demand signal: "promote when monitored project surfaces concrete
+  use case" (Remote-CLI seed).
+
+Invalid triggers (still cap-counted):
+
+- "Worth re-evaluating later."
+- "Carry forward for now."
+- "TBD."
+
+Exempt seeds remain in the backlog without striking the 2-cycle cap.
+Once a trigger fires, the seed re-enters the cap regime at the next
+cycle's P0 (operator must promote-to-phase, promote-to-ADR, or
+delete in the cycle following trigger fire).
+
+**Reason.** Rule 5's intent (per §"Decision" L208-212) was to
+prevent indefinite operator drift on stale items. Promotion-
+criterion-bound and demand-bound seeds are not drift — they are
+correctly-gated future work. The exemption is **narrow**: it
+requires a written, falsifiable trigger in the predecessor
+cycle's next-steps file. Operators cannot retroactively claim
+exemption by inserting a vague clause; the trigger must already
+exist in the predecessor doc that the current cycle's P0 frame
+is reconciling against.
+
+**Scope.** Docs-discipline-only. No `src/`, `tests/`, `tools/`,
+or `dashboard/` surface change. Rule 5 main text retains current
+wording; Amendment E adds the exemption clause as an addendum
+read in conjunction with the main text.
+
+**Self-application.** v2.4 P0 backlog at fire = 14 open seeds.
+Apply Amendment E:
+
+- 8 NEW v2.4 seeds (Seeds v2.4-A through v2.4-H) — counted (new
+  this cycle; no 2-cycle drift yet).
+- 5 INTENT-graduated carry-forwards (Seeds v2.4-I, v2.4-J, v2.4-K,
+  v2.4-L, v2.4-M) — **EXEMPT** (promotion-criterion-bound; each
+  cites verbatim "promote on next regression of behavior X" in
+  `docs/v2.4-next-steps.md`).
+- 1 demand-bound carry-forward (Seed v2.4-N, Remote-CLI monitoring
+  extension) — **EXEMPT** (demand signal "concrete use case
+  surfaces" cited verbatim).
+
+Effective cap reading at v2.4 P0 = **8** (well under the prior
+11-cap and under any reasonable feature-cycle ceiling).
+
+**Acceptance.**
+
+- [x] Amendment text in `docs/adr/ADR-18-mvp-surface-freeze.md`
+      §"Amendments" (this entry).
+- [x] `docs/v2.4-task-plan.md` §"Operator decisions" records
+      the Amendment E disposition + 8 cap-counted / 6 exempt
+      breakdown.
+- [ ] v2.4 P2 ship-gate prompt (`docs/prompts/v2.4-orchestration/
+      phase-2-ship-gate-finalize.md`) MUST include a regression-
+      check step that re-reads `docs/v2.4-next-steps.md` for the
+      verbatim external-trigger citation of each Amendment E
+      exempt seed (v2.4-I..N). Acceptance of this Amendment E
+      item is satisfied when (a) the P2 prompt mints with that
+      step, OR (b) the v2.4 P2 PR body carries the regression-
+      check output directly. Prompt-mint scheduled at v2.4 P1
+      close per `docs/v2.4-task-plan.md` §"PHASE P2".
+- [ ] Future cycle next-steps files use the verbatim "promotion
+      criterion" or "demand signal" language for any seed
+      claiming Amendment E exemption.

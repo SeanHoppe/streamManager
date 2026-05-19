@@ -113,6 +113,8 @@ These thresholds are pre-registered. They are NOT relaxed based on observed data
 | Posterior CI on best arm | ≤ 0.10 | computed at retrain |
 | Parameter drift between retrains | \|Δθ\| ≤ 0.02 | 3 consecutive retrains |
 
+> **Footnote (v2.4 P0, 2026-05-19):** v10.1 deterministic policy makes "Posterior CI on best arm ≤ 0.10" structurally unreachable on non-baseline arms. See ADR-18 §Amendments 2026-05-19 (Amendment D — v10 P5 entry-gate split v10.1-mode vs v10.3-mode; closes #177).
+
 ### 10a. P3 cassette p95 + action-dist thresholds — disposition
 
 Per P0a item E1, the P3 prompt introduces two thresholds (cassette p95 ≤ 10 % regress, action-dist ≤ 20 % shift) that are NOT in the pre-registered ship-criteria table above. Disposition: **advisory only** at v10.0–v10.2. They appear in the validation report as observability signals but do NOT gate ship promotion. Promotion remains controlled by the 6 criteria in the table above. Re-evaluation in v10.3 if cassette regression empirically correlates with shadow regression.
