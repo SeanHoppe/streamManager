@@ -123,12 +123,33 @@ cycle surface; P2 is verification + narrative.
 ### S1 — Wipe soak state
 
 ```powershell
-Remove-Item -Force .bridge/soak-driver/*, .bridge/cli-pool.pids, reports/soak-*.md -ErrorAction SilentlyContinue
+Remove-Item -Force .bridge/soak-driver/*, .bridge/cli-pool.pids -ErrorAction SilentlyContinue
+git clean -df reports/
 ```
 
-(Preserve historical reports in git; only wipe working-directory
-artifacts. The `reports/soak-*.md` files already committed remain
-intact in git history.)
+(Seed v2.4-P fix: the soak driver writes `reports/soak-{iso_ts}.md`
+— no `tmp-` prefix — so any tracked-baseline-safe wipe must filter
+by git-tracked status, not by filename glob. `git clean -df` removes
+ONLY untracked files under `reports/` by construction; tracked
+baseline reports stay intact. This replaces the legacy
+`reports/soak-*.md` wildcard, which deleted tracked baselines and
+let a follow-up `git add -A` silently stage those deletes into the
+ship PR.)
+
+### S1.1 — Post-wipe assertion
+
+```powershell
+$drift = git status --short --untracked-files=no reports/
+if ($drift) {
+  Write-Error "S1 wipe left tracked reports/ in drift state:`n$drift"
+  exit 1
+}
+```
+
+(Asserts S1 did not touch any tracked file under `reports/`. The
+`--untracked-files=no` flag filters out stray untracked files —
+e.g. scratch cassettes — that would otherwise false-fire BLOCK
+before S2. Must return clean before S2 fires.)
 
 ### S2 — Fire Tier-3 soak
 

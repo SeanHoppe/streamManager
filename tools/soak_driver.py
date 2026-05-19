@@ -195,18 +195,37 @@ _LOC_RE_INS = _re.compile(r"(\d+) insertion")
 _LOC_RE_DEL = _re.compile(r"(\d+) deletion")
 
 
-def _git_diff_loc(anchor_sha: str) -> tuple[int, int, int] | str:
+def _git_diff_loc(
+    anchor_sha: str,
+    paths: list[str] | None = None,
+    *,
+    require_paths: bool = False,
+) -> tuple[int, int, int] | str:
     """Return ``(insertions, deletions, net)`` or a sentinel string.
 
     Sentinels: ``"UNSET"`` (env not provided), ``"INVALID-SHA"`` (anchor
     not in this repo), ``"NOT-A-GIT-REPO"`` (no git binary or not a
-    checkout). Empty diff returns ``(0, 0, 0)``.
+    checkout), ``"PATHSPEC-UNSET"`` (``require_paths=True`` but no
+    pathspec supplied). Empty diff returns ``(0, 0, 0)``.
+
+    ``paths`` narrows the diff to a pathspec (forwarded after ``--``).
+    Default (``None``) preserves legacy whole-repo behaviour. Ship-gate
+    callers MUST pass ``require_paths=True`` so a missing pathspec
+    yields the loud ``"PATHSPEC-UNSET"`` sentinel instead of silently
+    reverting to a whole-repo diff and inflating the ADR-18 Amendment C
+    binding gate with phantom deltas from out-of-bucket files.
     """
     if not anchor_sha:
         return "UNSET"
+    if require_paths and not paths:
+        return "PATHSPEC-UNSET"
+    cmd = ["git", "diff", "--shortstat", f"{anchor_sha}..HEAD"]
+    if paths:
+        cmd.append("--")
+        cmd.extend(paths)
     try:
         proc = subprocess.run(
-            ["git", "diff", "--shortstat", f"{anchor_sha}..HEAD"],
+            cmd,
             capture_output=True,
             text=True,
             check=True,
@@ -224,6 +243,23 @@ def _git_diff_loc(anchor_sha: str) -> tuple[int, int, int] | str:
     ins_n = int(ins.group(1)) if ins else 0
     del_n = int(dele.group(1)) if dele else 0
     return (ins_n, del_n, ins_n - del_n)
+
+
+def _loc_pathspec_from_env() -> list[str] | None:
+    """Parse ``BRIDGE_LOC_PATHSPEC`` (comma-separated) into a list.
+
+    Returns ``None`` when unset/empty so :func:`_git_diff_loc` keeps its
+    legacy whole-repo default. Whitespace around entries is stripped.
+
+    Constraint: the env-var format is comma-separated, so a single
+    pathspec entry containing a literal ``,`` cannot be expressed. The
+    current ship-gate workflow uses ``src/,tools/`` style entries
+    which do not require commas inside any single segment; revisit
+    if that ever changes (switch to ``;`` or JSON-encoded list).
+    """
+    raw = os.environ.get("BRIDGE_LOC_PATHSPEC", "")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return parts or None
 
 
 def _gate_verdict(result: tuple[int, int, int] | str, cycle_type: str) -> str:
@@ -950,8 +986,9 @@ def _write_report(
     _tip_sha = os.environ.get("BRIDGE_CYCLE_TIP_SHA", "")
     _pred_sha = os.environ.get("BRIDGE_PREDECESSOR_TAG_SHA", "")
     _ctype = os.environ.get("BRIDGE_CYCLE_TYPE", "")
-    _tip_res = _git_diff_loc(_tip_sha)
-    _pred_res = _git_diff_loc(_pred_sha)
+    _paths = _loc_pathspec_from_env()
+    _tip_res = _git_diff_loc(_tip_sha, _paths, require_paths=True)
+    _pred_res = _git_diff_loc(_pred_sha, _paths, require_paths=True)
     _verdict = _gate_verdict(_tip_res, _ctype)
     _tip_short = _tip_sha[:7] if _tip_sha else "UNSET"
     _pred_short = _pred_sha[:7] if _pred_sha else "UNSET"
@@ -966,6 +1003,11 @@ def _write_report(
     lines.append("- Consolidation cycle: net ≤ 0 vs cycle-tip = PASS.")
     lines.append("- Feature cycle: net < 2250 (1.5× soft target) vs cycle-tip = PASS; ≥ 2250 = BLOCK.")
     lines.append(f"- Cycle type from `BRIDGE_CYCLE_TYPE`: `{_ctype or 'UNSET'}` (UNKNOWN if unset).")
+    lines.append(
+        "- `PATHSPEC-UNSET` in either anchor row means `BRIDGE_LOC_PATHSPEC` "
+        "was not exported at soak-fire; ship-gate operator must re-run with "
+        "the production bucket pathspec before reading the verdict."
+    )
     lines.append("")
 
     lines.append("## Latency (engine.evaluate wall-clock)")
@@ -1911,8 +1953,9 @@ def main() -> int:
     _tip_sha_s = os.environ.get("BRIDGE_CYCLE_TIP_SHA", "")
     _pred_sha_s = os.environ.get("BRIDGE_PREDECESSOR_TAG_SHA", "")
     _ctype_s = os.environ.get("BRIDGE_CYCLE_TYPE", "")
-    _tip_r = _git_diff_loc(_tip_sha_s)
-    _pred_r = _git_diff_loc(_pred_sha_s)
+    _paths_s = _loc_pathspec_from_env()
+    _tip_r = _git_diff_loc(_tip_sha_s, _paths_s, require_paths=True)
+    _pred_r = _git_diff_loc(_pred_sha_s, _paths_s, require_paths=True)
     _v = _gate_verdict(_tip_r, _ctype_s)
     print(f"[soak] cycle-tip LOC delta (Amend C): {_fmt_loc_cell(_tip_r)}  [{_v}]")
     print(f"[soak] predecessor-tag LOC delta (Amend A): {_fmt_loc_cell(_pred_r)}  [narrative]")
