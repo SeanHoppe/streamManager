@@ -123,12 +123,29 @@ cycle surface; P2 is verification + narrative.
 ### S1 — Wipe soak state
 
 ```powershell
-Remove-Item -Force .bridge/soak-driver/*, .bridge/cli-pool.pids, reports/soak-*.md -ErrorAction SilentlyContinue
+Remove-Item -Force .bridge/soak-driver/*, .bridge/cli-pool.pids, reports/soak-tmp-*.md -ErrorAction SilentlyContinue
 ```
 
-(Preserve historical reports in git; only wipe working-directory
-artifacts. The `reports/soak-*.md` files already committed remain
-intact in git history.)
+(Seed v2.4-P fix: the wipe glob is `reports/soak-tmp-*.md`, NOT
+`reports/soak-*.md`. The legacy wildcard matched tracked baseline
+reports — a working-tree delete that `git status` flagged as `D`
+and a follow-up `git add -A` would have staged into the ship PR.
+Soak driver writes new reports under `reports/soak-tmp-*.md`; only
+those are ephemeral. Tracked baselines under `reports/soak-*.md`
+are preserved.)
+
+### S1.1 — Post-wipe assertion
+
+```powershell
+$drift = git status --short reports/
+if ($drift) {
+  Write-Error "S1 wipe left tracked reports/ in drift state:`n$drift"
+  exit 1
+}
+```
+
+(Asserts S1 did not touch any tracked file under `reports/`. Must
+return clean before S2 fires.)
 
 ### S2 — Fire Tier-3 soak
 
