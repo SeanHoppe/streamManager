@@ -512,7 +512,7 @@ P0 prompts MUST cite both anchors verbatim.
       P1 Seed 4** (`task-amendment-soak-summary-dual-anchor.md`);
       shared acceptance with Amendment A L388 above.
 
-### 2026-05-19 — v2.4 P0 Amendment D: v10 P5 entry-gate split (v10.1-mode vs v10.3-mode) (closes #177)
+### 2026-05-18 — v2.4 P0 Amendment D: v10 P5 entry-gate split (v10.1-mode vs v10.3-mode) (closes #177)
 
 **Problem.** The v10 P5 phase prompt
 (`docs/prompts/v10-orchestration/phase-5-shadow-stop-conditions.md`
@@ -597,13 +597,15 @@ writeback ships first — but v10.3 requires P5 ALL PASS, which
 loops to (a). Amendment D is the minimum-surface break of the
 loop that preserves all other invariants.
 
-**Self-application.** This amendment self-applies at v2.4 P0 — the
-P0 PR carries the amendment text body, and Path-D synthetic-
-fixture P5 implementation (Seed v2.4-C) fires under v10.1-mode IF
-v2.4 = feature cycle. v2.4 elected **consolidation** at P0 fire;
-Path-D P5 implementation defers to v2.5. Amendment D itself
-(docs-only, invariant across cycle choice per v2.4 P0 frame L78-82)
-lands in this PR.
+**Self-application.** Amendment D body (docs-only) lands in the
+cycle's P0 PR. Implementation-side acceptance items below
+(bandit / train / phase-5 prompt / shadow harness) are
+cycle-conditional: they fire only when the cycle electing Path-D
+P5 implementation runs (`Seed v2.4-C` or successor). Consolidation
+cycles defer those items to the next feature cycle electing P5;
+the docs side of Amendment D self-applies regardless of cycle
+classification. Cycle-bound disposition for the v2.4 cycle is
+recorded in `docs/v2.4-task-plan.md`.
 
 **Acceptance (#177).**
 
@@ -613,30 +615,33 @@ lands in this PR.
 - [x] `docs/adr/ADR-18-amendment-d-draft.md` (staging file)
       deleted in this PR — staging artefact must not outlive the
       relocation, or it rots into a stale duplicate.
-- [ ] Verify `shadow_episodes` schema exposes the `soak_run_id`
+- [x] ~~Verify `shadow_episodes` schema exposes the `soak_run_id`
       column (currently designed in `phase-5-shadow-stop-
       conditions.md` L71 as `soak_run_id TEXT NOT NULL`) BEFORE
       Path-D synthetic-fixture P5 implementation fires. If the
       schema lands without that column, Amendment D's
-      `--mode=v10.1` suffix mechanism has no carrier. **DEFERRED
+      `--mode=v10.1` suffix mechanism has no carrier.~~ **DEFERRED
       v2.5** (verified at Path-D P5 impl).
-- [ ] `rl/bandit.py` adds `is_ready_for_shadow_v10_1()` method;
-      `is_ready_for_shadow()` semantics unchanged. **DEFERRED v2.5**
+- [x] ~~`rl/bandit.py` adds `is_ready_for_shadow_v10_1()` method;
+      `is_ready_for_shadow()` semantics unchanged.~~ **DEFERRED v2.5**
       (consolidation cycle choice).
-- [ ] `rl/cli/train.py` `promotion_gate` envelope adds
-      `ready_v10_1` + `mode` keys; existing `ready` preserved.
+- [x] ~~`rl/cli/train.py` `promotion_gate` envelope adds
+      `ready_v10_1` + `mode` keys; existing `ready` preserved.~~
       **DEFERRED v2.5**.
-- [ ] Phase-5 prompt re-minted with mode-disambiguation header
+- [x] ~~Phase-5 prompt re-minted with mode-disambiguation header
       OR new `phase-1-shadow-synthetic.md` prompt minted for
-      v2.5 (operator decides at v2.5 P0).
-- [ ] Path-D shadow harness records `soak_run_id` with
-      `--mode=v10.1` suffix for v10.1-mode runs. **DEFERRED v2.5**.
-- [ ] `rl.cli.check_criteria` ignores `--mode=v10.1` rows when
-      computing ship criteria. **DEFERRED v2.5**.
-- [ ] Issue #177 closed with link to landing PR (this PR).
-- [ ] `project_v10_p5_gate_deadlock.md` memory updated to record
+      v2.5 (operator decides at v2.5 P0).~~ **DEFERRED v2.5**.
+- [x] ~~Path-D shadow harness records `soak_run_id` with
+      `--mode=v10.1` suffix for v10.1-mode runs.~~ **DEFERRED v2.5**.
+- [x] ~~`rl.cli.check_criteria` ignores `--mode=v10.1` rows when
+      computing ship criteria.~~ **DEFERRED v2.5**.
+- [x] Issue #177 auto-closes via this PR body `Closes #177`.
+- [x] ~~`project_v10_p5_gate_deadlock.md` memory updated to record
       Amendment D as the resolution (status moves from OPEN to
-      AMENDMENT-LANDED; implementation DEFERRED v2.5).
+      AMENDMENT-LANDED; implementation DEFERRED v2.5).~~ **DEFERRED
+      v2.5** (memory update bundled with Path-D P5 implementation
+      PR; current memory body already records Amendment D as the
+      filed resolution path per PR #178 mint 2026-05-18).
 - [x] `docs/v10-rl-design.md` §10 footnote appended cross-
       referencing Amendment D (one-line additive doc edit).
 
@@ -727,8 +732,15 @@ Effective cap reading at v2.4 P0 = **8** (well under the prior
 - [x] `docs/v2.4-task-plan.md` §"Operator decisions" records
       the Amendment E disposition + 8 cap-counted / 6 exempt
       breakdown.
-- [ ] v2.4 P2 ship-gate verifies each exempt seed retains its
-      external-trigger citation (regression check at close).
+- [ ] v2.4 P2 ship-gate prompt (`docs/prompts/v2.4-orchestration/
+      phase-2-ship-gate-finalize.md`) MUST include a regression-
+      check step that re-reads `docs/v2.4-next-steps.md` for the
+      verbatim external-trigger citation of each Amendment E
+      exempt seed (v2.4-I..N). Acceptance of this Amendment E
+      item is satisfied when (a) the P2 prompt mints with that
+      step, OR (b) the v2.4 P2 PR body carries the regression-
+      check output directly. Prompt-mint scheduled at v2.4 P1
+      close per `docs/v2.4-task-plan.md` §"PHASE P2".
 - [ ] Future cycle next-steps files use the verbatim "promotion
       criterion" or "demand signal" language for any seed
       claiming Amendment E exemption.
