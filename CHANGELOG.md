@@ -6,7 +6,143 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
-## [2.3.0] — 2026-05-17
+## [2.4.0] — 2026-05-19
+
+Tagged ship of the v2.4 consolidation cycle — **ADR-18 Amendment D**
+(v10 P5 entry-gate split, closes #177) + **Amendment E** (Rule 5
+cycle-handoff exemption) + **issue #111 close** (v10 P4 trainer DOD
+met at cf7d003 / PR #176) + **Sonnet-DIP investigation report**
+(Seed v2.4-D = FREEZE-on-content). See `docs/v2.4-task-plan.md` for
+cycle frame + phase ledger, `docs/v2.4-next-steps.md` for the
+row-by-row compare-back outcome, and `docs/v2.4-backlog.md` for
+carry-forwards into v2.5.
+
+**ADR-18 surface freeze remains in force.** Consolidation cycle:
+net production-bucket LOC = **0** vs cycle-tip
+`b35e9824881a7251800fc35eb956157561527e47` (P0 merge) per
+Amendment C binding gate (manual bucket-scoped diff —
+`src/ + tests/ + tools/ + dashboard/`). `WIRED_LEVER_LEDGER_COUNT`
+held at **1** (production scope; v2.3 Seed 6 JsonlTailWorker wire
+unchanged) per Seed v2.4-H scope-binding decision (option (a)
+production canonical). Rule 5 backlog cap: Amendment E minted at P0
+(8 cap-counted + 6 EXEMPT effective reading); no further cap-bump.
+
+### Added
+
+- **ADR-18 Amendment D — v10 P5 entry-gate split**
+  ([PR #179](https://github.com/SeanHoppe/streamManager/pull/179)) —
+  Splits the P5 ready gate into `v10.1-mode` (baseline-vs-baseline
+  sanity, fires when baseline arm n ≥ 200 effective + CI ≤ 0.10)
+  and `v10.3-mode` (original gate; activates when v10.3 stochastic
+  propensities ship). Body relocated verbatim from staging draft
+  `docs/adr/ADR-18-amendment-d-draft.md` (deleted same PR) into
+  ADR-18 §Amendments. Cycle-conditional acceptance items
+  (`rl/bandit.py` `is_ready_for_shadow_v10_1`, `rl/cli/train.py`
+  `promotion_gate` envelope keys, phase-5 prompt re-mint, shadow
+  harness `--mode=v10.1` suffix, `check_criteria` filter,
+  `shadow_episodes.soak_run_id` schema verify) all DEFERRED v2.5
+  because consolidation cycle did not elect Path-D synthetic-
+  fixture P5 implementation (Seed v2.4-C deferred). Closes #177.
+- **ADR-18 Amendment E — Rule 5 cycle-handoff exemption**
+  ([PR #179](https://github.com/SeanHoppe/streamManager/pull/179)) —
+  Formalizes that promotion-criterion-bound + demand-bound carry-
+  forwards are EXEMPT from the 2-cycle drift cap if their external
+  trigger has not yet fired. Operator chose amendment over a third
+  consecutive cap-bump (1 → 6 → 11 → 14). Self-application at v2.4
+  P0: 8 cap-counted (Seeds v2.4-A..H) + 6 EXEMPT (Seeds v2.4-I..N).
+- **Sonnet-DIP investigation report (Seed v2.4-D)**
+  ([PR #181](https://github.com/SeanHoppe/streamManager/pull/181)) —
+  `reports/sonnet-dip-v23-v24.md` (32-row Buckets A/B/D/F-P table +
+  3-cycle trajectory cross-check + CLI-degrade fingerprint count +
+  per-row diagnosis). Recommendation: **FREEZE-on-content**. 0
+  Bucket A rows (no Sonnet regression on previously-stable-passing
+  rows); pass count steady at 18 across v2.2 → v2.3; 4 Bucket D rows
+  each carry a non-Sonnet-regression explanation (sample variance /
+  CLI-degrade fingerprint / pre-existing failure / pre-v2.3 drift).
+  v2.5 follow-ups routed: promote Seed v2.4-G to 🔴 + row-16
+  disposition.
+- **v2.4 PM-mint pass**
+  ([PR #178](https://github.com/SeanHoppe/streamManager/pull/178)) —
+  `docs/v2.4-next-steps.md` (14-seed itemization + compare-back
+  protocol, the goal-directive comparison anchor) + v2.4
+  orchestration phase prompts under
+  `docs/prompts/v2.4-orchestration/`.
+- **v2.4 P2 ship-gate prompt mint**
+  ([PR #182](https://github.com/SeanHoppe/streamManager/pull/182)) —
+  `docs/prompts/v2.4-orchestration/phase-2-ship-gate-finalize.md`
+  with Amendment C cycle-tip anchor verbatim + dual-anchor reporting
+  + Seed v2.4-H scope binding folded into PR body + post-FREEZE
+  Sonnet-DIP follow-up watch + p95 / L4 / LM watch. Caveman-review
+  fold landed on the same PR.
+
+### Changed
+
+- **v2.4 P0 cycle frame**
+  ([PR #179](https://github.com/SeanHoppe/streamManager/pull/179)) —
+  `docs/v2.4-task-plan.md`: cycle type = CONSOLIDATION; 7 operator
+  decisions recorded; memory pre-flight stamp (2 stale memories
+  updated: `project_v10_rl_track.md` + `project_v10_p4_hold_lifted.md`).
+- **Seed v2.4-H lever-ledger scope binding** — recorded verbatim
+  in this PR body and `docs/v2.4-next-steps.md` §"Seed v2.4-H":
+  option (a) PRODUCTION SCOPE CANONICAL. Soak-scope
+  `WIRED_LEVER_LEDGER: dict = {}` in `tools/soak_driver.py` remains
+  an internal soak-harness artifact (no surface change).
+- **Cycle-discipline LOC anchors** — Amendment C cycle-tip anchor
+  honored verbatim (`b35e9824...HEAD`); manual bucket-scoped diff
+  PASS at net 0. Soak summary auto-rendered dual-anchor block
+  recorded a false BLOCK due to a latent `_git_diff_loc` whole-repo
+  bug (filed as Seed v2.4-O for v2.5 fix).
+
+### Closed
+
+- **Issue #111 — v10 P4 constrained Thompson bandit trainer.**
+  Closed at v2.4 P0 PR #179 merge (Seed v2.4-B housekeeping). DOD
+  met at `cf7d003` (PR #176, merged 2026-05-18); gate-semantics
+  follow-up tracked in #177.
+- **Issue #177 — v10 P5 entry-gate deadlock.** Closed by Amendment
+  D landing at v2.4 P0 PR #179. Implementation side (Path-D
+  synthetic-fixture P5) deferred to v2.5 (Seed v2.4-C).
+
+### Removed
+
+- `docs/adr/ADR-18-amendment-d-draft.md` — staging file deleted at
+  P0 PR #179 after body relocation into ADR-18 §Amendments verbatim.
+- _(no production code removed at v2.4 — consolidation cycle. See
+  Deferred / carry-forward for promoted-but-not-fired items.)_
+
+### Deferred / carry-forward into v2.5
+
+Per `docs/v2.4-backlog.md` (NEW this PR) §"Carry-forwards from v2.4"
++ §"NEW v2.4 ship-gate seeds":
+
+- ⏸ 🟡 **Seed v2.4-C** — Path-D synthetic-fixture P5 implementation
+  deferred per consolidation cycle choice (~600 LOC).
+- ⏸ 🟢 **Seed v2.4-E** — overall p95 watch (10.518 s; NOT ≤ 8.2 s
+  closure threshold).
+- ⏸ 🟡 **Seed v2.4-F** — L4 + LM categorize p95 small-n watch
+  (mild recovery; same small n; downgrade candidate at v2.5).
+- ⏸ 🟡 **Seed v2.4-G** — CLI governance timeout audit (promotion
+  to 🔴 recommended at v2.5 P0 per Seed v2.4-D §"v2.5 follow-ups";
+  row-08 3× NONE empirical hook).
+- 🔴 **NEW Seed v2.4-O** — `tools/soak_driver.py` `_git_diff_loc`
+  whole-repo bug. Fix at v2.5: pass bucket-scoped path args to
+  `git diff`. ~5 LOC.
+- 🟡 **NEW Seed v2.4-P** — P2 prompt S1 wildcard deletes tracked
+  reports. Narrow glob OR add `git checkout HEAD -- reports/`
+  follow-up at v2.5 P2 prompt mint.
+- 🟡 **NEW Seed v2.4-Q** — re-open Seed v2.4-D investigation
+  at v2.5 per S4 disposition (Sonnet 0.8261 still in 0.80–0.85
+  dipped band; FREEZE-on-content holds).
+- ⏸ 🟢 **Seeds v2.4-I..M** — promotion-criterion-bound
+  (Amendment E EXEMPT).
+- ⏸ 🟡 **Seed v2.4-N** — remote-CLI monitoring (demand-bound;
+  Amendment E EXEMPT).
+- v2.5 P0 enters with **9 open seeds** (3 NEW + 4 v2.4 deferred +
+  2 watch carries) under the 7-cap-counted reading per Amendment E.
+- v10 P4 corpus piggyback: 240 → **360** (+120 episodes). Phase-4
+  trainer data-side blocker remains LIFTED at v2.4.
+
+
 
 Tagged ship of the v2.3 feature cycle — **JsonlTailWorker production
 wiring** (the lever wire; first wired lever since v1.7), **soak-driver
