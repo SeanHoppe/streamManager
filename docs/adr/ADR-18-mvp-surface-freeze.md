@@ -618,7 +618,8 @@ lands in this PR.
       conditions.md` L71 as `soak_run_id TEXT NOT NULL`) BEFORE
       Path-D synthetic-fixture P5 implementation fires. If the
       schema lands without that column, Amendment D's
-      `--mode=v10.1` suffix mechanism has no carrier.
+      `--mode=v10.1` suffix mechanism has no carrier. **DEFERRED
+      v2.5** (verified at Path-D P5 impl).
 - [ ] `rl/bandit.py` adds `is_ready_for_shadow_v10_1()` method;
       `is_ready_for_shadow()` semantics unchanged. **DEFERRED v2.5**
       (consolidation cycle choice).
@@ -636,7 +637,7 @@ lands in this PR.
 - [ ] `project_v10_p5_gate_deadlock.md` memory updated to record
       Amendment D as the resolution (status moves from OPEN to
       AMENDMENT-LANDED; implementation DEFERRED v2.5).
-- [ ] `docs/v10-rl-design.md` §10 footnote appended cross-
+- [x] `docs/v10-rl-design.md` §10 footnote appended cross-
       referencing Amendment D (one-line additive doc edit).
 
 ### 2026-05-19 — v2.4 P0 Amendment E: Rule 5 cycle-handoff exemption for externally-triggered seeds
