@@ -71,7 +71,7 @@ ADR-18 surface freeze stays in force. Amendment D + E landed P0.
 
 - `docs/v2.4-task-plan.md` §PHASE P2 — scope sketch (minted at P0).
 - `docs/v2.4-next-steps.md` — comparison anchor. Walk row-by-row at
-  S9 close memory.
+  S10 (compare-back) → record outcome in S11 (close memory).
 - `docs/prompts/v2.3-orchestration/phase-2-ship-gate-finalize.md` —
   immediate predecessor; format template.
 - `docs/adr/ADR-5-latency-budget.md` — append §"v2.4 ship-gate
@@ -138,9 +138,9 @@ launch from main thread with `run_in_background` + `ScheduleWakeup`.
 
 ```powershell
 $env:BRIDGE_API_GOV = "1"
-$env:BRIDGE_RL_LOGGER_ENABLED = "1"       # v10 P4 corpus continued piggyback (240→300+ target)
+$env:BRIDGE_RL_LOGGER_ENABLED = "1"       # v10 P4 corpus continued piggyback (per docs/v2.4-task-plan.md)
 $env:BRIDGE_CYCLE_TIP_SHA = "b35e9824881a7251800fc35eb956157561527e47"  # v2.4 P0 merge — Amendment C anchor
-$env:BRIDGE_PREDECESSOR_TAG_SHA = "b00473d"  # v2.3.0
+$env:BRIDGE_PREDECESSOR_TAG_SHA = "b00473dd68fe1d9faed6feb6397370ca542602a0"  # v2.3.0
 $env:BRIDGE_CYCLE_TYPE = "consolidation"
 
 python tools/soak_driver.py `
@@ -192,8 +192,10 @@ Exit 0 required. Compare against v2.3 ship-gate baselines:
     OR mint floor amendment.
   - < 0.80 → BLOCK ship; root-cause.
 
-Record three-cycle trajectory `v2.2 → v2.3 → v2.4` for both models
-in P2 PR body (matches Sonnet-DIP investigation §Step 4 pattern).
+Record four-cycle trajectory `v2.1 → v2.2 → v2.3 → v2.4` for both
+models in P2 PR body. Matches Sonnet-DIP investigation §Step 4
+pattern (`task-sonnet-dip-investigation.md`) which pulls v2.1
+majority for trajectory continuity.
 
 ### S5 — LOC delta verification (Amendment C cycle-tip anchor)
 
@@ -233,18 +235,17 @@ scope-binding decision verbatim. Options:
 - **(b) Soak scope is canonical.** Close-memory field = soak count
   (= 0). Production-scope wiring is informational; close-memory
   uses soak `WIRED_LEVER_LEDGER: dict = {}` len.
-- **(c) Both — distinct fields.** Close-memory carries
-  `WIRED_LEVER_LEDGER_COUNT_PRODUCTION` + `_SOAK` as separate
-  fields. ADR-18 §Amendments may need an addendum.
 
 **Recommendation: (a) production scope.** Rationale: feature-cycle
 classification under Amendment A asks "is a lever wired in shipped
 code?" not "is a lever exercised by soak driver?". Soak-scope
 ledger stays internal to soak harness narrative.
 
-Decision recorded verbatim in P2 PR body. If (c) elected, mint
-ADR-18 §Amendment F in same PR (docs-only addendum) clarifying
-scope split.
+Decision recorded verbatim in P2 PR body. P2 PR body alone is
+binding — no ADR-18 amendment required for (a) or (b). If operator
+wishes to elevate scope split into ADR-18 §Amendments (e.g. dual-
+field future evolution), mint as a SEPARATE follow-up PR in v2.5
+(not in P2 ship-gate PR, per Do-not-touch guard).
 
 ### S7 — ADR-5 v2.4 baseline append (conditional)
 
@@ -284,7 +285,8 @@ Append `## [2.4.0]` per Keep-a-Changelog format. Cover:
   `docs/adr/ADR-18-amendment-d-draft.md` deleted.
 - **Closed** — Issue #111 (v10 P4 trainer DOD; PR #176); Issue #177
   (closed by Amendment D landing).
-- **Removed** — deletions vs cycle-tip and predecessor-tag (if any).
+- **Removed** — deletions vs **cycle-tip** (Amendment C binding;
+  if any). Predecessor-tag delta listed in narrative footnote only.
 - **Deferred / carry-forward** — explicit list of v2.4-next-steps
   seeds NOT closed this cycle: Seed v2.4-C (Path-D P5; v2.5),
   Seed v2.4-G (CLI-timeout audit; v2.5), Seeds v2.4-I..N (promotion-
