@@ -245,6 +245,22 @@ def test_consolidation_whole_repo_phantom_positive_blocks():
     assert _gate_verdict(result, "consolidation") == "BLOCK"
 
 
+def test_consolidation_bucket_scoped_with_real_delta_blocks():
+    """Bucket-scoped, real positive net (+5) → consolidation BLOCK.
+
+    Inverse of ``test_consolidation_bucket_scoped_zero_passes``: locks
+    the tolerance asymmetry in both directions. Bucket-scoping does
+    NOT hide a real positive delta — only phantom out-of-bucket churn.
+    Mirrors the (+10, -5, +5) case from the PR #184 review feedback.
+    """
+    out = " 2 files changed, 10 insertions(+), 5 deletions(-)\n"
+    side_effect, _ = _capture_cmd(out)
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        result = _git_diff_loc("abc1234", ["src/"])
+    assert result == (10, 5, 5)
+    assert _gate_verdict(result, "consolidation") == "BLOCK"
+
+
 def test_feature_bucket_scoped_under_soft_passes():
     """Feature tolerance, bucket-scoped, +1499 → PASS."""
     out = " 3 files changed, 1499 insertions(+)\n"
@@ -275,3 +291,182 @@ def test_feature_whole_repo_over_hard_blocks():
     with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
         result = _git_diff_loc("abc1234")
     assert _gate_verdict(result, "feature") == "BLOCK"
+
+
+# ---- PR #184 review-fix: require_paths sentinel ----
+#
+# Closes the silent whole-repo fallback at the ship-gate binding site:
+# when ``BRIDGE_LOC_PATHSPEC`` is unset, ``_loc_pathspec_from_env``
+# returns ``None`` and the legacy two-arg call to ``_git_diff_loc``
+# silently ran whole-repo. ADR-18 Amendment C bound against that
+# inflated delta and would false-BLOCK the next consolidation. The
+# fix forces the binding site to pass ``require_paths=True`` which
+# returns a loud ``"PATHSPEC-UNSET"`` sentinel.
+
+
+def test_require_paths_unset_returns_pathspec_unset_sentinel():
+    """require_paths=True + paths=None → loud sentinel, no subprocess call."""
+    side_effect, captured = _capture_cmd("")
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        result = _git_diff_loc("abc1234", None, require_paths=True)
+    assert result == "PATHSPEC-UNSET"
+    assert "argv" not in captured  # short-circuited before subprocess
+
+
+def test_require_paths_empty_list_returns_sentinel():
+    """require_paths=True + paths=[] (falsy) → sentinel."""
+    side_effect, captured = _capture_cmd("")
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        result = _git_diff_loc("abc1234", [], require_paths=True)
+    assert result == "PATHSPEC-UNSET"
+    assert "argv" not in captured
+
+
+def test_require_paths_with_pathspec_runs_normally():
+    """require_paths=True + non-empty paths → normal shortstat path."""
+    out = " 1 file changed, 5 insertions(+)\n"
+    side_effect, captured = _capture_cmd(out)
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        result = _git_diff_loc("abc1234", ["src/"], require_paths=True)
+    assert result == (5, 0, 5)
+    assert "--" in captured["argv"]
+    sep = captured["argv"].index("--")
+    assert captured["argv"][sep + 1 :] == ["src/"]
+
+
+def test_require_paths_default_is_false_preserves_legacy():
+    """Default require_paths=False keeps legacy whole-repo behaviour."""
+    out = " 1 file changed, 5 insertions(+)\n"
+    side_effect, captured = _capture_cmd(out)
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        result = _git_diff_loc("abc1234")  # no kwarg
+    assert result == (5, 0, 5)
+    assert "--" not in captured["argv"]
+
+
+def test_gate_verdict_pathspec_unset_returns_unknown():
+    """The new sentinel must short-circuit the gate to UNKNOWN, not BLOCK/PASS."""
+    assert _gate_verdict("PATHSPEC-UNSET", "consolidation") == "UNKNOWN"
+    assert _gate_verdict("PATHSPEC-UNSET", "feature") == "UNKNOWN"
+
+
+def test_fmt_loc_cell_pathspec_unset_passes_through():
+    """Sentinel renders verbatim so the soak summary surfaces the cause."""
+    assert _fmt_loc_cell("PATHSPEC-UNSET") == "PATHSPEC-UNSET"
+
+
+def test_unset_anchor_beats_pathspec_unset():
+    """Empty anchor short-circuits before the pathspec check."""
+    assert _git_diff_loc("", None, require_paths=True) == "UNSET"
+
+
+# ---- PR #184 review-fix: end-to-end ship-gate env-to-argv threading ----
+#
+# Helper-only tests left a gap: a future regression that deletes the
+# ``_loc_pathspec_from_env()`` call at one of the two ship-gate sites
+# (``_write_report`` or ``main``) would leave the helper tests green
+# but silently revert ship-gate to whole-repo. These e2e tests set
+# ``BRIDGE_LOC_PATHSPEC`` + mock ``git diff`` and assert the captured
+# argv carries the bucket scope through both code paths.
+
+
+def _multi_capture_cmd(stdouts: list[str] | None = None):
+    """Side-effect that records EVERY subprocess.run argv across calls."""
+    calls: list[list[str]] = []
+    stdouts = list(stdouts or [""])
+
+    def _side_effect(*args, **kwargs):
+        calls.append(list(args[0]))
+        idx = min(len(calls) - 1, len(stdouts) - 1)
+        return subprocess.CompletedProcess(args[0], 0, stdout=stdouts[idx], stderr="")
+
+    return _side_effect, calls
+
+
+def _git_diff_calls(calls: list[list[str]]) -> list[list[str]]:
+    """Filter argv list to only ``git diff --shortstat`` invocations."""
+    return [argv for argv in calls if argv[:3] == ["git", "diff", "--shortstat"]]
+
+
+def _write_report_kwargs(report_path):
+    """Minimal kwargs to invoke ``_write_report`` for the LOC-anchor block."""
+    from pathlib import Path
+
+    return {
+        "started_at_iso": "2026-05-19T00:00:00+00:00",
+        "ended_at_iso": "2026-05-19T00:30:00+00:00",
+        "total_runtime_s": 1800.0,
+        "payloads": [],
+        "sse_received": 0,
+        "sse_errors": 0,
+        "dashboard_log_path": Path(report_path.parent / "dashboard.log"),
+        "consumer_log_path": Path(report_path.parent / "consumer.log"),
+        "gov_db": Path(report_path.parent / "gov.db"),
+        "server_log_excerpt": "",
+        "rss_start": 100.0,
+        "rss_end": 100.0,
+        "rss_peak": 100.0,
+        "fd_start": 10,
+        "fd_end": 10,
+        "cli_present": True,
+    }
+
+
+def test_write_report_threads_bridge_loc_pathspec_to_git(monkeypatch, tmp_path):
+    """``_write_report`` call site (the binding gate write) honours the env.
+
+    A future regression that deletes the ``_loc_pathspec_from_env()`` call
+    at the binding-gate site would silently revert to whole-repo. Helper
+    tests would still pass; this e2e test fires the BLOCK signal.
+    """
+    from tools import soak_driver
+
+    monkeypatch.setenv("BRIDGE_LOC_PATHSPEC", "src/,tools/")
+    monkeypatch.setenv("BRIDGE_CYCLE_TIP_SHA", "tip12345")
+    monkeypatch.setenv("BRIDGE_PREDECESSOR_TAG_SHA", "pred1234")
+    monkeypatch.setenv("BRIDGE_CYCLE_TYPE", "consolidation")
+
+    side_effect, calls = _multi_capture_cmd([" 0 files changed\n"])
+    state = soak_driver._DriverState()
+    report_path = tmp_path / "soak.md"
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        soak_driver._write_report(
+            report_path, state, **_write_report_kwargs(report_path)
+        )
+
+    diff_calls = _git_diff_calls(calls)
+    assert diff_calls, "_write_report did not invoke `git diff --shortstat`"
+    for argv in diff_calls:
+        assert "--" in argv, f"`--` separator missing from argv: {argv}"
+        sep = argv.index("--")
+        assert argv[sep + 1 :] == ["src/", "tools/"], (
+            f"bucket pathspec not threaded: argv tail = {argv[sep + 1 :]}"
+        )
+
+
+def test_write_report_unset_env_yields_pathspec_unset_in_report(monkeypatch, tmp_path):
+    """``_write_report`` with unset env writes ``PATHSPEC-UNSET`` (no silent revert)."""
+    from tools import soak_driver
+
+    monkeypatch.delenv("BRIDGE_LOC_PATHSPEC", raising=False)
+    monkeypatch.setenv("BRIDGE_CYCLE_TIP_SHA", "tip12345")
+    monkeypatch.setenv("BRIDGE_PREDECESSOR_TAG_SHA", "pred1234")
+    monkeypatch.setenv("BRIDGE_CYCLE_TYPE", "consolidation")
+
+    side_effect, calls = _multi_capture_cmd([" 99 files changed, 5000 insertions(+)\n"])
+    state = soak_driver._DriverState()
+    report_path = tmp_path / "soak.md"
+    with patch("tools.soak_driver.subprocess.run", side_effect=side_effect):
+        soak_driver._write_report(
+            report_path, state, **_write_report_kwargs(report_path)
+        )
+
+    diff_calls = _git_diff_calls(calls)
+    assert diff_calls == [], (
+        f"expected zero git-diff calls under unset env (short-circuit), got: {diff_calls}"
+    )
+    body = report_path.read_text(encoding="utf-8")
+    assert "PATHSPEC-UNSET" in body, "report must surface PATHSPEC-UNSET sentinel"
+    assert "**Gate verdict (Amendment C):** UNKNOWN" in body, (
+        "gate must read UNKNOWN under PATHSPEC-UNSET sentinel (not PASS/BLOCK)"
+    )
