@@ -120,8 +120,8 @@ def _percentile(values: list[float], p: float) -> float:
 
 
 def _timeout_count(durations_s: list[float]) -> int:
-    """Conservative timeout-attribution proxy: count runs within 0.5s of
-    TIMEOUT_SECONDS (accounts for subprocess teardown latency)."""
+    """Tolerance-padded timeout-attribution proxy: count runs within 0.5s
+    of TIMEOUT_SECONDS (accounts for subprocess teardown latency)."""
     threshold = TIMEOUT_SECONDS - 0.5
     return sum(1 for d in durations_s if d >= threshold)
 
@@ -174,7 +174,7 @@ def render_report(rows: list[dict], results: dict, runs: int,
     for label in ("sonnet", "haiku"):
         n = summary[f"{label}_duration_s_n"]
         if n == 0:
-            lines.append(f"| {label:<6} | n=0; (skipped) |  |  |  |  |")
+            lines.append(f"| {label:<6} | n=0; (skipped) | — | — | — | — |")
             continue
         lines.append(
             "| {lab:<6} | {n} | {p50:.3f}s | {p95:.3f}s | {p99:.3f}s | {mx:.3f}s |".format(
