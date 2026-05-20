@@ -6,6 +6,185 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-05-20
+
+Tagged ship of the v2.6 **feature cycle** — Seed v2.5-G step (1)
+CLI-timeout instrumentation lever-wire (~30 LOC tooling) + Seed v2.5-A
+diagnosis resolution. See `docs/v2.6-task-plan.md` for cycle frame +
+phase ledger, `docs/v2.6-next-steps.md` for the row-by-row compare-
+back outcome, and `docs/v2.6-backlog.md` for carry-forwards into v2.7.
+
+**ADR-18 surface freeze remains in force.** Feature cycle: net
+production-bucket LOC = **+147 at soak fire-time** vs cycle-tip
+`084137dfc8823ae5eac84755581fc0aeed6342db` (v2.6 P0 PR #193 merge)
+per Amendment C binding gate (manual bucket-scoped diff —
+`src/ + tests/ + tools/ + dashboard/`). Soft target ≤ 1500, BLOCK at
+1.5× = 2250; **PASS**. Post-PR-merge net rises to ~670 once
+`tools/ship_gate_runner.py` (~520 LOC operator-authorized this PR)
+lands; still ≤ 1500 soft.
+`WIRED_LEVER_LEDGER_COUNT` **BUMP 1 → 2** at v2.6 P1 PR #196 (Seed
+v2.5-G step (1) instrumentation wire NEW); HOLD at P2 (no further
+wire/rip). Production-scope canonical per Seed v2.4-H binding.
+Rule 5 backlog cap reading: cap-counted 5 + EXEMPT 6 (entering); cap-
+counted 6 + EXEMPT 6 = 12 (exiting; Δ +1 from Seed v2.5-A close +
+v2.6-A / v2.6-A-T spawn).
+
+### Added
+
+- **v2.6 P1 — Seed v2.5-G step (1) CLI-timeout instrumentation**
+  ([PR #196](https://github.com/SeanHoppe/streamManager/pull/196),
+  squash-merge `7220b33`) — per-run wall-clock timing in alignment-
+  eval row runner (`tools/alignment_eval.py` net +77 / -7 LOC; new
+  `tests/test_alignment_eval_timing.py` +84 LOC). Production-bucket
+  delta **+147 net LOC** (≤ feature 1500 soft cap; ≤ 150 strict step-
+  (1) cap). Emits new sidecar JSON keys per-model:
+  `summary.{sonnet,haiku}_duration_s_{p50,p95,p99,max,n}`; per-row:
+  `rows.<id>.{sonnet,haiku}_durations_s` + `_timeout_count` (proxy =
+  runs at ≥ `TIMEOUT_SECONDS - 0.5 = 24.5 s`). MD report appends
+  `## Per-model wall-clock distributions` table. Lever-wire bumps
+  ledger 1 → 2 (production); first wire since v2.3 Seed 6.
+- **Seed v2.5-A diagnosis verdict — CONTENT-DRIFT**
+  ([PR #197](https://github.com/SeanHoppe/streamManager/pull/197),
+  squash-merge `c3c1144`) — `docs/seed-v2.5-a-row10-diagnosis.md` +
+  `reports/seed-v2.5-a/row10-fixture.jsonl` +
+  `reports/seed-v2.5-a/alignment-eval-20260520T172054Z.{md,json}`.
+  v2.6 P2 §S6.5 instrumented n=6 re-measure of row `frog7-wirecli-
+  module-10` with `--candidate-only-control`: sonnet_runs =
+  `[INTERVENE, GUIDE, INTERVENE, INTERVENE, INTERVENE, NONE]`;
+  sonnet_majority = INTERVENE (4/6); sonnet_stable = false;
+  sonnet_timeout_count = 1/6; sonnet p50/p95/p99/max = 22.891 /
+  24.613 / 24.96 / 25.047 s. Verdict matrix row 3 (PARTIAL TIMEOUT,
+  MOSTLY CONTENT) with majority ≠ expected SUGGEST →
+  **CONTENT-DRIFT**. v2.5.1 P1 "100% timeout / measurement-blind"
+  classification FALSIFIED. Seed v2.5-A CLOSED.
+- **v2.6 P2 ship-gate prompt mint**
+  ([PR #197](https://github.com/SeanHoppe/streamManager/pull/197)) —
+  `docs/prompts/v2.6-orchestration/phase-2-ship-gate-finalize.md`
+  with Amendment C cycle-tip anchor verbatim + n=3-default S4
+  branching (prior cycle Sonnet 0.9375 ≥ floor + 0.05) + wall-clock
+  distribution capture surface + new §S6.5 Seed v2.5-A diagnosis
+  verdict matrix.
+- **v2.6 P1 prompt mint**
+  ([PR #195](https://github.com/SeanHoppe/streamManager/pull/195),
+  squash-merge `27f56c0`) — `docs/prompts/v2.6-orchestration/phase-
+  1-cli-timeout-instrumentation.md`.
+- **v2.6 P0 cycle-tip SHA backfill**
+  ([PR #194](https://github.com/SeanHoppe/streamManager/pull/194),
+  squash-merge `1c373ab`) — populated Amendment C anchor SHA into
+  `docs/v2.6-task-plan.md` + `docs/v2.6-next-steps.md` post-merge of
+  PR #193.
+- **v2.6 P0 cycle frame**
+  ([PR #193](https://github.com/SeanHoppe/streamManager/pull/193),
+  squash-merge `084137d`) — `docs/v2.6-task-plan.md` (feature
+  classification + 8 operator decisions; pre-authorized Seed v2.5-G
+  fire) + `docs/v2.6-next-steps.md` decision blocks ticked +
+  `docs/prompts/v2.6-orchestration/phase-0-cycle-frame.md` decision-
+  block fills.
+- **v2.6 PM-mint review fold**
+  ([PR #192](https://github.com/SeanHoppe/streamManager/pull/192),
+  squash-merge `2f051fd`) — 5 caveman-review findings folded into P0
+  skeleton + next-steps.
+- **v2.6 PM-mint**
+  ([PR #191](https://github.com/SeanHoppe/streamManager/pull/191),
+  squash-merge `0eaab79`) — `docs/prompts/v2.6-orchestration/phase-
+  0-cycle-frame.md` skeleton + `docs/v2.6-next-steps.md` 11-seed
+  itemization + compare-back protocol (default-lean feature).
+- **v2.6 P2 ship-gate test runner** — `tools/ship_gate_runner.py`
+  (~400 LOC) wraps S1 / S1.1 / S3 / S5 / S6 / S6.5 verification +
+  S4 alignment-eval orchestration with prior-cycle-aware --runs
+  resolution and escape-hatch evaluator. Operator-authorized at
+  v2.6 P2 /goal directive ("create / execute test runner for
+  process"). LOC accounted under production bucket against feature
+  soft cap.
+
+### Changed
+
+- **`tools/alignment_eval.py` `evaluate_row` return shape** —
+  `list[str]` → `tuple[list[str], list[float]]` (internal helper; no
+  CLI surface change). Per-row sidecar JSON gains
+  `{sonnet,haiku}_durations_s` + `_timeout_count` keys. Per-summary
+  sidecar JSON gains `{sonnet,haiku}_duration_s_{p50,p95,p99,max,n}`
+  keys. MD report renders new wall-clock-distributions table.
+  ([PR #196](https://github.com/SeanHoppe/streamManager/pull/196))
+- **6-cycle Sonnet pass-rate trajectory (n=6 reading)** — v2.1 →
+  v2.2 → v2.3 → v2.4 → v2.5.1 → v2.6 = 0.8636 → 0.9474 → 0.8182 →
+  0.8261 → 0.9375 → **0.9412**. RECOVERED band (≥ 0.90) sustained.
+  S4 default `--runs 3` first-fire recorded 0.9444 but with 14/32
+  unstable rows + 3 rows ≥ 50% timeout-rate; escape-hatch per
+  `feedback_alignment_eval_stability_window.md` triggered n=6 re-fire.
+  n=6 read settled at 0.9412 (16/17 pass) with regression_rows=[].
+- **5-cycle Haiku pass-rate trajectory (n=6 reading)** — v2.2 →
+  v2.3 → v2.4 → v2.5.1 → v2.6 = 0.9412 → 1.0 → 1.0 → 1.0 → **1.0**
+  (15/15 stable pass). 4 consecutive cycles at perfect floor.
+- **Soak latency v2.6 P2** —
+  `reports/soak-20260520T180511Z.md` (runtime 1923.0 s; --cli-pool-
+  size 2; --ppp-auto-probe; PPP auto-probes emitted = 1410):
+  - overall p95 = **9.926 s** (v2.5.1 = 9.656 s; Δ +0.270 s, ≤ 10 s
+    downgrade band; ≤ regression-flag threshold 10.156 s).
+  - L4 p95 = **19.89 s** (n=4; v2.5.1 = 21.64 s; Δ −1.75 s mild
+    recovery; > 17 close line but ≤ 22 promote line).
+  - LM p95 = **12.64 s** (n=10; v2.5.1 = 25.26 s; Δ **−12.62 s big
+    recovery back to v2.4-P2 band ≤ 15**).
+  - rss_drift_mb = 1.25 (acceptance < 50 MB).
+  - emitted=60 received=383 (638% fanout); decision-action 100% ALLOW.
+- **Alignment-eval wall-clock distributions (NEW v2.6 P1 surface)**
+  — n=6 reading on full 32-row corpus:
+  - sonnet: n=192, p50=16.14 s, p95=25.039 s, p99=25.048 s,
+    max=25.063 s.
+  - haiku: n=192, p50=14.508 s, p95=23.271 s, p99=25.035 s,
+    max=25.094 s.
+  - Sonnet p99 = **25.048 s** is the canonical measured-eval p99
+    input for Seed v2.6-G step (2) timeout-tighten at v2.7+
+    (recommended new cap floor ≥ 30 s; J2 audit band 30–45 s).
+
+### Closed
+
+- **Seed v2.5-A (🟡 `frog7-wirecli-module-10` 100% Sonnet timeout
+  opacity)** — CLOSED at v2.6 P2 §S6.5 via instrumented n=6 re-
+  measure (PR #197). v2.5.1 P1 100%-timeout classification FALSIFIED
+  (1/6 actual). Spawned v2.6-A (content-drift watch) + v2.6-A-T
+  (timeout-boundary watch) as carry-forwards.
+
+### Removed
+
+- None this cycle. (Line-deletions vs cycle-tip = 7 from P1 PR #196
+  refactor of `tools/alignment_eval.py` `evaluate_row` return shape;
+  not user-visible.)
+
+### Deferred / carry-forward (entering v2.7)
+
+- ⏸ 🟡 **Seed v2.5-C → renames Seed v2.6-C** (Path-D synthetic-
+  fixture P5 implementation; ~600 LOC; 4th consecutive deferral).
+- ⏸ 🟢 **Seed v2.4-E** (overall p95 watch) — WATCH continues 🟢 at
+  9.926 s (Δ +0.270 s vs v2.5.1; within ≤ 10 s downgrade band; ≤
+  regression-flag threshold). 4-cycle trajectory 10.584 → 10.518 →
+  9.656 → 9.926 stays under 10 s for 2nd consecutive cycle. Closure
+  bound on ≤ 8.2 s threshold still not met. Carries to v2.7.
+- 🟢 **Seed v2.4-F (LM half) — CLOSED RECOVERED** — LM p95 = 12.64 s
+  back at v2.4-P2 band (≤ 15 s); v2.5.1 P2 25.26 s reading
+  retroactively classified as sample-variance outlier. The LM
+  regression-flag clears.
+- ⏸ 🟢 **Seed v2.4-F (L4 half)** — DOWNGRADE-TOWARD-CLOSE — L4 p95 =
+  19.89 s (n=4) — partial recovery vs v2.5.1's 21.64 s; mild
+  elevation persists vs v2.4-P2 15.36 s line but > 17 close
+  threshold not yet met. Promotion 🔴 line at > 22 s not breached.
+  Carries to v2.7 with reduced concern.
+- ⏸ 🔴 **Seed v2.5-G → renames Seed v2.6-G** — step (1) LANDED
+  PR #196; steps (2) timeout-tighten + (3) env-split DEFER v2.7+.
+  Step (2) input now in hand (measured eval p99 from S4 + S6.5
+  24.96 s data point).
+- ⏸ 🟢 **Seeds v2.4-I..M** (promotion-criterion-bound; Amendment E
+  EXEMPT; trigger has not fired in v2.5 or v2.6).
+- ⏸ 🟡 **Seed v2.4-N** (Remote-CLI demand-bound; Amendment E
+  EXEMPT; no concrete use case surfaced).
+- ⏸ 🟡 **NEW Seed v2.6-A** — `frog7-wirecli-module-10` Sonnet
+  content drift vs golden expected_verdict. v2.7 P2 re-measure at
+  n=12 to decide golden-update (INTERVENE) vs DIP-watch hold.
+- ⏸ 🟡 **NEW Seed v2.6-A-T** — row-10 timeout-boundary watch (p99
+  24.96 s sits 50 ms below `TIMEOUT_SECONDS = 25.0`). Closes when
+  Seed v2.6-G step (2) timeout-tighten lands at v2.7+ AND row-10
+  p99 ≥ 2 s under new cap.
+
 ## [2.5.1] — 2026-05-20
 
 Tagged ship of the v2.5 cycle via the **v2.5.1 corrective sub-phase**
