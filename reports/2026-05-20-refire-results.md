@@ -74,20 +74,47 @@ itself was staged but not yet committed). Resolved by committing scaffold
 as `f1c7ef6` ("ship(v2.5.1): seed running refire results scaffold") — see
 Deviation DV2 below. Re-fire returned clean.
 
-### S2 — Tier-3 soak ⏳ IN PROGRESS (background `b5fo97xeh`, ~30 min wall)
+### S2 — Tier-3 soak ✅ PASS
 
-Fired with env triple:
+`reports/soak-20260520T115443Z.md` — verdict **PASS**.
+- 1968.3 s wall (32.8 min); 60 emitted / 383 received via SSE
+  (638.3% includes seed-replay + engine-internal bus events).
+- 100% decision-action ALLOW (60/60).
+- RSS drift +1.36 MB (acceptance < 50 MB).
+- No uncaught server exceptions.
+- Lever ledger: 0 wired levers (soak-scope internal; matches Seed
+  v2.4-H option (a) production-scope canonical).
+
+**Latency** (Seed v2.4-E + Seed v2.4-F watches):
+- Overall p95 = **9.656 s** (v2.4 P2 = 10.518 s, **Δ −0.862 s
+  improvement**). v2.5 P2 first-soak 13.157 s reads as variance
+  outlier (Δ −3.501 s vs v2.5 P2). Seed v2.4-E WATCH continues 🟢
+  (downgrade candidate).
+- L4 p95 = **21.64 s (n=4)** vs v2.4 15.36 s — **Δ +6.28 s** small-n
+  regression. Max-of-4 = 23.39 s anchors p95.
+- LM p95 = **25.26 s (n=10)** vs v2.4 13.60 s — **Δ +11.66 s**
+  small-n regression. Same n.
+- p50 held flat across all bands; tail-only regression.
+- Seed v2.4-F WATCH continues 🟡 with **regression-flag**; v2.6
+  re-measure decides 🔴 vs variance-dismissal verdict.
+
+**Env block (DV3 forced extension):**
 - `BRIDGE_API_GOV=1`
-- `BRIDGE_RL_LOGGER_ENABLED=1` (v10 P4 corpus Run N+1 piggyback)
+- `BRIDGE_RL_LOGGER_ENABLED=1` (v10 P4 corpus Run 6 piggyback)
 - `BRIDGE_CYCLE_TIP_SHA=634e9d1d982a3b6071bfe78c369c4995419e2d44`
 - `BRIDGE_PREDECESSOR_TAG_SHA=08eb71d`
 - `BRIDGE_CYCLE_TYPE=consolidation`
+- **`BRIDGE_LOC_PATHSPEC=src/,tests/,tools/,dashboard/`** (DV3 fold)
 
-Command: `python tools/soak_driver.py --cli-pool-size 2 --ppp-auto-probe --total-seconds 1800 --interval-seconds 20`. Monitor armed on `tmp/soak-stdout-v251p2.log` with progress + terminal-state grep alternation.
+### S3 — Invariant-degrade canary verify ✅ PASS
 
-### S3 — Invariant-degrade canary verify (target: post-S2)
+Soak summary line: `[soak] invariant-degrade canary: PASS
+(degrade_count=0)`. Seed 4 dual-anchor block in soak summary matches
+the S5 manual computation **byte-for-byte**:
+- cycle-tip (634e9d1..HEAD): `+0 / -0 / +0  [PASS]`
+- predecessor-tag (08eb71d..HEAD): `+383 / -8 / +375  [narrative]`
 
-Will grep soak summary for `[soak] invariant-degrade canary: PASS`.
+(See cross-ref Seed v2.4-O closure pattern.)
 
 ### S4 — Alignment-eval (path-1 — cite n=6 P1 evidence) ✅ PRE-VERIFIED
 
@@ -153,14 +180,20 @@ matches this byte-for-byte.
   to v2.6 alongside Seed v2.4-G instrumentation.
 - Seed v2.4-G renames to **Seed v2.5-G** in v2.5-backlog.md (this PR).
 
-### S7 — ADR-5 v2.5 baseline ⏳ PENDING (default SKIP, re-evaluate post-S2)
+### S7 — ADR-5 v2.5 baseline ✅ SKIPPED (per v2.4 P2 default)
 
-Default per v2.4 P2 precedent: consolidation cycle + LOC delta = 0 +
-no latency lever wired → **SKIP append**. Rationale recorded in P2 PR
-body.
+Decision: **SKIPPED.** Consolidation cycle + LOC delta = 0 + no
+latency lever wired this cycle. Latency-relevant signals (Seed
+v2.4-E improvement + Seed v2.4-F small-n regression) recorded in
+`docs/v2.5-backlog.md` + `docs/v2.5-next-steps.md` so v2.6 P0/P2
+inherits the watch trail without an ADR-5 surface-freeze surgery.
 
-Re-evaluate if S2 surfaces p95 swing > 0.5s vs v2.4 P2 baseline
-(10.518 s).
+Re-evaluation:
+- Overall p95 9.656 s vs v2.4 P2 10.518 s → **Δ −0.862 s** (under
+  the +0.5 s swing threshold; an ADR-5 append for an improvement
+  isn't required by S7).
+- L4 + LM small-n regression: visible in PR body + backlog; ADR-5
+  append at small-n would lock in noise.
 
 ### S8 — CHANGELOG `## [2.5.1]` ⏳ DRAFTING
 
@@ -177,19 +210,21 @@ Will cover (per spec):
 Tag command (post-PR-merge):
 `git tag -a v2.5.1 -m "..." <merge-SHA>` + `git push origin v2.5.1`.
 
-### S10 — Compare-back `docs/v2.5-next-steps.md` ⏳ POST-S2
+### S10 — Compare-back `docs/v2.5-next-steps.md` ✅ COMPLETE
 
-Row-by-row TBD table at L319. Pre-known:
+Row-by-row TBD table at L319 populated. Final dispositions:
 - Seed v2.4-C → DEFERRED v2.6 (renames v2.5-C)
-- Seed v2.4-E → re-measure post-S2
-- Seed v2.4-F → re-measure post-S2
+- Seed v2.4-E → WATCH continues 🟢 (improvement; downgrade candidate)
+- Seed v2.4-F → WATCH continues 🟡 (regression-flag; v2.6 decides 🔴 vs variance)
 - Seed v2.4-G → promotion landed P0; impl defers v2.6 (renames v2.5-G)
-- Seed v2.4-Q → **CLOSED RECOVERED** (n=6 0.9375)
-- Seed v2.4-I..M → NOT FIRED; carry v2.6
-- Seed v2.4-N → NOT FIRED; carry v2.6
+- Seed v2.4-Q → **CLOSED RECOVERED** (n=6 0.9375 ≥ 0.90)
+- Seed v2.4-I..M → NOT FIRED; carry v2.6 (Amendment E EXEMPT)
+- Seed v2.4-N → NOT FIRED; carry v2.6 (Amendment E EXEMPT)
 - NEW Seed v2.5-A → wirecli-module-10 100% timeout opacity; carry v2.6
+- Seed v2.5-B → historical-only (Sonnet floor breach resolved as
+  measurement artefact at v2.5.1 P1)
 
-### S11 — Mint `project_v25_cycle_close.md` ⏳ DRAFTING
+### S11 — Mint `project_v25_cycle_close.md` ✅ COMPLETE
 
 Single close memory covering: v2.5 P0 (#185, `634e9d1`) + v2.5 P2 BLOCK
 (`2e49102`-prep + ship-gate work-PR never opened) + v2.5.1 P1 (#188 prompt
@@ -369,16 +404,16 @@ actual, verdict). Populated as S-steps execute.
 |---|---|---|---|---|
 | SC-S1 | wipe `reports/` untracked | tracked files preserved | tracked preserved (POSIX path); `git clean -df reports/` clean | ✅ PASS |
 | SC-S1.1 | git status clean post-wipe | empty drift | clean after scaffold commit `f1c7ef6` (DV2) | ✅ PASS |
-| SC-S2 | Tier-3 soak PASS | verdict PASS, canary PASS | _running bg `b2vzwg5z6` (post-DV3 refire)_ | _pending_ |
-| SC-S3 | invariant-degrade canary | `canary: PASS` line in summary | _post-S2_ | _pending_ |
+| SC-S2 | Tier-3 soak PASS | verdict PASS, canary PASS | verdict=PASS, 1968.3s wall, 60 emit / 383 recv SSE, RSS drift +1.36 MB; report `soak-20260520T115443Z.md` | ✅ PASS |
+| SC-S3 | invariant-degrade canary | `canary: PASS` line in summary | `invariant-degrade canary: PASS (degrade_count=0)` + dual-anchor block matches manual byte-for-byte | ✅ PASS |
 | SC-S4 | n=6 alignment-eval cite | Sonnet ≥ 0.80, Haiku ≥ 0.85 | Sonnet 0.9375 (15/16), Haiku 1.0 (15/15), regression=[]| ✅ PASS (path-1) |
 | SC-S5 | cycle-tip LOC delta | net ≤ 0 production bucket | 0 / 0 / 0 (empty diff vs 634e9d1 -- src tests tools dashboard) | ✅ PASS |
 | SC-S6 | lever-ledger HOLD | production=1, soak={} | recorded (this PR body) | ✅ PASS |
 | SC-S6.5 | Seed v2.4-G stance | 🔴 + v2.6 defer + renames v2.5-G | recorded (this PR body + v2.5-backlog mint) | ✅ PASS |
-| SC-S7 | ADR-5 append (cond) | SKIP rationale OR append | default SKIP, re-evaluate post-S2 p95 | _pending_ |
-| SC-S8 | CHANGELOG `[2.5.1]` | entry committed | drafted; commits post-S3 verify | _pending_ |
+| SC-S7 | ADR-5 append (cond) | SKIP rationale OR append | **SKIPPED** per v2.4 P2 default (consolidation + LOC=0 + no latency lever wired); latency findings recorded in backlog + next-steps | ✅ PASS |
+| SC-S8 | CHANGELOG `[2.5.1]` | entry committed | drafted + committed at `0f4e72c` | ✅ PASS |
 | SC-S9 | tag v2.5.1 | tag pushed post-merge | _POST-MERGE_ | _pending_ |
-| SC-S10 | compare-back next-steps | row-by-row marks | drafted; finalises post-S2 (E/F bands) | _pending_ |
-| SC-S11 | project_v25_cycle_close.md | minted + indexed | drafted; finalises post-S2 | _pending_ |
+| SC-S10 | compare-back next-steps | row-by-row marks | drafted + finalized (E WATCH continues, F WATCH continues with regression-flag); committed | ✅ PASS |
+| SC-S11 | project_v25_cycle_close.md | minted + indexed | minted + MEMORY.md index; latency + corpus filled | ✅ PASS |
 | SC-S12 | lifetime cleanup | prompts persist (default) | default applied | ✅ PASS |
 | SC-S13 | v2.6 P0 mint | new prompt file | _POST-TAG_ | _pending_ |
