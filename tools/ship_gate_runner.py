@@ -28,10 +28,8 @@ Read-only by default. Pass ``--apply`` only on the ``wipe`` subcommand
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
-import io
+import ast
 import json
-import os
 import re
 import subprocess
 import sys
@@ -261,8 +259,14 @@ def cmd_inspect_soak(args: argparse.Namespace) -> int:
 # ============================================================
 
 def _loc_net(base: str, head: str) -> int:
-    out = _git("diff", f"{base}..{head}", "--shortstat",
-               "--", *LOC_PATHSPEC, check=False)
+    proc = _run(["git", "diff", f"{base}..{head}", "--shortstat",
+                 "--", *LOC_PATHSPEC], check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git diff {base}..{head} failed (rc={proc.returncode}): "
+            f"{proc.stderr.strip()}"
+        )
+    out = proc.stdout.rstrip("\n")
     if not out:
         return 0
     # "X files changed, Y insertions(+), Z deletions(-)"
@@ -305,22 +309,20 @@ def cmd_loc(_args: argparse.Namespace) -> int:
 # ============================================================
 
 def _read_soak_ledger_dict_size() -> int | None:
-    """Read tools/soak_driver.py for WIRED_LEVER_LEDGER literal size."""
+    """Parse tools/soak_driver.py for WIRED_LEVER_LEDGER literal size via ast."""
     src = (ROOT / "tools" / "soak_driver.py").read_text(encoding="utf-8")
-    # Match WIRED_LEVER_LEDGER: ... = {...} — allow nested [] in the
-    # annotation by matching up to the `=` sign explicitly.
     m = re.search(
-        r"^WIRED_LEVER_LEDGER\s*:[^=]*=\s*(\{[^}]*\})",
+        r"^WIRED_LEVER_LEDGER\s*:[^=]*=\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})",
         src,
         re.MULTILINE,
     )
     if not m:
         return None
-    literal = m.group(1).strip()
-    if re.fullmatch(r"\{\s*\}", literal):
-        return 0
-    # Count top-level keys (literals here are single-line strings).
-    return literal.count(":")
+    try:
+        d = ast.literal_eval(m.group(1))
+    except (ValueError, SyntaxError):
+        return None
+    return len(d) if isinstance(d, dict) else None
 
 
 def cmd_ledger(_args: argparse.Namespace) -> int:
@@ -332,8 +334,9 @@ def cmd_ledger(_args: argparse.Namespace) -> int:
               f"expected {LEDGER_SOAK_EXPECTED}")
         return 2
     print(f"  PASS: soak-scope ledger size == {LEDGER_SOAK_EXPECTED}")
-    print(f"  production-scope count expected: {LEDGER_PRODUCTION_EXPECTED} "
-          "(v2.3 Seed 6 JsonlTailWorker + v2.6 P1 Seed v2.5-G step (1))")
+    print(f"  production-scope expected: {LEDGER_PRODUCTION_EXPECTED} "
+          "(v2.3 Seed 6 JsonlTailWorker + v2.6 P1 Seed v2.5-G step (1)); "
+          "NOT auto-verified -- cross-check cycle-close memories")
     print("  HOLD at P2 -- no further wire/rip this phase")
     return 0
 
@@ -372,17 +375,8 @@ def _eval_escape_hatch(report_json: dict) -> tuple[bool, list[str]]:
             f"rows with sonnet_timeout_count/runs ≥ 0.50: "
             f"{','.join(high_timeout_rows)}"
         )
-    # Unanimous-stable-and-diverges rows (S+D)
-    sd_rows = [
-        rid for rid, r in rows.items()
-        if r["sonnet_stable"] and r["sonnet_majority"] != next(
-            (row["expected_verdict"] for row in [] if row["id"] == rid),
-            r["sonnet_majority"],
-        )
-    ]
-    # The above is a placeholder — we lack the golden rows from JSON
-    # without re-loading; the S+D check is best handled by ci-gate exit
-    # code. Skip in this helper.
+    # S+D (unanimous-stable-and-diverges) is delegated to alignment_eval's
+    # ci-gate exit code; this helper only flags unstable + timeout triggers.
     return (len(reasons) > 0, reasons)
 
 
