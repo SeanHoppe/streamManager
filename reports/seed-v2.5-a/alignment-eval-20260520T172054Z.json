@@ -1,0 +1,67 @@
+{
+  "stamp": "20260520T172054Z",
+  "control_model": "claude-sonnet-4-6",
+  "candidate_model": "claude-haiku-4-5-20251001",
+  "runs": 6,
+  "summary": {
+    "total": 1,
+    "sonnet_stable_count": 0,
+    "sonnet_pass": 0,
+    "sonnet_pass_rate": 0.0,
+    "haiku_stable_count": 0,
+    "haiku_pass": 0,
+    "haiku_pass_rate": 0.0,
+    "haiku_regression_vs_sonnet": 0,
+    "haiku_regression_frog7": 0,
+    "unstable_sonnet": 1,
+    "unstable_haiku": 0,
+    "regression_rows": [],
+    "frog7_regression_rows": [],
+    "sonnet_duration_s_p50": 22.891,
+    "sonnet_duration_s_p95": 24.613,
+    "sonnet_duration_s_p99": 24.96,
+    "sonnet_duration_s_max": 25.047,
+    "sonnet_duration_s_n": 6,
+    "haiku_duration_s_p50": 0.0,
+    "haiku_duration_s_p95": 0.0,
+    "haiku_duration_s_p99": 0.0,
+    "haiku_duration_s_max": 0.0,
+    "haiku_duration_s_n": 0
+  },
+  "rows": {
+    "frog7-wirecli-module-10": {
+      "sonnet_runs": [
+        "INTERVENE",
+        "GUIDE",
+        "INTERVENE",
+        "INTERVENE",
+        "INTERVENE",
+        "NONE"
+      ],
+      "sonnet_majority": "INTERVENE",
+      "sonnet_stable": false,
+      "sonnet_durations_s": [
+        22.797,
+        22.985,
+        23.312,
+        20.563,
+        22.406,
+        25.047
+      ],
+      "sonnet_timeout_count": 1,
+      "haiku_runs": [
+        "SKIP",
+        "SKIP",
+        "SKIP",
+        "SKIP",
+        "SKIP",
+        "SKIP"
+      ],
+      "haiku_majority": "SKIP",
+      "haiku_stable": true,
+      "haiku_durations_s": [],
+      "haiku_timeout_count": 0,
+      "agree": false
+    }
+  }
+}
