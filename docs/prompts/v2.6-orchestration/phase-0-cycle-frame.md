@@ -195,8 +195,10 @@ Decision-block (operator fills at fire time):
 **Operator pick:** `FIRE step (1)` (2026-05-20 fire; default-lean
 accepted; ~30 LOC tooling addition to `tools/` qualifies as lever-wire
 under Amendment A 3-bucket production-bucket; step (2) timeout-tighten
-+ step (3) env-split defer to v2.7 + measured eval p99 input; resolves
-Seed v2.5-A row-10 100% timeout opacity in lockstep).
+defers to v2.7+ pending measured eval p99 from step (1); step (3)
+env-split is operator-elective at v2.6 P1 mint — MAY bundle same phase
+as step (1) OR defer to v2.7+, NOT gated on p99; resolves Seed v2.5-A
+row-10 100% timeout opacity in lockstep).
 
 **Coupling note.** If §"Cycle-type call" = consolidation AND this
 section = FIRE, the choices are inconsistent (instrumentation tooling
