@@ -371,6 +371,15 @@ runner.
 | 1–2 (17–33%) | non-NONE stable or unstable | **PARTIAL TIMEOUT, MOSTLY CONTENT** — record non-NONE majority + non-timeout runs as the actual Sonnet content reading; if majority matches `expected_verdict=SUGGEST` → CLOSE Seed v2.5-A (content judgement clean); else → carries as content-drift seed |
 | 0 (0%) | any | **CONTENT-DRIFT (NO TIMEOUT)** — pure content judgement; if `sonnet_majority == "SUGGEST"` and `sonnet_stable == true` → CLOSE Seed v2.5-A (v2.5.1 P1 finding was a transient infrastructure artefact); if majority ≠ SUGGEST OR unstable → CARRY as content-drift seed |
 
+**Row 3 vs row 4 stability asymmetry — rationale.** Row 3 (1–2
+timeouts) accepts unstable+majority-SUGGEST as a clean close
+because timeout-induced NONE returns already explain the
+instability — the non-NONE runs are the actual content signal.
+Row 4 (0 timeouts) requires `sonnet_stable=true` for close
+because there is no timeout to absorb instability; an unstable
+0-timeout reading is pure content-judgement variance and must
+carry as a drift seed.
+
 #### Verdict doc
 
 Mint `docs/seed-v2.5-a-row10-diagnosis.md` with:
@@ -446,7 +455,12 @@ Append `## [2.6.0]` per Keep-a-Changelog format. Cover:
   step (3) env-split (v2.7+); Seed v2.5-C Path-D P5 (v2.7;
   becomes Seed v2.6-C); Seeds v2.4-I..N (promotion-criterion /
   demand-bound exempts); Seed v2.4-E + Seed v2.4-F per S7 disposition;
-  Seed v2.5-A IF carry-forward per S6.5 verdict.
+  Seed v2.5-A IF carry-forward per S6.5 verdict; **Seed v2.6-A**
+  (row-10 Sonnet content drift vs golden expected_verdict, IF
+  S6.5 verdict is CONTENT-DRIFT / PARTIAL-TIMEOUT-MOSTLY-CONTENT);
+  **Seed v2.6-A-T** (row-10 timeout-boundary watch, IF S6.5
+  surfaces any timeout count and Seed v2.5-G step (2) has not
+  yet landed).
 
 ### S9 — Tag v2.6.0
 

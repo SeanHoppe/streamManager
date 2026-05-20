@@ -130,9 +130,13 @@ is in the timeout-sensitivity zone.**
 
 Cross-ref Seed v2.5-G step (2) timeout-tighten lever: raising
 `TIMEOUT_SECONDS` from 25.0 to 30.0 s (the recommended band from
-J2 audit) would move row-10's full distribution below the cap
-based on this n=6 sample (max 25.047 s + 5 s headroom = 30.047 s
-< 30.0 s? — borderline; 35 s would be safer). v2.7+ step (2)
+J2 audit) would move row-10's full n=6 distribution below the
+cap: max observed = 25.047 s, so headroom under a 30.0 s cap =
+30.0 − 25.047 = **4.953 s**. That clears the *observed* sample
+but is thin against the timeout-sensitivity-zone characterisation
+above (boundary-distribution shifts of ~5 s are plausible across
+session contention / API tail conditions). A 35 s cap would give
+~9.95 s headroom against this sample. v2.7+ step (2)
 implementation should treat 30 s as a floor candidate, not a
 guaranteed-clean band, and re-measure at the chosen value.
 
@@ -197,6 +201,15 @@ guaranteed-clean band, and re-measure at the chosen value.
   behaviour drift between calibration and v2.6 P2 re-measure.
   Modest drift in Sonnet's `wirecli.py` interpretation is
   plausible.
+
+- **JSON Haiku-distribution sentinel.** Sidecar JSON encodes
+  `haiku_duration_s_{p50,p95,p99,max} = 0.0` while `_n = 0`
+  under `--candidate-only-control` (Haiku skipped). The MD report
+  renders this as `n=0; (skipped)`; the JSON sentinel `0.0`
+  could be misread as "0 ms p50". Treat `haiku_duration_s_n = 0`
+  as the authoritative "no data" flag. Follow-up: file as a v2.7
+  tool-bucket seed to emit `null` (or omit) when `n=0` in
+  `tools/alignment_eval.py` serialiser.
 
 ## Memory writes
 
