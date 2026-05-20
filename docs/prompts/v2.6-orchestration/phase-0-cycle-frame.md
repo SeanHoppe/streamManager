@@ -102,9 +102,11 @@ Decision-block (operator fills at fire time):
 at least one of:
 
 - Seed v2.5-G measurement-protocol step (1) — instrumentation
-  (~30 LOC tooling; counts as lever-wire if env-readable
-  `BRIDGE_CLI_TIMEOUT` / `BRIDGE_CLI_TIMEOUT_EVAL` split lands as
-  part of the same phase). See §"Seed v2.5-G fire decision" below.
+  (~30 LOC tooling; production-bucket addition under Amendment A
+  3-bucket measurement, qualifies as lever-wire on its own).
+  Env-readable `BRIDGE_CLI_TIMEOUT` / `BRIDGE_CLI_TIMEOUT_EVAL`
+  split (step 3) is bonus same-phase scope, NOT required for
+  lever-wire status. See §"Seed v2.5-G fire decision" below.
 - Seed v2.5-C Path-D synthetic-fixture P5 implementation (~600 LOC).
   See §"Seed v2.5-C fire decision" below.
 
@@ -391,7 +393,11 @@ pass_rate = **0.9375** (n=6 reading); 0.9375 ≥ 0.85 → default
   pattern); exclude from gate denominator on this measurement run.
 
 The v2.6 P2 ship-gate prompt MUST encode this branching rule
-explicitly — do not rely on operator memory. Pattern:
+explicitly — do not rely on operator memory. Operator shell is
+PowerShell per CLAUDE.md; both shell variants below for whichever
+the P2 ship-gate prompt mints into.
+
+POSIX / Git Bash:
 
 ```bash
 prior_sonnet=$(jq -r '.sonnet_pass_rate' \
@@ -403,6 +409,17 @@ else
 fi
 .venv/Scripts/python.exe tools/alignment_eval.py \
   --runs "$runs" \
+  --ci-gate
+```
+
+PowerShell (Windows operator-shell):
+
+```powershell
+$prior_sonnet = (Get-Content reports/alignment-eval-20260520T092222Z.json `
+  | ConvertFrom-Json).sonnet_pass_rate
+$runs = if ($prior_sonnet -lt 0.85) { 6 } else { 3 }
+.venv\Scripts\python.exe tools\alignment_eval.py `
+  --runs $runs `
   --ci-gate
 ```
 
@@ -460,6 +477,8 @@ PR #188 minted v2.5.1 P1 ahead-of-fire after v2.5 P2 BLOCK).
       vs P0-merge tip (per ADR-18 Amendment C cycle-tip anchor).
 - [ ] Cycle-tip LOC anchor cited verbatim in `docs/v2.6-task-plan.md`
       using `<v2.6 P0-merge SHA>..HEAD` template (per Amendment C).
+      Placeholder SHA backfilled in follow-up PR after P0 fire merge
+      (v2.5 PR #186 precedent).
 - [ ] Canonical S2 env block (`BRIDGE_LOC_PATHSPEC=src/,tests/,tools/,
       dashboard/`) recorded in this P0 frame § "Canonical S2 env
       block" + carried into v2.6 P1 / P2 prompt templates at mint.
