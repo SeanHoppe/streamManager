@@ -101,11 +101,12 @@ step (3) env-split" below), additionally touch:
 
 - `src/stream_manager/cli_governance.py:49` — split single
   `TIMEOUT_SECONDS = 25.0` constant into env-readable resolver that
-  reads `BRIDGE_CLI_TIMEOUT_EVAL` (when `BRIDGE_API_GOV` set AND
-  alignment-eval marker present) OR `BRIDGE_CLI_TIMEOUT` (otherwise),
-  defaulting to **25.0** in both branches. Default-25.0 invariant
-  preserves Rule 1 surface-freeze semantics (constant value
-  unchanged at default); env override is additive opt-in.
+  reads `BRIDGE_CLI_TIMEOUT_EVAL` (when `BRIDGE_ALIGNMENT_EVAL` set —
+  exported by `tools/alignment_eval.py` at module top peer to
+  `BRIDGE_API_GOV`) OR `BRIDGE_CLI_TIMEOUT` (otherwise), defaulting
+  to **25.0** in both branches. Default-25.0 invariant preserves
+  Rule 1 surface-freeze semantics (constant value unchanged at
+  default); env override is additive opt-in.
 - `tests/test_cli_governance_timeout_env.py` (new) — unit test for
   env-resolver default-25.0 path + override paths.
 
@@ -139,7 +140,8 @@ additional hits in `src/stream_manager/cli_governance.py` +
    `governor.evaluate(...)` call in `time.monotonic()` deltas (NOT
    wall-clock `time.time()` — eval may straddle clock adjustments
    on the laptop runtime; `monotonic` is the correct choice for
-   subprocess wall-clock). Return shape changes:
+   subprocess wall-clock). Module-top imports add `import time`
+   (currently only `import datetime as _dt`). Return shape changes:
 
    ```python
    # before
@@ -163,6 +165,12 @@ additional hits in `src/stream_manager/cli_governance.py` +
    ```
 
    Call sites updated correspondingly (single use in `main()`).
+   When `--candidate-only-control` is set, `evaluate_row` is NOT
+   called for the haiku model; the caller assigns
+   `haiku_durations_s = []` (empty list — NOT `[None] * args.runs`
+   and NOT `[0.0] * args.runs`). The empty-list contract pairs with
+   `_percentile([], …) → 0.0` (§3) and the `n=0; (skipped)` MD row
+   (§4).
 
 2. **Per-row per-model duration aggregation.**
 
@@ -220,13 +228,13 @@ additional hits in `src/stream_manager/cli_governance.py` +
    When `--candidate-only-control` is set, haiku duration list is
    empty; aggregates default to 0.0 / n=0 (handler in `_percentile`).
 
-4. **MD report — new §"Per-model wall-clock distribution" section.**
+4. **MD report — new §"Per-model wall-clock distributions" section.**
 
    Appended **after** existing §"Summary" block, **before** existing
    §"Regressing rows" block. Format:
 
    ```
-   ## Per-model wall-clock distribution
+   ## Per-model wall-clock distributions
 
    | Model  | n  | p50    | p95    | p99    | max    |
    |--------|----|--------|--------|--------|--------|
@@ -260,9 +268,34 @@ additional hits in `src/stream_manager/cli_governance.py` +
    "haiku_timeout_count": _timeout_count(haiku_durations_s),
    ```
 
+   Keys live on `results[row_id]` (per-row), NOT on `__summary__`.
+   Per-eval roll-up is derivable downstream from per-row sums; the
+   per-row attribution is the primary Seed v2.5-A close-out signal.
+
    Threshold sourced from `cli_governance.TIMEOUT_SECONDS` import
    (do NOT hard-code 25.0 in `alignment_eval.py`; that would create
    a silent skew if step (3) env-split lands same phase).
+
+   **Import-order spec (matters when step (3) bundled):**
+   `cli_governance.TIMEOUT_SECONDS` is resolved at module-import
+   time via `_resolve_timeout_seconds()` (see §"Optional step (3)
+   env-split" below). If `BRIDGE_ALIGNMENT_EVAL=1` is exported AFTER
+   the `from stream_manager.cli_governance import …` line in
+   `tools/alignment_eval.py`, the import-time resolution misses the
+   marker and the eval path resolves via the production branch
+   (default 25.0). MANDATORY order in `tools/alignment_eval.py`
+   module top:
+
+   ```python
+   import os
+   os.environ.setdefault("BRIDGE_API_GOV", "1")
+   os.environ.setdefault("BRIDGE_ALIGNMENT_EVAL", "1")  # MUST precede next line
+   from stream_manager.cli_governance import TIMEOUT_SECONDS  # resolves now
+   ```
+
+   Step (1)-only path is unaffected (no env-resolver yet; constant
+   25.0 import is order-insensitive). Spec applies only when step
+   (3) bundles same phase.
 
 7. **Tests — `tests/test_alignment_eval_timing.py` (new).**
 
@@ -399,9 +432,22 @@ Test surface:
   25.0.
 
 Step (3) adds ~25 LOC `src/` + ~50 LOC tests = ~75 LOC additional
-production-bucket; bundled P1 total ≈ 155 LOC. Still under strict
-150 cap **only if** test surface is compact — operator should
-verify final diff before merge.
+production-bucket; bundled P1 total ≈ 155 LOC. **155 > strict 150
+cap = strict-cap ESCAPE required.** Bundled-FIRE requires ONE of:
+
+(a) Operator pre-approval cited in P1 PR body with rationale (step
+    (3) bundle is FROZEN-surface touch + ~75 LOC overshoot; explicit
+    Rule 1 + Rule 4 acknowledgment recorded).
+(b) Test-surface compaction to < 70 LOC tests (drops bundle to
+    ≤ 150 LOC — collapses the 6-test surface into 2-3 parameterized
+    tests sharing fixtures).
+(c) Raise strict cap to 175 via ADR-18 amendment in P1 PR body
+    (preferred only if pattern repeats; one-off should use (a) or
+    (b)).
+
+Default if no pre-approval recorded at fire: **DEFER step (3) to
+v2.7+** per v2.6 P0 §"Operator decisions" #4 (matches mint-time
+default below).
 
 **If step (3) deferred (default):** no `src/` touch this PR. The
 prompt persists as the v2.7+ template for step (3) impl when
@@ -422,7 +468,7 @@ measured eval p99 data lands at v2.6 P2 ship-gate.
       (NOT hard-coded 25.0).
 - [ ] `_percentile` + `_timeout_count` helpers added with unit
       tests.
-- [ ] MD report carries §"Per-model wall-clock distribution"
+- [ ] MD report carries §"Per-model wall-clock distributions"
       section in the documented position (after Summary, before
       Regressing rows).
 - [ ] JSON sidecar `rows` payload carries per-row duration lists;
@@ -437,17 +483,29 @@ measured eval p99 data lands at v2.6 P2 ship-gate.
 
 ### Step (3) elective (only if operator FIRE same-phase)
 
+- [ ] Operator pick line at §"Optional step (3) env-split" filled
+      with signature + rationale BEFORE P1 fires (the operator-pick
+      block is not optional once step (3) is elected — its absence
+      blocks merge).
 - [ ] `_resolve_timeout_seconds` resolver added at
       `src/stream_manager/cli_governance.py`; default-25.0
       invariant preserved.
 - [ ] `tools/alignment_eval.py` exports
       `os.environ["BRIDGE_ALIGNMENT_EVAL"] = "1"` peer to
-      existing `BRIDGE_API_GOV`.
+      existing `BRIDGE_API_GOV` **AND** both lines precede the
+      `from stream_manager.cli_governance import …` line at module
+      top (per §6 "Import-order spec"). Verified by smoke: import
+      module under `BRIDGE_ALIGNMENT_EVAL=1` + `BRIDGE_CLI_TIMEOUT_EVAL=30.0`
+      and assert `TIMEOUT_SECONDS == 30.0`.
 - [ ] `tests/test_cli_governance_timeout_env.py` added; 6 unit
       tests pass.
 - [ ] Default-no-env path returns 25.0 verified at runtime under
       `BRIDGE_API_GOV=1` (manual smoke OR test that imports
       module and reads `TIMEOUT_SECONDS`).
+- [ ] Strict-cap escape route recorded per §"Optional step (3)" —
+      one of (a) operator pre-approval cite + rationale, (b)
+      compacted test surface < 70 LOC, (c) ADR-18 amendment raising
+      cap to 175.
 - [ ] ADR-18 surface-freeze annotation appended in P1 PR body:
       explicit operator-authorized step (3) bundle (cite v2.6 P0
       §"Operator decisions" #4 + this prompt §"Optional step (3)
@@ -549,7 +607,7 @@ Report back when P1 PR opens with:
 2. Diff stat against cycle-tip:
    `git diff 084137dfc8823ae5eac84755581fc0aeed6342db..HEAD --stat -- src tests tools dashboard`.
 3. Step (3) disposition (DEFER default OR FIRE same-phase).
-4. Sample MD §"Per-model wall-clock distribution" rendering against
+4. Sample MD §"Per-model wall-clock distributions" rendering against
    a synthetic results dict (paste in PR body).
 5. Sample JSON sidecar `rows` payload fragment showing per-row
    `sonnet_durations_s` + `haiku_durations_s` keys.
@@ -561,3 +619,11 @@ Report back when P1 PR opens with:
    `tests/test_cli_governance_timeout_env.py` if step (3) bundled).
 9. WIRED_LEVER_LEDGER posture confirmation (entering 1 / target
    end-P1 2 production).
+10. Step (3) bundle disposition — if FIRE same-phase: confirm
+    `os.environ["BRIDGE_ALIGNMENT_EVAL"] = "1"` is set in
+    `tools/alignment_eval.py` BEFORE the `from
+    stream_manager.cli_governance import …` line at module top
+    (per §6 "Import-order spec"); confirm strict-cap escape route
+    taken (a / b / c per §"Optional step (3)") cited in P1 PR
+    body. If DEFER: state "step (3) DEFER v2.7+; no `src/` touch
+    this PR" in PR body and leave operator pick block blank.
