@@ -29,10 +29,11 @@ import datetime as _dt
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from stream_manager import project_context as _pc_mod
-from stream_manager.cli_governance import CliGovernor
+from stream_manager.cli_governance import CliGovernor, TIMEOUT_SECONDS
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_GOLDEN = ROOT / "tests" / "golden" / "l4_alignment.jsonl"
@@ -95,12 +96,34 @@ def majority(actions: list[str]) -> tuple[str, bool]:
     return top, stable
 
 
-def evaluate_row(governor: CliGovernor, prompt: str, model_id: str, runs: int) -> list[str]:
-    out: list[str] = []
+def evaluate_row(governor: CliGovernor, prompt: str, model_id: str,
+                 runs: int) -> tuple[list[str], list[float]]:
+    actions: list[str] = []
+    durations_s: list[float] = []
     for _ in range(runs):
+        t0 = time.monotonic()
         decision = governor.evaluate(content=prompt, model_id=model_id)
-        out.append(decision.action if decision is not None else "NONE")
-    return out
+        durations_s.append(round(time.monotonic() - t0, 3))
+        actions.append(decision.action if decision is not None else "NONE")
+    return actions, durations_s
+
+
+def _percentile(values: list[float], p: float) -> float:
+    """Linear-interpolated percentile. Empty list -> 0.0."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    k = (len(s) - 1) * p
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    return round(s[lo] + (s[hi] - s[lo]) * (k - lo), 3)
+
+
+def _timeout_count(durations_s: list[float]) -> int:
+    """Tolerance-padded timeout-attribution proxy: count runs within 0.5s
+    of TIMEOUT_SECONDS (accounts for subprocess teardown latency)."""
+    threshold = TIMEOUT_SECONDS - 0.5
+    return sum(1 for d in durations_s if d >= threshold)
 
 
 def render_report(rows: list[dict], results: dict, runs: int,
@@ -143,6 +166,25 @@ def render_report(rows: list[dict], results: dict, runs: int,
               "haiku_regression_vs_sonnet", "haiku_regression_frog7",
               "unstable_sonnet", "unstable_haiku"):
         lines.append(f"- {k}: {summary[k]}")
+    lines.append("")
+    lines.append("## Per-model wall-clock distributions")
+    lines.append("")
+    lines.append("| Model  | n  | p50    | p95    | p99    | max    |")
+    lines.append("|--------|----|--------|--------|--------|--------|")
+    for label in ("sonnet", "haiku"):
+        n = summary[f"{label}_duration_s_n"]
+        if n == 0:
+            lines.append(f"| {label:<6} | n=0; (skipped) | — | — | — | — |")
+            continue
+        lines.append(
+            "| {lab:<6} | {n} | {p50:.3f}s | {p95:.3f}s | {p99:.3f}s | {mx:.3f}s |".format(
+                lab=label, n=n,
+                p50=summary[f"{label}_duration_s_p50"],
+                p95=summary[f"{label}_duration_s_p95"],
+                p99=summary[f"{label}_duration_s_p99"],
+                mx=summary[f"{label}_duration_s_max"],
+            )
+        )
     lines.append("")
     if summary["regression_rows"]:
         lines.append("## Regressing rows (sonnet matches expected, haiku diverges)")
@@ -187,25 +229,36 @@ def main(argv: list[str] | None = None) -> int:
     governor = CliGovernor(snapshot)
 
     results: dict = {}
+    all_sonnet_durations: list[float] = []
+    all_haiku_durations: list[float] = []
     for i, row in enumerate(rows, start=1):
         print(f"[alignment_eval] {i}/{len(rows)} id={row['id']} (sonnet)", flush=True)
-        sonnet_runs = evaluate_row(governor, row["prompt"], args.control_model, args.runs)
+        sonnet_runs, sonnet_durations_s = evaluate_row(
+            governor, row["prompt"], args.control_model, args.runs)
         if args.candidate_only_control:
             haiku_runs = ["SKIP"] * args.runs
+            haiku_durations_s: list[float] = []
         else:
             print(f"[alignment_eval] {i}/{len(rows)} id={row['id']} (haiku)", flush=True)
-            haiku_runs = evaluate_row(governor, row["prompt"], args.candidate_model, args.runs)
+            haiku_runs, haiku_durations_s = evaluate_row(
+                governor, row["prompt"], args.candidate_model, args.runs)
         sm, ss = majority(sonnet_runs)
         hm, hs = majority(haiku_runs)
         results[row["id"]] = {
             "sonnet_runs": sonnet_runs,
             "sonnet_majority": sm,
             "sonnet_stable": ss,
+            "sonnet_durations_s": sonnet_durations_s,
+            "sonnet_timeout_count": _timeout_count(sonnet_durations_s),
             "haiku_runs": haiku_runs,
             "haiku_majority": hm,
             "haiku_stable": hs,
+            "haiku_durations_s": haiku_durations_s,
+            "haiku_timeout_count": _timeout_count(haiku_durations_s),
             "agree": (sm == hm) if (ss and hs) else False,
         }
+        all_sonnet_durations.extend(sonnet_durations_s)
+        all_haiku_durations.extend(haiku_durations_s)
 
     total = len(rows)
     sonnet_stable_count = sum(1 for row in rows if results[row["id"]]["sonnet_stable"])
@@ -258,6 +311,16 @@ def main(argv: list[str] | None = None) -> int:
         "unstable_haiku": unstable_haiku,
         "regression_rows": regression_rows,
         "frog7_regression_rows": frog7_regressions,
+        "sonnet_duration_s_p50": _percentile(all_sonnet_durations, 0.50),
+        "sonnet_duration_s_p95": _percentile(all_sonnet_durations, 0.95),
+        "sonnet_duration_s_p99": _percentile(all_sonnet_durations, 0.99),
+        "sonnet_duration_s_max": max(all_sonnet_durations) if all_sonnet_durations else 0.0,
+        "sonnet_duration_s_n": len(all_sonnet_durations),
+        "haiku_duration_s_p50": _percentile(all_haiku_durations, 0.50),
+        "haiku_duration_s_p95": _percentile(all_haiku_durations, 0.95),
+        "haiku_duration_s_p99": _percentile(all_haiku_durations, 0.99),
+        "haiku_duration_s_max": max(all_haiku_durations) if all_haiku_durations else 0.0,
+        "haiku_duration_s_n": len(all_haiku_durations),
     }
 
     args.reports_dir.mkdir(parents=True, exist_ok=True)
