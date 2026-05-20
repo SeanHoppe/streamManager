@@ -87,7 +87,7 @@ non-compliant (Amendment B §"Required output").
 
 Decision-block (operator fills at fire time):
 
-- [ ] **Feature cycle** (≥ 1 lever wired OR Seed v2.5-C Path-D
+- [x] **Feature cycle** (≥ 1 lever wired OR Seed v2.5-C Path-D
       synthetic-fixture P5 fires; soft LOC ≤ 1500 per ADR-18
       Amendment A; BLOCK at 1.5× = 2250). **Default lean per
       preamble.**
@@ -96,7 +96,11 @@ Decision-block (operator fills at fire time):
       rationale; defers Seed v2.5-G implementation a 3rd cycle and
       Seed v2.5-A diagnosis remains blocked.
 
-**Operator pick:** `_______________`
+**Operator pick:** `feature` (2026-05-20 fire; pre-authorized at PM-mint
+preamble; Seed v2.5-G step (1) instrumentation wires lever +1 production-
+bucket per Amendment A 3-bucket; resolves Seed v2.5-A diagnosis blocker
+2-for-1; alternation hygiene argues feature after 3 of last 4 cycles
+consolidation).
 
 **Coupling note (binding).** Feature cycle classification requires
 at least one of:
@@ -157,15 +161,15 @@ P0 fire).
 
 **Operator decision:**
 
-- [ ] Accept the **5-cap** reading above (cap-counted 5; exempt 6 per
+- [x] Accept the **5-cap** reading above (cap-counted 5; exempt 6 per
       Amendment E §"Self-application").
 - [ ] Mint a Rule 5 clarification (new amendment) if the reading is
       contested. Specify the contested seed(s) and the proposed
       reclassification:
 
-  Contested seed(s): `_______________`
+  Contested seed(s): `none`
 
-  Proposed reclassification: `_______________`
+  Proposed reclassification: `none`
 
 ## §Seed v2.5-G fire decision
 
@@ -176,7 +180,7 @@ evidence in `docs/v2.5-backlog.md` §"Seed v2.5-A".
 
 Decision-block (operator fills at fire time):
 
-- [ ] **FIRE step (1) this cycle** — instrumentation lands as v2.6
+- [x] **FIRE step (1) this cycle** — instrumentation lands as v2.6
       P1. Scope: per-run wall-clock timing in alignment-eval row
       runner (~30 LOC tooling); env-readable `BRIDGE_CLI_TIMEOUT`
       + `BRIDGE_CLI_TIMEOUT_EVAL` split optional same phase. No
@@ -188,7 +192,11 @@ Decision-block (operator fills at fire time):
       Operator records why measurement-protocol stance still holds
       without the instrumentation lever.
 
-**Operator pick:** `_______________`
+**Operator pick:** `FIRE step (1)` (2026-05-20 fire; default-lean
+accepted; ~30 LOC tooling addition to `tools/` qualifies as lever-wire
+under Amendment A 3-bucket production-bucket; step (2) timeout-tighten
++ step (3) env-split defer to v2.7 + measured eval p99 input; resolves
+Seed v2.5-A row-10 100% timeout opacity in lockstep).
 
 **Coupling note.** If §"Cycle-type call" = consolidation AND this
 section = FIRE, the choices are inconsistent (instrumentation tooling
@@ -214,13 +222,19 @@ Decision-block (operator fills at fire time):
       envelope additive keys, phase-5 prompt re-mint OR new
       `phase-1-shadow-synthetic.md`, shadow harness `--mode=v10.1`
       suffix, `check_criteria` filter).
-- [ ] **DEFER another cycle** — Seed v2.5-C carries to v2.7 P0
+- [x] **DEFER another cycle** — Seed v2.5-C carries to v2.7 P0
       (3rd consecutive deferral). Re-evaluate at next cycle frame.
       Operator records the deferral rationale (typical: scope
       uncertainty, dependency on v10.3 stochastic propensities,
       lever-budget bound).
 
-**Operator pick:** `_______________`
+**Operator pick:** `DEFER` (2026-05-20 fire; lever-budget bound — Seed
+v2.5-G P1 is the single-lever fire this cycle to keep feature-cycle LOC
+envelope tight (~30 LOC tooling vs ~600 LOC if bundled); pre-auth signal
+cited Seed v2.5-G + Seed v2.5-A 2-for-1 as the lever-wire candidate,
+NOT both work phases; Seed v2.5-C carries as v2.6-C to v2.7 — 3rd
+consecutive deferral noted, re-evaluate at v2.7 P0 with v10.3
+stochastic-propensities status in hand).
 
 **Cycle-coupling guard:** if §"Cycle-type call" = consolidation AND
 this section = FIRE, the choices are inconsistent and the operator
