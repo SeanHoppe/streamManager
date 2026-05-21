@@ -10,6 +10,6 @@ without touching a frozen surface.
 
 # Bridge forward latency must stay below this even when the CLI
 # governance API times out. Value = cli_governance.TIMEOUT_SECONDS
-# (25.0) * 1.4 rounded up to the nearest 5_000 ms, giving headroom
+# (30.0) * 1.4 rounded up to the nearest 5_000 ms, giving headroom
 # for the timeout + fallback path + downstream forward step.
-BRIDGE_FALLBACK_LATENCY_BUDGET_MS = 35_000
+BRIDGE_FALLBACK_LATENCY_BUDGET_MS = 45_000

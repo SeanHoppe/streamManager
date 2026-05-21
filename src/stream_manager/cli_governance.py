@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 
 ENV_FLAG = "BRIDGE_API_GOV"
 MODEL = "claude-haiku-4-5"
-TIMEOUT_SECONDS = 25.0
+TIMEOUT_SECONDS = 30.0
 CLI_BIN = "claude"
 
 _VALID_ACTIONS = frozenset({"ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"})
