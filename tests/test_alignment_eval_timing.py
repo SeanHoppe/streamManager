@@ -50,8 +50,10 @@ def test_percentile_empty_list_returns_zero():
 
 
 def test_timeout_count_threshold():
-    # TIMEOUT_SECONDS=25.0 -> threshold >=24.5; 24.6 + 25.0 hit.
-    assert _timeout_count([1.0, 24.0, 24.6, 25.0]) == 2
+    # threshold = TIMEOUT_SECONDS - 0.5 (subprocess teardown slack).
+    from stream_manager.cli_governance import TIMEOUT_SECONDS as _CAP
+    assert _timeout_count(
+        [1.0, _CAP - 1.0, _CAP - 0.4, _CAP]) == 2
     assert _timeout_count([]) == 0
 
 
