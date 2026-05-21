@@ -265,7 +265,7 @@ env-split fire decision":
 - `feedback_alignment_eval_stability_window.md` — n=6 escape-hatch
   mandate when prior cycle Sonnet pass_rate is within 0.05 of floor;
   triggered the n=6 reading that produced the n=192 sample.
-- `C:\Users\SeanHoppe\.claude\projects\C--Users-SeanHoppe-vs-streamManager\memory\project_v26_cycle_close.md`
+- `project_v26_cycle_close.md` (auto-memory)
   §"Alignment-eval result" + §"NEW Wall-clock distributions" —
   memory-side confirmation of the canonical numbers.
 - v2.6 P1 commit `7220b33` (PR #196) — step (1) wall-clock
