@@ -132,10 +132,13 @@ Decision-block (operator picks at P0 fire):
 
 - [x] **certPortal sessions; peer SM sessions EXCLUDED (BOUND at v2.8
       P0 fire 2026-05-22).** v2.8 cycle testing routes JsonlTailWorker
-      at certPortal session JSONL per polarity-flip rule (SM never
-      self-monitors). Applies to all v2.8 phase fires (P1 Path-D
-      shadow validation, P2 step (3) eval-cap measurement,
-      P3 Tier-3 soak) AND v10 P4 corpus piggyback runs.
+      live tail at certPortal session JSONL per polarity-flip rule
+      (SM never self-monitors). Applies to JsonlTailWorker across all
+      v2.8 phase fires (P1 Path-D shadow validation, P2 step (3)
+      eval-cap measurement, P3 Tier-3 soak). **v10 P4 corpus
+      piggyback retains self-exclusion semantics only — the
+      "monitor certPortal" binding does NOT redirect rl_episodes.db
+      writes (see §"Scope clarification").**
 - [ ] **default (no operator binding); polarity-flip default-exclude
       stands; target unconstrained per phase.** NOT picked.
 
