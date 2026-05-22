@@ -2046,3 +2046,35 @@ ship gate.
 The bus's SELECT is bounded by a primary-key + LEFT JOIN of a small
 indexed table; expected cost is sub-millisecond on warm SQLite WAL
 cache. The measurement is the gate.
+
+## §v10 shadow overhead (added v10 P5, codified v2.8 P1)
+
+Per v10 P5 §"Non-invasion invariant" and the Path-D synthetic-fixture
+implementation that landed in v2.8 P1, the in-process
+`rl.shadow.ShadowRecorder` runs alongside the live bus on Tier-3
+shadow soaks. Its `on_governance_decision` callback MUST be
+wall-clock-bounded so production is never blocked behind candidate
+evaluation.
+
+**Budget (per-call ceiling):**
+
+| Statistic | Budget |
+|-----------|--------|
+| p95       | ≤ 50 ms |
+
+If the per-call elapsed wall-clock exceeds the budget, the shadow row
+is dropped, the `ShadowRecorder.dropped` counter increments, and (when
+a bus emit callback is configured) an `rl_shadow_dropped` envelope is
+emitted. Production NEVER waits on the shadow path; production
+decision flow is byte-identical pre/post shadow attach (verified by
+the v10 P5 prompt §"Shadow-only invariant" pre-merge sanity check).
+
+**Test gate**: `tests/test_rl_shadow.py::test_shadow_does_not_block_bus`
+runs 1000 synthetic envelopes through `on_governance_decision` and
+asserts the p95 stays below 50 ms.
+
+**Advisory baseline at v2.8 P1**: under Amendment D v10.1-mode the
+budget is exercised by the synthetic-fixture pytest (offline, no
+Tier-3 soak). A live Tier-3 shadow measurement is deferred to the
+v10.3 writeback cutover phase; the budget itself is pre-registered
+now so the v10.3 phase prompt can lift it verbatim.
