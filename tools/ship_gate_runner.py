@@ -1,7 +1,9 @@
-"""v2.6 P2 ship-gate test runner.
+"""v2.x P[2-3] ship-gate test runner.
 
-Orchestrates the verification steps from
-``docs/prompts/v2.6-orchestration/phase-2-ship-gate-finalize.md``:
+Orchestrates the verification steps from the active cycle's ship-gate
+prompt (v2.6 P2 origin; v2.7+ P3 forward — single shared runner with
+per-cycle constants pinned below). For v2.7 the source prompt is
+``docs/prompts/v2.7-orchestration/phase-3-ship-gate.md``:
 
 - ``preflight``  — git HEAD lineage + branch + cycle-tip SHA sanity
 - ``wipe``       — S1 + S1.1 (clean .bridge + untracked reports/, assert
@@ -46,26 +48,30 @@ except (AttributeError, ValueError):
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Cycle-frame constants — pinned at v2.6 P0 fire (PR #193) per
-# docs/v2.6-task-plan.md §"Operator decisions" #7. Hard-coded here so the
+# Cycle-frame constants — pinned per-cycle. Hard-coded here so the
 # runner is self-contained; if cycle-tip rebases, edit explicitly.
-CYCLE_TIP_SHA = "084137dfc8823ae5eac84755581fc0aeed6342db"
-PREDECESSOR_TAG_SHA = "c1e9070"
+# v2.7 P3 constants (pinned at v2.7 P0 fire PR #200 per
+# docs/v2.7-task-plan.md §"Operator decisions" #8):
+CYCLE_TIP_SHA = "4902cca440b33c14fddd9357116923ae5fe1fa4b"
+PREDECESSOR_TAG_SHA = "c3a964c"
 CYCLE_TYPE = "feature"
 LOC_PATHSPEC = ["src", "tests", "tools", "dashboard"]
-EXPECTED_BRANCH = "feat/v2.6-p2-shipgate-finalize"
+EXPECTED_BRANCH = "ship/v2.7-p3-ship-gate"
 
 # Feature-cycle gate (Amendment A + C; cycle-tip anchor binding).
 LOC_SOFT_TARGET = 1500
 LOC_BLOCK = 2250
 
-# Alignment-eval prior-cycle inputs.
-PRIOR_CYCLE_SONNET_PASS_RATE = 0.9375  # v2.5.1 P2 n=6
+# Alignment-eval prior-cycle inputs (v2.6 P2 n=6 baseline per
+# project_v26_cycle_close.md).
+PRIOR_CYCLE_SONNET_PASS_RATE = 0.9412
 FR_OG_7_FLOOR = 0.80
-FR_OG_7_FLOOR_DISTANCE_TRIGGER = 0.05  # n=6 mandate when prior < 0.85
+FR_OG_7_FLOOR_DISTANCE_TRIGGER = 0.05  # n=6 mandate (hatch 1) when prior < 0.85
+PRIOR_CYCLE_UNSTABLE_SONNET = 15        # hatch (3): mandates --runs 6 when
+PRIOR_CYCLE_TOTAL_ROWS = 32             # unstable/total > 0.25 = 47% > 25% at v2.6 P2
 
-# Lever ledger posture (entering P2).
-LEDGER_PRODUCTION_EXPECTED = 2  # v2.3 Seed 6 + v2.6 P1 Seed v2.5-G step (1)
+# Lever ledger posture (entering P3 of v2.7).
+LEDGER_PRODUCTION_EXPECTED = 3  # v2.3 Seed 6 + v2.6 P1 Seed v2.5-G step (1) + v2.7 P1 Seed v2.6-G step (2)
 LEDGER_SOAK_EXPECTED = 0
 
 
