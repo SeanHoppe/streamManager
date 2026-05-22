@@ -155,41 +155,92 @@ slug ∈ SM-self set, dashboard logs operator-actionable warning + skips
 start. No code change required at v2.8 P0 for the binding — it is a
 pure env-var configuration applied at phase-fire time.
 
+### Convention split — DIR-name vs ENVELOPE-emit slug
+
+⚠ Live audit at v2.8 P0 fire surfaced a convention split in the wire
+sites. There is no normalization layer in `src/stream_manager/
+project_context.py`, so operator MUST supply both conventions in env
+explicitly:
+
+- **DIR-name slug (encoded form)** — used by
+  `JsonlTailWorker._newest_jsonl` (`src/stream_manager/jsonl_tail.py:178`)
+  as `projects_dir / project_slug`. The directories under
+  `~/.claude/projects/` are encoded paths
+  (`C--Users-SeanHoppe-VS-certPortal`, `C--Users-SeanHoppe-VS-streamManager`,
+  + worktree suffix variants). `BRIDGE_PROJECT_SLUG` value MUST be
+  the encoded form OR jsonl_tail silently emits zero rows.
+- **ENVELOPE-emit slug (short form)** — emitted by SM governance into
+  envelope `project_slug` field, compared against the SM-self set
+  inside `rl/episode_logger.py:110`. Convention is the short literal
+  (`streamManager`, `certPortal`).
+- **Dashboard refusal at `dashboard/server.py:300`** compares
+  `BRIDGE_PROJECT_SLUG` value (encoded) against `BRIDGE_SM_PROJECT_SLUGS`
+  set by string-membership. Therefore `BRIDGE_SM_PROJECT_SLUGS` MUST
+  contain BOTH encoded SM dir names AND short-form `streamManager`
+  (and any short worktree-aliases) for the refusal to fire at both
+  layers.
+
 ### Env-var mandate (binds v2.8 phase fires)
 
 For every v2.8 phase that exercises JsonlTailWorker (soak,
-ship-gate, v10 P4 piggyback), the runtime env MUST set:
+ship-gate), the runtime env MUST set:
 
-| env var                          | required value                                                                         | enforced by                          |
-|----------------------------------|----------------------------------------------------------------------------------------|--------------------------------------|
-| `BRIDGE_PROJECT_SLUG`            | `certPortal` (canonical certPortal `project_slug` literal)                            | `dashboard/server.py:292`            |
-| `BRIDGE_SM_PROJECT_SLUGS`        | `streamManager` + any SM worktree slug variants on operator machine (comma-separated)  | `dashboard/server.py:294-308` + `rl/episode_logger.py:45` + `tools/extract_gov_to_jsonl.py:200` |
-| `BRIDGE_SM_SELF_SESSION_ID`      | this SM dev-session's session_id (refuses self-ingestion at envelope layer)            | `rl/episode_logger.py:105`           |
-| `BRIDGE_PROJECTS_DIR`            | default `~/.claude/projects/` (unchanged)                                              | `dashboard/server.py:312`            |
-| `SM_OWN_SESSION_ID`              | bridge process session_id (filtered out of tail)                                       | `dashboard/server.py:322`            |
+| env var                          | required value                                                                                                                                            | enforced by                          |
+|----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
+| `BRIDGE_PROJECT_SLUG`            | encoded certPortal dir name `C--Users-SeanHoppe-VS-certPortal` (per `~/.claude/projects/` dir enumeration; primary, not worktree variant)                  | `dashboard/server.py:292` + `src/stream_manager/jsonl_tail.py:178` |
+| `BRIDGE_SM_PROJECT_SLUGS`        | encoded SM dir set (all 12 from step (1) below) + short-form alias `streamManager` (envelope-layer refusal); comma-separated, no spaces                    | `dashboard/server.py:294-308` (encoded) + `rl/episode_logger.py:45,110` (short) + `tools/extract_gov_to_jsonl.py:200` |
+| `BRIDGE_SM_SELF_SESSION_ID`      | this SM dev-session's session_id (refuses self-ingestion at envelope layer)                                                                                | `rl/episode_logger.py:105`           |
+| `BRIDGE_PROJECTS_DIR`            | default `~/.claude/projects/` (unchanged)                                                                                                                  | `dashboard/server.py:312`            |
+| `SM_OWN_SESSION_ID`              | bridge process session_id (filtered out of tail by `JsonlTailWorker._is_sm_originated`)                                                                    | `dashboard/server.py:322` + `src/stream_manager/jsonl_tail.py:144-146` |
+
+### Scope clarification — what this binding actually redirects
+
+- **JsonlTailWorker live tail** (dashboard process; learn-mode source):
+  REDIRECTED by `BRIDGE_PROJECT_SLUG` to certPortal sessions. ← the
+  new binding.
+- **v10 P4 corpus piggyback** (`rl_episodes.db` writes via
+  `rl/episode_logger.record_decision` when `BRIDGE_RL_LOGGER_ENABLED=1`):
+  unchanged. Source is soak-emitted envelopes carrying short-form
+  `project_slug` from SM governance engine. The polarity-flip refusal
+  ensures self-exclusion (status quo). The "monitor certPortal"
+  binding does NOT redirect soak-RL corpus to certPortal envelopes —
+  v10 P4 piggyback continues to land soak-emitted rows minus SM-self.
 
 ### Operator action for v2.8 P1 fire-PR (pre-launch checklist)
 
 Before launching any v2.8 phase that runs the dashboard / JsonlTailWorker:
 
-1. Enumerate operator-local SM project slugs:
-   `Get-ChildItem $env:USERPROFILE\.claude\projects -Directory | Where-Object Name -like '*streamManager*'`
-   — record full set in phase-fire-PR body.
-2. Export `BRIDGE_SM_PROJECT_SLUGS` covering every slug from step (1)
-   (NOT just `streamManager`). Worktree variants like
-   `streamManager-1`, `streamManager-v2-8-p1` etc. MUST be excluded
-   or polarity-flip leaks SM-self rows into the corpus
-   ([[feedback_no_self_monitor]] §"Polarity flip" "Caught
-   2026-05-12").
-3. Export `BRIDGE_PROJECT_SLUG=certPortal`.
+0. **Restart dashboard process** so the FastAPI startup event re-runs
+   `_start_jsonl_tail` and re-reads the env. The worker is started
+   only at startup; live env changes do NOT propagate to an already-
+   running worker.
+1. Enumerate operator-local SM project dir names (encoded form):
+   ```powershell
+   Get-ChildItem $env:USERPROFILE\.claude\projects -Directory `
+     | Where-Object { $_.Name -like '*streamManager*' } `
+     | Select-Object -ExpandProperty Name
+   ```
+   — record full set in phase-fire-PR body. Verified at v2.8 P0 fire
+   (2026-05-22): 12 encoded SM dirs on operator machine —
+   `C--Users-SeanHoppe-VS-streamManager` + 11 worktree variants
+   matching `C--Users-SeanHoppe-VS-streamManager--claude-worktrees-*`.
+2. Export `BRIDGE_SM_PROJECT_SLUGS` containing every encoded slug
+   from step (1) AND short-form alias `streamManager` (joint coverage
+   per §"Convention split"). Comma-separated, no spaces. Example
+   shape: `streamManager,C--Users-SeanHoppe-VS-streamManager,
+   C--Users-SeanHoppe-VS-streamManager--claude-worktrees-...,...`.
+3. Export `BRIDGE_PROJECT_SLUG=C--Users-SeanHoppe-VS-certPortal`
+   (encoded dir name). Worktree variants of certPortal are NOT
+   monitored by this binding; if operator picks a worktree target,
+   substitute that encoded form.
 4. Export `BRIDGE_SM_SELF_SESSION_ID=<current-session-id>`.
 5. Verify dashboard log emits
-   `jsonl_tail: started (... slug=certPortal ...)` (NOT the
-   `REFUSED to start` line); persist log snippet in phase-fire-PR
-   body as proof-of-binding.
-6. If `~/.claude/projects/` contains no certPortal slug directory
-   (fresh clone / new machine), abort the phase and surface to
-   operator — do NOT attempt to read certPortal repo to bootstrap
+   `jsonl_tail: started (... slug=C--Users-SeanHoppe-VS-certPortal ...)`
+   (NOT the `REFUSED to start` line); persist log snippet in
+   phase-fire-PR body as proof-of-binding.
+6. If `~/.claude/projects/` contains no `C--Users-SeanHoppe-VS-certPortal`
+   directory (fresh clone / new machine), abort the phase and surface
+   to operator — do NOT attempt to read certPortal repo to bootstrap
    the slug (firewall holds; CLAUDE.md §"Firewall").
 
 ### Firewall reaffirmation
@@ -263,7 +314,8 @@ days of operator time.
 
 NO `/goal` pre-authorization signal issued at this v2.7.1 P2 S13
 mint. Operator picks cycle-type at v2.8 P0 fire without prior
-implicit lean — the §"Cycle-type call" and §"Bundle order" decision
+implicit lean — the §"Cycle-type call", §"Bundle order", and
+§"Monitor target" (added at v2.8 P0 fire 2026-05-22) decision
 blocks above are the only sanctioned binding paths.
 
 ## Cross-refs
@@ -298,8 +350,10 @@ blocks above are the only sanctioned binding paths.
       cycle-tip-merge SHA (v2.7.1 tag `5e971b4` is predecessor;
       v2.8 P0-merge SHA fills at PR merge — separate backfill PR per
       v2.7 P0 / PR #201 precedent).
-- [x] Memory pre-flight stamp recorded in P0 PR body for the
-      minimum re-read list (7 memories verified fresh).
+- [x] Memory pre-flight stamp recorded for the minimum re-read list
+      (7 memories verified fresh; stamp body staged in
+      `tmp/v2.8-p0-pr-body.md` pending `gh pr create` by operator —
+      `gh pr create` denied twice for this session's permission scope).
 - [x] Cross-refs verified live (no broken citations).
 - [x] Operator records any deviation from §"Default lean
       rationale" recommendation (none — all defaults accepted; sole
