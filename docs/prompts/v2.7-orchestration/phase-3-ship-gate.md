@@ -1,11 +1,13 @@
 # v2.7 P3 — ship-gate finalize + v2.7.0 tag
 
-> **STUB minted post-P1-merge 2026-05-21** (operator-authorised chain
-> at v2.7 P1 merge). v2.7 P1 landed at `28a89c4` (PR #203). Full fold
-> post-P2 verdict per goal cadence: the n=12 Seed v2.6-A re-measure
-> outcome at v2.7 P2 dictates this prompt's `--runs` flag, the Seed
-> v2.6-A disposition recording shape, and the Seed v2.6-A-T close-vote
-> margin.
+> **Folded post-P2-merge 2026-05-21** (originally minted as a stub at
+> PR #205 `0f9da90`; folded inline against the v2.7 P2 verdict at
+> PR #206 `59bee5c`). v2.7 P1 landed at `28a89c4` (PR #203);
+> v2.7 P2 landed at `59bee5c` (PR #206) with verdict
+> **STILL-100%-TIMEOUT-ESCALATE** (8/12 NONE; row-10 p99 = 30.092 s
+> at cap; Seed v2.6-A-T margin = **−0.092 s** — does NOT close).
+> Seed v2.6-A + Seed v2.6-A-T both carry to v2.8; spawned Seed
+> v2.7-A-CLIP for corpus-wide cap-clip artefact tracking.
 >
 > **What this stub locks now:**
 >
@@ -36,18 +38,37 @@
 > 5. Memory pre-flight: 6 load-bearing memories carried from P0; light
 >    re-verify at P3 fire — no full pre-flight at this stub PR.
 >
-> **What stays TBD pending P2 verdict (folded at P3 fire-PR):**
+> **P2 verdict folded (was TBD at stub mint; resolved at PR #206 merge):**
 >
-> - `--runs` final value (3 / 6 / 12 — driven by P2 disposition).
-> - Seed v2.6-A disposition cite (golden update / DIP hold / new seed
->   / carry — verbatim P2 LANDED row).
-> - Seed v2.6-A-T close-vote cite (close or carry; margin value).
+> - `--runs 6` mandatory at P3 — escape-hatch (3) bound at the v2.6
+>   P2 prior-cycle baseline (`unstable_sonnet / total = 15 / 32 =
+>   47 % > 25 %`); P2 STILL-100%-TIMEOUT-ESCALATE verdict further
+>   loads pressure on row-10. **Hatch (4) per-row exclusion of
+>   `frog7-wirecli-module-10` from the S4 gate denominator is
+>   pre-bound** (row-10 timeout-rate = 9/12 = 75 % » 33 % threshold
+>   per `feedback_alignment_eval_stability_window.md`; will recur at
+>   --runs 6).
+> - Seed v2.6-A disposition: **CARRIES to v2.8** (no golden update;
+>   re-measure halted by timeout escalation).
+> - Seed v2.6-A-T close-vote: **DOES NOT CLOSE.** Margin = 30.0 −
+>   30.092 = **−0.092 s** (NEGATIVE). Carries to v2.8.
+> - WIRED_LEVER_LEDGER final count: **3 production / 0 soak**
+>   unchanged from P1 entry (P2 wires no lever; P3 wires no lever).
+> - Seed v2.7-A-CLIP **new seed** to spawn at v2.7 backlog mint —
+>   corpus-wide cap-clip artefact (J2 audit's cap=30 recommendation
+>   relied on clipped-distribution Sonnet n=192 reading; row-10
+>   exposes the artefact directly). Carries to v2.8 as a J2/J3
+>   re-measure protocol candidate.
+> - ADR-5 baseline append disposition: APPEND (latency-surface lever
+>   landed at P1; default cadence per `docs/adr/ADR-5-latency-budget.
+>   md`).
 > - Final cycle-discipline LOC tally (P1 + P2 cumulative cycle-tip
->   delta; ADR-18 Amendment A 3-bucket breakdown).
-> - WIRED_LEVER_LEDGER final count (3 production / 0 soak expected
->   unchanged from P1 entry).
-> - ADR-5 baseline append disposition (operator pick at fire — default
->   APPEND for a latency-surface lever like Seed v2.6-G step (2)).
+>   delta): **+8 / −6 net production-bucket** across `src/` + `tests/`
+>   from P1 (`cli_governance.py` +1/−1, `latency_budgets.py` +2/−2,
+>   `test_cli_governance.py` +1/−1, `test_alignment_eval_timing.py`
+>   +4/−2). P2 added 0 LOC production-bucket. P3 adds the ship-gate
+>   runner constants delta (≤ 10 LOC `tools/ship_gate_runner.py`
+>   re-pin) + docs. Well under soft ≤ 1500.
 >
 > Cycle type **FEATURE** (recorded at P0 PR #200 `4902cca`). Soft LOC
 > ≤ 1500 / BLOCK 2250 vs cycle-tip (`4902cca440b33c14fddd9357116923a
@@ -199,17 +220,37 @@ gate (Amendment C §"Bucket-scoped narrative").
 
 ### S4 — alignment-eval
 
-`--runs` flag per `feedback_alignment_eval_stability_window.md` and
-the §"P2 → P3 verdict-bridge" table above. **At this stub mint, the
-P2 verdict is not yet known; the P3 fire-PR sets the final flag.**
+`--runs 6` mandatory at P3 (escape-hatch (3) bound at v2.6 P2 baseline
+`unstable_sonnet / total = 15 / 32 = 47 % > 25 %`).
 
 ```
-python -m tools.alignment_eval --runs <P2-verdict-driven; see bridge> \
-  --ci-gate
+python -m tools.ship_gate_runner align --runs 6 --execute
 ```
 
-If `--ci-gate` exit ≠ 0 → BLOCK; fold corrective sub-phase per
-v2.5.1 precedent (PR #188).
+(equivalent to `python -m tools.alignment_eval --runs 6 --ci-gate`
+plus the runner's `_eval_escape_hatch` evaluator).
+
+**Hatch (4) per-row exclusion bound — `frog7-wirecli-module-10`.**
+v2.7 P2 n=12 timeout-rate at this row = 9/12 = 75 % » 33 % threshold;
+the row will recur at `--runs 6` (cap=30 falsified at this row per
+P2 verdict; Sonnet true response distribution extends beyond cap).
+Per `feedback_alignment_eval_stability_window.md` §"How to apply" #4:
+**exclude `frog7-wirecli-module-10` from the gate denominator on
+this measurement run** and track for v2.8+ via Seed v2.7-A-CLIP +
+v2.8 P1 cap-band escalation OR Seed v2.6-G step (3) env-split.
+
+Post-hoc adjustment in PR body:
+
+- Raw S4 reading: `sonnet_pass = X / sonnet_stable_count = Y`
+  (denominator includes row-10).
+- Hatch (4) adjusted: `sonnet_pass = X' / (Y − [1 iff row-10 in
+  stable_count]) = Z`.
+- Gate against FR-OG-7 floor 0.80 on the adjusted reading.
+
+If `--ci-gate` exit ≠ 0 AND adjusted-pass-rate < 0.80 → BLOCK; fold
+corrective sub-phase per v2.5.1 precedent (PR #188). If `--ci-gate`
+exit ≠ 0 but adjusted-pass-rate ≥ 0.80 → document the row-10
+exclusion in PR body, continue to S5.
 
 ### S4.5 — (REMOVED; was Seed v2.6-A re-measure at v2.6 P2)
 
@@ -311,8 +352,35 @@ Per PM-mint precedent (PR #178 / PR #191 / PR #199), mint:
 - `docs/v2.8-next-steps.md` skeleton with carry-forwards from
   `docs/v2.7-backlog.md`.
 
+Carry-forward seeds at v2.8 mint (from v2.7 close):
+
+- **Seed v2.7-A-CLIP (NEW; spawned at v2.7 P2 verdict).** Corpus-wide
+  cap-clip artefact. J2 audit's `cap = 30 s` recommendation was
+  driven by a clipped-distribution Sonnet n=192 reading (v2.6 P1
+  instrumentation under old 25 s cap mechanically capped any > 25 s
+  Sonnet response back to ~25 s; reading "p99 = 25.048 s" was
+  approximately the clip frequency, not the true response p99).
+  Row-10 surfaced the artefact under 30 s cap (n=12 p99 = 30.092 s
+  — at new cap). Hypothesis: multiple corpus rows are similarly
+  cap-clipped. v2.8 J2-protocol candidate: re-measure full corpus
+  Sonnet n distribution under a deliberately wide cap (e.g. 60 s)
+  to expose the true tail.
+- **Seed v2.6-A (CARRIES).** Re-measure halted by timeout escalation;
+  no golden update.
+- **Seed v2.6-A-T (CARRIES).** Margin −0.092 s; needs cap-band
+  escalation OR env-split before close-vote can re-fire.
+- **Seed v2.6-G step (3) env-split (CARRIES; promoted candidate).**
+  v2.6-A-T resolution depends on either env-split (so prod cap can
+  stay tight while eval cap widens) OR full-corpus cap-band lift.
+  Step (3) was lever-budget-deferred at v2.7 P0; v2.8 should
+  reconsider given v2.7 P2 falsification.
+- **Seed v2.6-C Path-D P5 (CARRIES; 6th-consecutive deferral if not
+  fired at v2.8).** Operator decides at v2.8 P0.
+
 Operator chooses cycle-type default-lean (feature vs consolidation)
-at P0 fire.
+at P0 fire. v2.7 was 2-in-a-row feature; alternation hygiene argues
+v2.8 consolidation, but Seed v2.7-A-CLIP J2/J3 is measurement-only
+(no LOC), so could land alongside a consolidation cycle.
 
 ### Close-vote rows
 

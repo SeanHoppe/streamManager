@@ -1,7 +1,9 @@
-"""v2.6 P2 ship-gate test runner.
+"""v2.x ship-gate test runner.
 
-Orchestrates the verification steps from
-``docs/prompts/v2.6-orchestration/phase-2-ship-gate-finalize.md``:
+Orchestrates the verification steps from the active cycle's ship-gate
+prompt (v2.6 P2 origin; v2.7+ forward — single shared runner with
+per-cycle constants pinned below). For v2.7 the source prompt is
+``docs/prompts/v2.7-orchestration/phase-3-ship-gate.md``:
 
 - ``preflight``  — git HEAD lineage + branch + cycle-tip SHA sanity
 - ``wipe``       — S1 + S1.1 (clean .bridge + untracked reports/, assert
@@ -46,26 +48,31 @@ except (AttributeError, ValueError):
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Cycle-frame constants — pinned at v2.6 P0 fire (PR #193) per
-# docs/v2.6-task-plan.md §"Operator decisions" #7. Hard-coded here so the
+# Cycle-frame constants — pinned per-cycle. Hard-coded here so the
 # runner is self-contained; if cycle-tip rebases, edit explicitly.
-CYCLE_TIP_SHA = "084137dfc8823ae5eac84755581fc0aeed6342db"
-PREDECESSOR_TAG_SHA = "c1e9070"
+# v2.7 P3 constants (pinned at v2.7 P0 fire PR #200 per
+# docs/v2.7-task-plan.md §"Operator decisions" #8):
+CYCLE_TIP_SHA = "4902cca440b33c14fddd9357116923ae5fe1fa4b"
+PREDECESSOR_TAG_SHA = "c3a964c"
 CYCLE_TYPE = "feature"
 LOC_PATHSPEC = ["src", "tests", "tools", "dashboard"]
-EXPECTED_BRANCH = "feat/v2.6-p2-shipgate-finalize"
+EXPECTED_BRANCH = "ship/v2.7-p3-ship-gate"
 
 # Feature-cycle gate (Amendment A + C; cycle-tip anchor binding).
 LOC_SOFT_TARGET = 1500
 LOC_BLOCK = 2250
 
-# Alignment-eval prior-cycle inputs.
-PRIOR_CYCLE_SONNET_PASS_RATE = 0.9375  # v2.5.1 P2 n=6
+# Alignment-eval prior-cycle inputs (v2.6 P2 n=6 baseline per
+# project_v26_cycle_close.md).
+PRIOR_CYCLE_SONNET_PASS_RATE = 0.9412
 FR_OG_7_FLOOR = 0.80
-FR_OG_7_FLOOR_DISTANCE_TRIGGER = 0.05  # n=6 mandate when prior < 0.85
+FR_OG_7_FLOOR_DISTANCE_TRIGGER = 0.05  # n=6 mandate (hatch 1) when prior < 0.85
+PRIOR_CYCLE_UNSTABLE_SONNET = 15        # hatch (3): mandates --runs 6 when
+PRIOR_CYCLE_TOTAL_ROWS = 32             # unstable/total > trigger (15/32 = 47% > 25% at v2.6 P2)
+UNSTABLE_SONNET_RATIO_TRIGGER = 0.25    # shared by _resolve_runs (hatch 3) + _eval_escape_hatch
 
-# Lever ledger posture (entering P2).
-LEDGER_PRODUCTION_EXPECTED = 2  # v2.3 Seed 6 + v2.6 P1 Seed v2.5-G step (1)
+# Lever ledger posture (entering P3 of v2.7).
+LEDGER_PRODUCTION_EXPECTED = 3  # v2.3 Seed 6 + v2.6 P1 Seed v2.5-G step (1) + v2.7 P1 Seed v2.6-G step (2)
 LEDGER_SOAK_EXPECTED = 0
 
 
@@ -348,9 +355,19 @@ def cmd_ledger(_args: argparse.Namespace) -> int:
 def _resolve_runs(prior_rate: float, override: int | None) -> int:
     if override is not None:
         return override
+    # Hatch (1): n=6 when prior rate within FLOOR_DISTANCE_TRIGGER of floor
+    # (per feedback_alignment_eval_stability_window.md).
     gap = prior_rate - FR_OG_7_FLOOR
     if gap < FR_OG_7_FLOOR_DISTANCE_TRIGGER:
-        return 6  # n=6 mandate per feedback_alignment_eval_stability_window
+        return 6
+    # Hatch (3): n=6 when prior-cycle Sonnet instability ratio exceeds
+    # UNSTABLE_SONNET_RATIO_TRIGGER. Bound at v2.6 P2 = 15/32 = 47% > 25%
+    # → v2.7 P3 must fire at --runs 6.
+    if PRIOR_CYCLE_TOTAL_ROWS > 0 and (
+        PRIOR_CYCLE_UNSTABLE_SONNET / PRIOR_CYCLE_TOTAL_ROWS
+        > UNSTABLE_SONNET_RATIO_TRIGGER
+    ):
+        return 6
     return 3
 
 
@@ -360,9 +377,10 @@ def _eval_escape_hatch(report_json: dict) -> tuple[bool, list[str]]:
     summary = report_json["summary"]
     n = summary["total"]
     unstable = summary["unstable_sonnet"]
-    if unstable / n >= 12 / 32:
+    if n > 0 and unstable / n > UNSTABLE_SONNET_RATIO_TRIGGER:
         reasons.append(
-            f"unstable_sonnet={unstable}/{n} ≥ 12/32 (37.5%)"
+            f"unstable_sonnet={unstable}/{n} > "
+            f"{UNSTABLE_SONNET_RATIO_TRIGGER:.0%}"
         )
     rows = report_json["rows"]
     runs = report_json["runs"]
