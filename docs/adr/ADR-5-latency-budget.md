@@ -1685,6 +1685,153 @@ ADR-18 continue to apply at v2.4 unchanged.
 - LOC delta snapshot timing (above) is ambiguous in P2 prompt; v2.4
   P2 prompt seed should bind which snapshot is the gate-of-record.
 
+## v2.7.1 ship-gate baseline
+
+> **Source soak:** `reports/soak-20260522T090102Z.md` — v2.7.1 P2
+> Tier-3 soak (32.1 min wall-clock; PASS).
+>
+> **Append rationale.** Per v2.7.1 P2 prompt §S7 default APPEND
+> because the v2.7 P1 latency-surface lever (Seed v2.6-G step (2)
+> `TIMEOUT_SECONDS` 25.0 → 30.0) still ships in v2.7.1. ADR-5
+> baselines were SKIPPED for v2.4 + v2.5.1 + v2.6 + v2.7 — that
+> process gap is recorded here for the first time. v2.8 P3 ship-
+> gate prompt seeds should re-bind ADR-5 APPEND discipline by
+> default.
+
+### Latency targets (overall, n=60)
+
+- count: 60
+- p50: 3.919 s
+- p95: 10.480 s
+- max: 24.613 s
+- mean: 3.750 s
+
+### Per-band split (n distributions)
+
+| Path                 |  n  | p50      | p95      |
+|----------------------|-----|----------|----------|
+| ALLOW (routine)      |  49 |  3.80 s  |  6.57 s  |
+| L2/L3 escalation     |   7 |  4.27 s  | 11.69 s  |
+| L4 alignment         |   4 |  5.23 s  | 22.49 s  |
+| LM (categorize)      |  10 | 11.26 s  | 12.37 s  |
+
+### Delta vs v2.6 P2 ship-gate (v2.6 source: `reports/soak-20260520T180511Z.md`)
+
+| Band            | v2.6 P2 p95 | v2.7.1 P2 p95 | Δ              |
+|-----------------|-------------|---------------|----------------|
+| Overall         |  9.926 s    | 10.480 s      | **+0.554 s**   |
+| ALLOW           |  comparable |  6.57 s       | within noise   |
+| L2/L3           |  comparable | 11.69 s       | within noise   |
+| L4              | 19.89 s     | 22.49 s (n=4) | +2.60 s        |
+| LM              | 12.64 s     | 12.37 s       | −0.27 s recovered |
+
+### Delta vs v2.7 P3 BLOCK overnight soak (source: `reports/soak-20260521T235321Z.md`)
+
+| Band            | v2.7 P3 overnight | v2.7.1 P2     | Δ                         |
+|-----------------|-------------------|---------------|---------------------------|
+| Overall         | 13.957 s          | 10.480 s      | **−3.477 s recovery**     |
+| LM              | 5593.95 s         | 12.37 s       | **−5581.58 s recovery**   |
+|                 | (single-outlier dominated; OQ-2 hypothesis confirmed) |              |                  |
+
+OQ-2 single-outlier hypothesis CONFIRMED at v2.7.1 P2: a single LM-
+band CLI dispatch stalled at 6974 s in the v2.7 P3 overnight soak;
+v2.7.1 P2 soak shows LM band well-behaved (12.37 s). No persistent
+LM regression.
+
+### Lever ledger
+
+- 3 production wired levers (v2.3 Seed 6 JsonlTailWorker + v2.6 P1
+  Seed v2.5-G step (1) alignment-eval wall-clock instrumentation +
+  v2.7 P1 Seed v2.6-G step (2) `TIMEOUT_SECONDS` cap-tighten).
+- HOLD posture exiting v2.7.1 (no new wire at sub-cycle).
+
+**OQ-1 instrumentation gap noted.** Soak-side lever ledger
+(`tools/soak_driver.py` counter) reports `0 wired levers — DORMANT-N
+gate inert` despite 3 production wires landed. v2.8 carry-forward
+for diagnostic.
+
+### Alignment-eval gate (v2.7.1 P2 S4)
+
+Source: `reports/v2.7.1-ship-gate/alignment-eval-20260522T104554Z.{md,json}`.
+
+- Filtered corpus: 27 / 32 rows (5 excluded under hatch (4) — row-05
+  Seed v2.7-B Hatch B + 4 cap-clip rows from v2.7 P3 reading).
+- `--runs 6` baseline (hatch (3) bound; unstable_sonnet at v2.6 P2 =
+  15/32 = 47% > 25%).
+- Sonnet pass_rate: **13 / 13 stable = 1.0000** (counted on stable
+  rows only).
+- Haiku pass_rate: **15 / 15 stable = 1.0000**.
+- `haiku_regression_vs_sonnet`: 0.
+- `haiku_regression_frog7`: 0.
+- `regression_rows`: [].
+- Unstable: sonnet 14/27 (52%), haiku 12/27 (44%) — hatch (3)
+  remains bound for v2.8.
+- Wall-clock distributions (n=162 per model):
+  - Sonnet p50 / p95 / p99 / max = 12.500 / 27.354 / 29.601 /
+    30.062 s.
+  - Haiku p50 / p95 / p99 / max = 12.602 / 21.189 / 26.273 /
+    30.046 s.
+
+8-cycle Sonnet pass-rate trajectory (with v2.4 / v2.5.1 / v2.6
+gap-filled reading-only): v2.1 → v2.2 → v2.3 → ... → v2.7.1.
+7-cycle Haiku trajectory likewise. v2.6 P2 baseline = Sonnet 0.9412
++ Haiku 1.0 (n=6 escape-hatch reading).
+
+### v10 P4 corpus delta (Run 9 piggyback)
+
+`BRIDGE_RL_LOGGER_ENABLED=1` set during S2 soak. Episode delta
+recorded in close memory `project_v271_cycle_close.md` (corpus
+trajectory continues from Run 7 v2.6 P2 baseline = 608 episodes).
+
+### LOC delta (Amendment C cycle-tip binding gate)
+
+| Anchor              | SHA          | Gate?     | LOC delta (insertions / deletions / net) |
+|---------------------|--------------|-----------|------------------------------------------|
+| Cycle-tip (Amend C) | `4902cca`    | BINDING   | +42 / −22 / +20 LOC                      |
+| Predecessor-tag (A) | `c3a964c`    | NARRATIVE | +42 / −22 / +20 LOC                      |
+
+Feature cycle gate: net < 2250 vs cycle-tip = PASS.
+
+### Status
+
+ACCEPTED as v2.7.1 ship-gate baseline. v2.7.0 NEVER tagged (parent
+v2.7 P3 BLOCKED at S4 CI gate on row 5 + 4-row cap-clip artefact);
+v2.7.1 is the carry tag per v1.3.1 / v2.5.1 precedent.
+
+Cycle-discipline rules under ADR-18 Amendments A–E unchanged
+through v2.7.1 (no new amendment minted at sub-cycle).
+
+### Caveats
+
+- **Sonnet p95 27.354 s near cap.** Filtered corpus excluded the
+  4 most cap-pressured rows from v2.7 P3; Sonnet p95 is still near
+  the 30 s `TIMEOUT_SECONDS` cap. p99 = 29.601 s + max = 30.062 s
+  indicate at least 1 cap-clip event remains even under filtering.
+  Seed v2.7-A-CLIP corpus-wide re-measure at eval-cap = 60 s
+  (v2.8 P2 Convergence-cycle landing) surfaces the true Sonnet
+  tail.
+
+- **Seed v2.4-E (overall p95 watch) regression-flag tripped.**
+  v2.7.1 P2 overall p95 = 10.480 s breaches the 10.156 s
+  regression-flag threshold by +0.324 s. 5-cycle trajectory:
+  10.584 → 10.518 → 9.656 → 9.926 → 10.480 s. Sub-10 streak ends
+  this cycle. Disposition deferred to v2.8 P3 ship-gate (operator
+  reads as either real regression carry-forward OR Convergence-
+  cycle absorption candidate because step (3) env-split widens
+  eval-cap, separating eval-path measurement noise from prod-path
+  latency).
+
+- **Seed v2.4-F (L4 half) promote-🔴 line tripped at n=4.**
+  v2.7.1 P2 L4 p95 = 22.49 s breaches the 22 s promote-🔴 line
+  with only n=4 samples — sample-variance plausible vs real
+  regression. v2.8 P3 ship-gate re-reads at next Tier-3 soak.
+
+- **OQ-1 lever-ledger instrumentation gap carries to v2.8.**
+
+- **The Hatch-B per-row exclusion is the v2.7.1 ship-gate's only
+  novel adjustment.** All 5 rows excluded are documented in
+  `docs/v2.7.1-backlog.md` §"Carry-forwards from v2.7.1".
+
 ## References
 
 - `reports/soak-20260502T141527Z.md` — locked v1.0 soak baseline
