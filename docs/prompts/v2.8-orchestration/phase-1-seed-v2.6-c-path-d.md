@@ -14,8 +14,9 @@
 > §"Phases (recommended bundle order)": P1 (this) + P2 (step (3)
 > env-split + Seed v2.7-A-CLIP corpus re-measure) + P3 (ship-gate).
 >
-> **6th-consecutive defer averted.** Seed v2.6-C deferred 5 cycles
-> (v2.4 + v2.5 + v2.5.1 + v2.6 + v2.7 + v2.7.1). v2.8 Convergence-cycle
+> **6th-consecutive defer averted.** Seed v2.6-C deferred 6 cycles
+> (v2.4 + v2.5 + v2.5.1 + v2.6 + v2.7 + v2.7.1; per `docs/v2.7.1-
+> backlog.md` L28 "6th-consecutive deferral"). v2.8 Convergence-cycle
 > Q-A FEATURE pick promotes this seed to FIRE; closes head-of-chain
 > per `docs/v10-mvp-status.md` §"Held-chain map" (unblocks #112 →
 > #131 → #124 + #125 in sequence).
@@ -37,8 +38,8 @@
   PR #212 (`1f17cbc`) + this P1-prep PR merged.
 - PR target: `main`.
 - Branch: `feat/v2.8-p1-path-d`.
-- ABORT if v2.8 P0 + backfill not at HEAD lineage; ABORT if HEAD has
-  drifted from v2.8 P0 base.
+- ABORT if v2.8 P0 + backfill + this P1-prep PR not at HEAD lineage;
+  ABORT if HEAD has drifted from v2.8 P0 base.
 
 ## Pre-flight
 
@@ -106,7 +107,24 @@ Corpus posture at P1 fire (per `project_v271_cycle_close.md`
 (3.89× over the 200-row v10 P4 gate). v10.1-mode baseline arm
 `_total >= 200` satisfied with margin.
 
-## Scope (verbatim from v10 P5 prompt — `docs/prompts/v10-orchestration/phase-5-shadow-stop-conditions.md`)
+## Scope (adapted from v10 P5 prompt — `docs/prompts/v10-orchestration/phase-5-shadow-stop-conditions.md`)
+
+### Adaptation rationale
+
+v2.8 P1 §"Scope" mirrors the v10 P5 prompt deliverables with two
+v2.8-cycle adaptations:
+
+1. **+2 CLI test files** (`tests/test_rl_cli_shadow.py` + `tests/
+   test_rl_cli_check_criteria.py`). v10 P5 prompt DoD L134 only
+   floors `test_rl_{shadow,stop_conditions}.py`. v2.8 P1 lands CLI
+   modules `rl/cli/shadow.py` + `rl/cli/check_criteria.py` (per
+   v10 P5 prompt §"Deliverables 3" + "Deliverables 4"); per
+   ADR-18 §"New module classification rule" each new module needs
+   matching test coverage at birth. CLI tests target argparse +
+   exit-code surface, not subprocess behaviour.
+2. **DoD substitutes `pytest` for "real Tier 3 soak"** per
+   Amendment D v10.1-mode synthetic-fixture mode (see §Context
+   L84-89 + §"Departure footnote" in §"DoD" below).
 
 Touch list (~+600 LOC `rl/` + tests):
 
@@ -168,6 +186,30 @@ Touch list (~+600 LOC `rl/` + tests):
   No diff in any v2.8 P1 PR against `src/stream_manager/governance.py`
   + `src/stream_manager/cli_governance.py` allowed.
 
+## Shadow-only invariant (v10 P5 prompt L119-125 carryover)
+
+P5 changes NO production behaviour. Adapted to v10.1-mode
+synthetic-fixture mode:
+
+- **Production decision flow byte-identical pre/post shadow** —
+  golden-corpus replay verdicts MUST match between
+  `--shadow-recorder=<db>` enabled and disabled runs. Pre-merge
+  sanity-check: `tools/alignment_eval.py --runs 1 --report-only`
+  output JSON byte-equal between shadow-on and shadow-off.
+- **`cli_dispatch_ms` p95 unchanged** vs v10 P4 baseline in
+  fixture-replay timing (since no Tier-3 soak fires at v2.8 P1
+  under Amendment D substitution, the comparator is the v10 P4
+  episode-logging p95 from `reports/seed-v2.5-g/` baseline rather
+  than a live soak).
+- **All v1.7–v2.0 + v10 P1–P4 tests green** per v10 P5 prompt
+  DoD L141.
+- **Non-invasion invariant `on_governance_decision` ≤ 50 ms p95**
+  asserted in `tests/test_rl_shadow.py::test_shadow_does_not_
+  block_bus` (v10 P5 prompt L102 verbatim test name).
+
+Any deviation = STOP fire + surface to operator (production
+correctness blocking).
+
 ## ADR-18 surface-classification
 
 Per `docs/v10-task-plan.md` §"P5 — shadow + ship criteria (v10.2)"
@@ -205,9 +247,10 @@ Per `docs/v10-task-plan.md` §"P5 — shadow + ship criteria (v10.2)"
 
 - P1 cycle-tip LOC delta vs `70e23e5`: target **~+600 LOC**
   production-bucket (`rl/` + `tests/`); BLOCK at +900 LOC strict
-  scope cap (1.5× target per v10-task-plan.md P5 budget ≤ 700 LOC).
-  Soft target ≤ 1500 / BLOCK 2250 cycle-wide envelope absorbs P1
-  + P2 (~50) + P3 (0 prod) with substantial headroom.
+  scope cap (1.5× target; matches `docs/v10-task-plan.md` L144
+  P5 budget ≤ 600 net add). Soft target ≤ 1500 / BLOCK 2250
+  cycle-wide envelope absorbs P1 + P2 (~50) + P3 (0 prod) with
+  substantial headroom.
 - Re-run at P1 fire:
 
   ```
@@ -255,9 +298,13 @@ appends listed in §"Scope". Explicit scope-creep guards:
 - `src/stream_manager/cli_governance.py` — NO diff allowed
   (FROZEN per Rule 1; only v2.8 P2 step (3) env-split is sanctioned
   to touch this file in v2.8 cycle).
-- `rl/episode_logger.py` — NO diff allowed (FROZEN per ADR-18
-  §"Initial classification" — RL ingest surface stable since
-  v10 P1 / v2.3 PR #176 `cf7d003`).
+- `rl/episode_logger.py` — NO diff allowed (out-of-scope; v10 P5
+  shadow path is non-invasive by construction — shadow records to
+  separate `rl_shadow.db`, never touches the live `rl_episodes.db`
+  ingest surface. Classification verify at fire: ADR-18
+  §"Initial classification" lists `rl/` as EXPERIMENTAL at v10 P1
+  birth; promotion to EVOLVING / FROZEN tracked in amendment record.
+  Either way, this PR does NOT diff the file).
 - `tools/soak_driver.py` — `--shadow-recorder` flag-add ONLY,
   ≤ 30 LOC. NO other changes (parser surface stays minimal).
 - `docs/v10-rl-design.md` — APPEND only (new section); NO edits
@@ -271,6 +318,22 @@ post-v2.8.
 
 ## DoD (P1 fire-PR)
 
+### Departure footnote (Amendment D v10.1-mode substitution)
+
+v10 P5 prompt DoD L138 requires "Sample shadow report attached
+to PR, from a real Tier 3 soak with the latest P4 proposal". v2.8
+P1 substitutes synthetic-fixture pytest validation per Amendment D
+v10.1-mode entry gate (deterministic production policy; no off-
+baseline candidate to A/B). Real Tier-3 shadow report DEFERS to
+v10.3 writeback cutover. Sample CRITERIA report at P1 close MAY
+attach (expected outcome at v10.1-mode first run: FAIL on
+"insufficient shadow runs" per v10 P5 prompt L139).
+
+### Checkpoints
+
+- [ ] v10.1-mode synthetic-fixture substitution invoked per
+      §Context + §"Departure footnote" above (NOT a v10.3
+      writeback green-light).
 - [ ] Branch `feat/v2.8-p1-path-d` opened from `main` after v2.8
       P0 + backfill + this prep PR merged.
 - [ ] Touch list matches §"Scope" exactly (4 new code modules +
