@@ -1,7 +1,7 @@
-"""v2.x P[2-3] ship-gate test runner.
+"""v2.x ship-gate test runner.
 
 Orchestrates the verification steps from the active cycle's ship-gate
-prompt (v2.6 P2 origin; v2.7+ P3 forward — single shared runner with
+prompt (v2.6 P2 origin; v2.7+ forward — single shared runner with
 per-cycle constants pinned below). For v2.7 the source prompt is
 ``docs/prompts/v2.7-orchestration/phase-3-ship-gate.md``:
 
@@ -68,7 +68,8 @@ PRIOR_CYCLE_SONNET_PASS_RATE = 0.9412
 FR_OG_7_FLOOR = 0.80
 FR_OG_7_FLOOR_DISTANCE_TRIGGER = 0.05  # n=6 mandate (hatch 1) when prior < 0.85
 PRIOR_CYCLE_UNSTABLE_SONNET = 15        # hatch (3): mandates --runs 6 when
-PRIOR_CYCLE_TOTAL_ROWS = 32             # unstable/total > 0.25 = 47% > 25% at v2.6 P2
+PRIOR_CYCLE_TOTAL_ROWS = 32             # unstable/total > trigger (15/32 = 47% > 25% at v2.6 P2)
+UNSTABLE_SONNET_RATIO_TRIGGER = 0.25    # shared by _resolve_runs (hatch 3) + _eval_escape_hatch
 
 # Lever ledger posture (entering P3 of v2.7).
 LEDGER_PRODUCTION_EXPECTED = 3  # v2.3 Seed 6 + v2.6 P1 Seed v2.5-G step (1) + v2.7 P1 Seed v2.6-G step (2)
@@ -354,9 +355,19 @@ def cmd_ledger(_args: argparse.Namespace) -> int:
 def _resolve_runs(prior_rate: float, override: int | None) -> int:
     if override is not None:
         return override
+    # Hatch (1): n=6 when prior rate within FLOOR_DISTANCE_TRIGGER of floor
+    # (per feedback_alignment_eval_stability_window.md).
     gap = prior_rate - FR_OG_7_FLOOR
     if gap < FR_OG_7_FLOOR_DISTANCE_TRIGGER:
-        return 6  # n=6 mandate per feedback_alignment_eval_stability_window
+        return 6
+    # Hatch (3): n=6 when prior-cycle Sonnet instability ratio exceeds
+    # UNSTABLE_SONNET_RATIO_TRIGGER. Bound at v2.6 P2 = 15/32 = 47% > 25%
+    # → v2.7 P3 must fire at --runs 6.
+    if PRIOR_CYCLE_TOTAL_ROWS > 0 and (
+        PRIOR_CYCLE_UNSTABLE_SONNET / PRIOR_CYCLE_TOTAL_ROWS
+        > UNSTABLE_SONNET_RATIO_TRIGGER
+    ):
+        return 6
     return 3
 
 
@@ -366,9 +377,10 @@ def _eval_escape_hatch(report_json: dict) -> tuple[bool, list[str]]:
     summary = report_json["summary"]
     n = summary["total"]
     unstable = summary["unstable_sonnet"]
-    if unstable / n >= 12 / 32:
+    if n > 0 and unstable / n > UNSTABLE_SONNET_RATIO_TRIGGER:
         reasons.append(
-            f"unstable_sonnet={unstable}/{n} ≥ 12/32 (37.5%)"
+            f"unstable_sonnet={unstable}/{n} > "
+            f"{UNSTABLE_SONNET_RATIO_TRIGGER:.0%}"
         )
     rows = report_json["rows"]
     runs = report_json["runs"]
