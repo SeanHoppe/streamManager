@@ -6,6 +6,95 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [2.7.1] — 2026-05-22
+
+Tagged ship of the v2.7.1 **corrective sub-cycle** following v2.7 P3
+ship-gate BLOCK at S4 CI gate (FR-OG-7 regression on
+`frog7-phase-timings-keys-05` + corpus-wide cap-clip artefact). v2.7.0
+NEVER tagged per v1.3.1 / v2.5.1 precedent. See
+`docs/v2.7.1-task-plan.md` for sub-cycle frame, `docs/v2.7.1-next-
+steps.md` for row-by-row compare-back outcome, and
+`docs/v2.7.1-backlog.md` for carry-forwards into v2.8.
+
+**ADR-18 surface freeze remains in force.** Sub-cycle inherits v2.7 P0
+cycle-tip anchor `4902cca440b33c14fddd9357116923ae5fe1fa4b` per
+Amendment C + v2.5.1 precedent (no re-pin). Cumulative production-
+bucket LOC vs cycle-tip: **+42 / −22 / +20 net LOC** across 5 files
+(v2.7 P1 PR #203 +8/−6 in `src/cli_governance.py` + `latency_budgets.py`
++ tests + v2.7 P3 BLOCK PR #207 `tools/ship_gate_runner.py` stub-fold
++34/−16). Feature-cycle PASS (soft target ≤ 1500).
+`WIRED_LEVER_LEDGER_COUNT` **HOLD at 3 production / 0 soak** (re-
+measure is measurement, not wire). Rule 5 backlog cap reading:
+cap-counted 8 entering (6 carry-forwards + Seed v2.7-A-CLIP NEW + Seed
+v2.7-B NEW) + EXEMPT 6; cap-counted 8 + EXEMPT 6 = 14 exiting (Δ 0,
+Seed v2.7-B + v2.7-A-CLIP both carry to v2.8).
+
+### Added
+
+- **v2.7 P1 — Seed v2.6-G step (2) `TIMEOUT_SECONDS` cap-tighten**
+  ([PR #203](https://github.com/SeanHoppe/streamManager/pull/203),
+  squash-merge `28a89c4`) — `src/stream_manager/cli_governance.py:49`
+  `TIMEOUT_SECONDS = 25.0 → 30.0` first FROZEN-surface lever ever
+  wired with J2-audit-aware framing; also
+  `BRIDGE_FALLBACK_LATENCY_BUDGET_MS = 40_000 → 45_000` companion
+  bump in `latency_budgets.py`. Lever-wire bumps ledger 2 → 3
+  (production). Production-bucket delta this PR: +8 / −6 net LOC.
+  Ships **as part of v2.7.1** because v2.7.0 was never tagged.
+- **v2.7.1 P1 — Seed v2.7-B row-05 Haiku-stabilisation n=12 re-eval**
+  (PR `<P1-PR-#>`, squash-merge `<P1-merge-SHA>`) — single-row
+  alignment-eval at n=12 on `frog7-phase-timings-keys-05` per J1
+  protocol (`docs/seed-v2.7-b-row05-haiku-protocol.md`). Sonnet n=12
+  SUGGEST=7 / ALLOW=3 / NONE=2 → counted-majority SUGGEST matches
+  golden; unstable (7/12 in 6–8 range); 2/12 cap-clip NONE timeouts.
+  Haiku n=12 ALLOW=7 / SUGGEST=4 / GUIDE=1 → counted-majority ALLOW
+  diverges from golden SUGGEST; unstable; 0/12 cap-clip.
+  **Hatch verdict B** (Haiku stable-count 7/12 → per-row exclusion).
+  v2.7 P3 n=6 unanimous Haiku-ALLOW reading falsified as high-side
+  tail of underlying unstable distribution; NOT stable server-side
+  drift. 0 production-bucket LOC.
+
+### Closed seeds
+
+- **Seed v2.7-B** — disposition CARRY-WITH-EXCLUSION (row-05
+  excluded from gate denominator under hatch (4); structural fix
+  via new `haiku_known_diverge` field on `tools/alignment_eval.py`
+  DEFERRED to v2.8 P2).
+- **OQ-2 (LM band single-outlier hypothesis)** — CLOSED CONFIRMED
+  at v2.7.1 P2 soak. LM p95 = 12.37 s well-behaved vs v2.7 P3
+  overnight 5593 s (which was dominated by single 6974 s stalled
+  CLI dispatch). No persistent LM regression.
+
+### Carry-forwards (to v2.8)
+
+- Seed v2.6-C Path-D synthetic-fixture P5 (~600 LOC; 6th-consecutive
+  defer if v2.8 picks consolidation; PROMOTED to v2.8 P1 FIRE under
+  Convergence-cycle proposal).
+- Seed v2.6-G step (3) env-split (~50 LOC `BRIDGE_CLI_TIMEOUT` prod /
+  `BRIDGE_CLI_TIMEOUT_EVAL` eval split; PROMOTED to v2.8 P2 FIRE
+  under Convergence-cycle).
+- Seed v2.6-A + Seed v2.6-A-T → CLOSE candidates at v2.8 P2 cap-clip
+  re-measure outcome.
+- Seed v2.7-A-CLIP → corpus-wide re-measure at eval-cap=60s
+  (PROMOTED to v2.8 P2 FIRE; 0 production LOC; reports only).
+- Seed v2.7-B → structural resolution at v2.8 P2 (rides on top of
+  step (3) PR; ~+10 LOC `tools/alignment_eval.py`).
+- Seed v2.4-E (overall p95 watch) → 🟡 **regression-flag tripped at
+  v2.7.1 P2** (overall p95 = 10.480 s breaches 10.156 s by +0.324 s);
+  re-classify decision at v2.8 P3 ship-gate.
+- Seed v2.4-F (L4 half watch) → 🟡 **promote-🔴 line tripped at n=4**
+  (L4 p95 = 22.49 s breaches 22 s line; sample-variance plausible);
+  re-classify at v2.8 P3.
+- OQ-1 (soak-side lever ledger reads 0 vs docs 3) → diagnostic
+  candidate for v2.8 P2 or v2.9 P1 (≤ 20 LOC `tools/soak_driver.py`
+  instrumentation).
+- v2.8 P0 frame skeleton minted at this S13: Convergence-cycle
+  (Path-D + step (3) env-split + Seed v2.7-A-CLIP corpus re-measure
+  bundled) per `docs/2026-05-22-status.md` §"Proposal".
+
+### Removed
+
+- None.
+
 ## [2.6.0] — 2026-05-20
 
 Tagged ship of the v2.6 **feature cycle** — Seed v2.5-G step (1)
