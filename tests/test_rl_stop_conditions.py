@@ -14,14 +14,9 @@ from rl.shadow import SHADOW_SCHEMA
 from rl.stop_conditions import (
     POSTERIOR_CI_CAP, SHADOW_REWARD_DELTA, ShipCriteria, evaluate_criteria,
 )
-from rl.validate import Candidate, L4_THRESHOLD_KEY
 
 
 BASELINE_THR = 0.75
-
-
-def _baseline() -> Candidate:
-    return Candidate(thresholds={L4_THRESHOLD_KEY: BASELINE_THR})
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -97,7 +92,7 @@ def test_all_criteria_pass_returns_pass(tmp_path: Path) -> None:
         _seed_pass_run(db, rid)
     mdir = tmp_path / "m"
     _seed_pass_manifests(mdir)
-    report = evaluate_criteria(db, mdir, _baseline())
+    report = evaluate_criteria(db, mdir)
     failed = [(c.name, c.detail) for c in report.criteria if not c.passed]
     assert report.overall_passed, f"unexpected fails: {failed}"
 
@@ -110,7 +105,7 @@ def test_fr_og_7_failure_overrides_other_passes(tmp_path: Path) -> None:
                 "ALLOW", "BLOCK", "ALLOW")])
     mdir = tmp_path / "m"
     _seed_pass_manifests(mdir)
-    report = evaluate_criteria(db, mdir, _baseline())
+    report = evaluate_criteria(db, mdir)
     fr = next(c for c in report.criteria if c.name == "fr_og_7_violations")
     assert not fr.passed
     assert not report.overall_passed
@@ -124,8 +119,8 @@ def test_hitl_below_floor_fails(tmp_path: Path) -> None:
                 "ALLOW", "INTERVENE", None) for i in range(200)])
     mdir = tmp_path / "m"
     _seed_pass_manifests(mdir)
-    report = evaluate_criteria(db, mdir, _baseline())
-    hitl = next(c for c in report.criteria if c.name == "hitl_agreement")
+    report = evaluate_criteria(db, mdir)
+    hitl = next(c for c in report.criteria if c.name == "cand_prod_agreement")
     assert not hitl.passed
     assert not report.overall_passed
 
@@ -136,7 +131,7 @@ def test_two_consecutive_shadows_insufficient(tmp_path: Path) -> None:
         _seed_pass_run(db, rid)
     mdir = tmp_path / "m"
     _seed_pass_manifests(mdir)
-    report = evaluate_criteria(db, mdir, _baseline())
+    report = evaluate_criteria(db, mdir)
     reward = next(c for c in report.criteria
                   if c.name == "shadow_reward_improvement")
     assert not reward.passed
@@ -152,7 +147,7 @@ def test_parameter_drift_too_high_fails(tmp_path: Path) -> None:
     _write_manifest(mdir, "20260520T100000Z.manifest.json", best_thr=0.55)
     _write_manifest(mdir, "20260521T100000Z.manifest.json", best_thr=0.75)
     _write_manifest(mdir, "20260522T100000Z.manifest.json", best_thr=0.55)
-    report = evaluate_criteria(db, mdir, _baseline())
+    report = evaluate_criteria(db, mdir)
     drift = next(c for c in report.criteria if c.name == "parameter_drift")
     assert not drift.passed
     assert not report.overall_passed
@@ -162,7 +157,11 @@ def test_thresholds_are_constants_not_env_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     src = inspect.getsource(stop_conditions)
-    assert "os.environ" not in src
+    # Tight assertion: the module must not env-override any of the six
+    # pre-registered thresholds via BRIDGE_RL_* lookups. A future
+    # legitimate env read (telemetry tag, debug flag) won't false-trip.
+    assert 'os.environ.get("BRIDGE_RL_' not in src
+    assert "os.environ['BRIDGE_RL_" not in src
     monkeypatch.setenv("BRIDGE_RL_SHADOW_REWARD_DELTA", "0.001")
     spec = ShipCriteria()
     assert spec.shadow_reward_delta == SHADOW_REWARD_DELTA

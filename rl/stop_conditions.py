@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Iterable
 
 from rl.manifest import read_manifest
-from rl.validate import Candidate
 
 # Pre-registered constants — not environment-overridable.
 SHADOW_REWARD_DELTA = 0.02
@@ -44,6 +43,7 @@ class CriterionResult:
 @dataclass
 class CriteriaReport:
     criteria: list[CriterionResult] = field(default_factory=list)
+    shadow_run_ids: list[str] = field(default_factory=list)
 
     @property
     def overall_passed(self) -> bool:
@@ -51,6 +51,7 @@ class CriteriaReport:
 
     def to_dict(self) -> dict:
         return {"overall_passed": self.overall_passed,
+                "shadow_run_ids": list(self.shadow_run_ids),
                 "criteria": [{"name": c.name, "passed": c.passed,
                               "detail": c.detail, "metrics": c.metrics}
                              for c in self.criteria]}
@@ -152,25 +153,33 @@ def _best_arm(manifest: dict) -> tuple[float | None, float | None]:
         ci = float(payload["ci_width_95"])
     except (KeyError, TypeError, ValueError):
         ci = None
+    # Structural match: rely on the rl.manifest contract that posterior
+    # keys are written as ``arm_{arm}_thr_{l4_threshold:.2f}`` against
+    # the candidates list. Reconstruct the key from each candidate and
+    # match on equality, so a rename of the keying convention surfaces
+    # as a unanimous miss (criterion fails LOUD) rather than the prior
+    # silent-pass via positional `split("_")[1]`.
     thr: float | None = None
-    try:
-        idx = int(best_name.split("_")[1])
-        for c in candidates:
-            if int(c.get("arm", -1)) == idx:
-                thr = float(c["l4_threshold"])
-                break
-    except (ValueError, KeyError, IndexError):
-        pass
+    for c in candidates:
+        try:
+            arm = int(c["arm"])
+            l4 = float(c["l4_threshold"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if f"arm_{arm}_thr_{l4:.2f}" == best_name:
+            thr = l4
+            break
     return ci, thr
 
 
 def evaluate_criteria(
-    shadow_db: Path, manifest_dir: Path, baseline: Candidate,
+    shadow_db: Path, manifest_dir: Path,
     *, criteria: ShipCriteria | None = None,
 ) -> CriteriaReport:
     spec = criteria or ShipCriteria()
     report = CriteriaReport()
     run_ids, by_run = _last_runs(shadow_db, spec.shadow_reward_window)
+    report.shadow_run_ids = list(run_ids)
 
     def emit(name: str, passed: bool, detail: str, **metrics) -> None:
         report.criteria.append(CriterionResult(name, passed, detail, metrics))
@@ -200,21 +209,38 @@ def evaluate_criteria(
              f" floor {spec.fr_og_7_violation_floor}",
              per_run=per_run, total=total)
 
-    # 3. HITL agreement
+    # 3. Candidate-production agreement (HITL-agreement proxy)
+    #
+    # Design §10d row 3 names this criterion "HITL agreement". The full
+    # semantic (candidate verdict vs HITL operator label) requires an
+    # IPS lookup against `rl_episodes.db` + `hitl_overrides` and is
+    # deferred to v10.3 writeback. P5 emits a CANDIDATE↔PRODUCTION
+    # agreement proxy from `shadow_episodes.agree`; the criterion is
+    # surfaced under its true name (`cand_prod_agreement`) so a future
+    # HITL-wired criterion can land alongside without overloading the
+    # row. Floor reuses `hitl_agreement_delta` (2 %) — the pre-
+    # registered tolerance is unchanged.
     if not run_ids:
-        emit("hitl_agreement", False,
+        emit("cand_prod_agreement", False,
              "insufficient shadow runs: have 0", n_runs=0)
     else:
         rates = {rid: _agree_rate(by_run[rid]) for rid in run_ids}
         floor = 1.0 - spec.hitl_agreement_delta
-        emit("hitl_agreement",
+        emit("cand_prod_agreement",
              all(r + 1e-12 >= floor for r in rates.values()),
-             f"per-run HITL agreement = "
+             f"per-run candidate↔production agreement (HITL proxy) = "
              f"{ {k: round(v, 4) for k, v in rates.items()} };"
              f" floor 1 - {spec.hitl_agreement_delta}",
              per_run=rates, floor=floor)
 
     # 4. alignment-eval pass rate
+    #
+    # Baseline = production_verdict pass rate over the SAME shadow rows
+    # (production threshold drives `production_verdict` at record time,
+    # so `_pass_rate(prod)` is the live production baseline for this
+    # window). A separate stored-baseline manifest is not threaded into
+    # this surface in v10.1; if/when v10.3 introduces one, swap `b` for
+    # the manifest-loaded value.
     if not run_ids:
         emit("alignment_pass_rate", False,
              "insufficient shadow runs: have 0", n_runs=0)
@@ -224,7 +250,7 @@ def evaluate_criteria(
                  for rid in run_ids}
         emit("alignment_pass_rate",
              all(c + 1e-12 >= b for c, b in pairs.values()),
-             f"per-run (candidate, baseline) pass = "
+             f"per-run (candidate, production_baseline) pass = "
              f"{ {k: (round(c, 4), round(b, 4)) for k, (c, b) in pairs.items()} }",
              per_run=pairs)
 

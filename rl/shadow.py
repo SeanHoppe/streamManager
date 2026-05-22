@@ -20,6 +20,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,8 +62,15 @@ def _sm_slug_set() -> frozenset[str]:
     return frozenset(s.strip() for s in raw.split(",") if s.strip())
 
 
+def _sm_self_session_id() -> str:
+    return os.environ.get("BRIDGE_SM_SELF_SESSION_ID", "").strip()
+
+
 def _is_sm_self(env: Mapping[str, Any]) -> bool:
-    sm_self = os.environ.get("BRIDGE_SM_SELF_SESSION_ID", "").strip()
+    """Module-level env-fresh polarity check — kept for external probes
+    (`.claude/agents/env-bootstrap-validator.md`). Hot-path recorders
+    use ``ShadowRecorder._is_sm_self`` which caches env at __init__."""
+    sm_self = _sm_self_session_id()
     if sm_self and str(env.get("session_id", "")).strip() == sm_self:
         return True
     slug = str(env.get("project_slug", "")).strip()
@@ -102,6 +110,10 @@ class ShadowRecorder:
         self._budget_ms = float(non_invasion_budget_ms)
         self._dropped = 0
         self._recorded = 0
+        # Cache env-derived SM-self filters at construction time —
+        # hot path avoids per-envelope os.environ lookups.
+        self._sm_self_session_id = _sm_self_session_id()
+        self._sm_slugs = _sm_slug_set()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -125,10 +137,19 @@ class ShadowRecorder:
     def dropped(self) -> int:
         return self._dropped
 
+    def _is_sm_self(self, env: Mapping[str, Any]) -> bool:
+        if (self._sm_self_session_id
+                and str(env.get("session_id", "")).strip()
+                    == self._sm_self_session_id):
+            return True
+        slug = str(env.get("project_slug", "")).strip()
+        return bool(slug) and slug in self._sm_slugs
+
     def on_governance_decision(self, envelope: Mapping[str, Any]) -> None:
-        if _is_sm_self(envelope):
+        if self._is_sm_self(envelope):
             return
         start_ns = time.perf_counter_ns()
+        eval_ms: float | None = None
         try:
             features = envelope.get("state_features") or envelope.get("state") or {}
             features_json = json.dumps(features, sort_keys=True)
@@ -139,9 +160,9 @@ class ShadowRecorder:
             prod_v = str(envelope.get("verdict", "ALLOW"))
             cand_a, cand_v = candidate_decision(self.candidate, envelope)
             gt = envelope.get("ground_truth_verdict")
-            elapsed_ms = (time.perf_counter_ns() - start_ns) / 1e6
-            if elapsed_ms > self._budget_ms:
-                self._drop(envelope, "candidate_eval_overrun", elapsed_ms)
+            eval_ms = (time.perf_counter_ns() - start_ns) / 1e6
+            if eval_ms > self._budget_ms:
+                self._drop(envelope, "candidate_eval_overrun", eval_ms)
                 return
             try:
                 self._conn.execute(
@@ -164,10 +185,18 @@ class ShadowRecorder:
                 self._recorded += 1
             except sqlite3.IntegrityError:
                 return
+            # Re-measure end-to-end (eval + INSERT). WAL contention /
+            # fsync stall can push the full path past budget even when
+            # the eval phase alone clears it; emit drop envelope so the
+            # bus operator sees the budget violation.
+            total_ms = (time.perf_counter_ns() - start_ns) / 1e6
+            if total_ms > self._budget_ms:
+                self._drop(envelope, "shadow_insert_overrun", total_ms)
         except Exception as exc:
-            elapsed_ms = (time.perf_counter_ns() - start_ns) / 1e6
+            fallback_ms = eval_ms if eval_ms is not None else (
+                (time.perf_counter_ns() - start_ns) / 1e6)
             log.exception("rl.shadow: on_governance_decision failed (%s)", exc)
-            self._drop(envelope, "shadow_exception", elapsed_ms)
+            self._drop(envelope, "shadow_exception", fallback_ms)
 
     def _drop(self, env: Mapping[str, Any], reason: str, elapsed_ms: float) -> None:
         self._dropped += 1
@@ -188,5 +217,4 @@ class ShadowRecorder:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

@@ -50,7 +50,11 @@ def test_shadow_does_not_block_bus(tmp_path: Path) -> None:
     finally:
         rec.close()
     timings.sort()
-    p95 = timings[int(0.95 * len(timings))]
+    # Nearest-rank p95 over n=1000 samples = ceil(0.95 * n) = 950th value
+    # = index 949 (zero-indexed). The prior `timings[int(0.95 * n)]` =
+    # index 950 was the 951st value (off-by-one slack).
+    p95_index = max(0, int(round(0.95 * len(timings))) - 1)
+    p95 = timings[p95_index]
     assert p95 < 50.0, f"p95 {p95:.2f} ms > 50 ms"
 
 

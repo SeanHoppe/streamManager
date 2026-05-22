@@ -34,7 +34,7 @@ def test_build_soak_command_required_flags(tmp_path: Path) -> None:
     proposal = _baseline(tmp_path)
     shadow_db = tmp_path / "s.db"
     cmd = cli_shadow.build_soak_command(
-        proposal=proposal, shadow_db=shadow_db, soak_args="", soak_tier=3)
+        proposal=proposal, shadow_db=shadow_db, soak_args="")
     assert "--cli-pool-size" in cmd
     assert cmd[cmd.index("--cli-pool-size") + 1] == "2"
     assert cmd[cmd.index("--shadow-recorder") + 1] == str(shadow_db)
@@ -45,7 +45,7 @@ def test_build_soak_command_required_flags(tmp_path: Path) -> None:
 def test_build_soak_command_extra_args(tmp_path: Path) -> None:
     cmd = cli_shadow.build_soak_command(
         proposal=_baseline(tmp_path), shadow_db=tmp_path / "s.db",
-        soak_args="--total-seconds 60 --interval-seconds 5", soak_tier=3)
+        soak_args="--total-seconds 60 --interval-seconds 5")
     assert cmd[cmd.index("--total-seconds") + 1] == "60"
     assert cmd[cmd.index("--interval-seconds") + 1] == "5"
 

@@ -1666,7 +1666,7 @@ def main() -> int:
     # exists. Defaults to no-op so the finally-block teardown is safe
     # even when env is unset or attach is unreached.
     close_rl_subscriber: Callable[[], None] = lambda: None
-    close_shadow: Callable[[], None] = lambda: None
+    _shadow_rec: "ShadowRecorder | None" = None  # noqa: F821 — late import
     state = _DriverState()
     payloads = _build_payload_sequence(args.seed)[:60]
     rss_peak: float | None = None
@@ -1723,11 +1723,6 @@ def main() -> int:
                 _shadow_cand, Path(args.shadow_recorder), soak_run_id=iso_ts,
             )
             bus.subscribe_decision(_shadow_rec.on_governance_decision)
-            def close_shadow() -> None:
-                try:
-                    bus.unsubscribe_decision(_shadow_rec.on_governance_decision)
-                finally:
-                    _shadow_rec.close()
 
         snap = load_project_context(str(ROOT))
 
@@ -1919,10 +1914,16 @@ def main() -> int:
             close_rl_subscriber()
         except Exception:
             pass
-        try:
-            close_shadow()
-        except Exception:
-            pass
+        if _shadow_rec is not None:
+            try:
+                if bus is not None:
+                    bus.unsubscribe_decision(_shadow_rec.on_governance_decision)
+            except Exception:
+                pass
+            try:
+                _shadow_rec.close()
+            except Exception:
+                pass
         if bus is not None:
             try:
                 bus.close_session(session_id)

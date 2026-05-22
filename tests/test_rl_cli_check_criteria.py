@@ -104,18 +104,17 @@ def test_exit_one_on_any_fail(tmp_path: Path) -> None:
     assert "posterior_ci" in body
 
 
-def test_baseline_thresholds_optional(tmp_path: Path) -> None:
+def test_report_header_lists_soak_run_ids(tmp_path: Path) -> None:
     db, mdir = _seed_passing(tmp_path)
-    baseline = tmp_path / "b.json"
-    baseline.write_text(json.dumps({
-        "thresholds": {"BRIDGE_L4_FALLBACK_CONFIDENCE": 0.75},
-    }), encoding="utf-8")
     rc = cli_check.main([
         "--shadow-db", str(db), "--manifests", str(mdir),
-        "--baseline-thresholds", str(baseline),
         "--reports-dir", str(tmp_path / "reports"),
     ])
     assert rc == 0
+    body = next((tmp_path / "reports").glob("v10-criteria-*.md")
+                ).read_text(encoding="utf-8")
+    for rid in ("20260520T120000Z", "20260521T120000Z", "20260522T120000Z"):
+        assert rid in body
 
 
 def test_render_report_lists_all_criteria() -> None:
@@ -123,11 +122,11 @@ def test_render_report_lists_all_criteria() -> None:
     report = CriteriaReport(criteria=[
         CriterionResult(n, True, "ok") for n in (
             "shadow_reward_improvement", "fr_og_7_violations",
-            "hitl_agreement", "alignment_pass_rate",
+            "cand_prod_agreement", "alignment_pass_rate",
             "posterior_ci", "parameter_drift")])
     body = cli_check.render_report(report, "T")
     for n in ("shadow_reward_improvement", "fr_og_7_violations",
-              "hitl_agreement", "alignment_pass_rate",
+              "cand_prod_agreement", "alignment_pass_rate",
               "posterior_ci", "parameter_drift"):
         assert n in body
     assert "Overall verdict: **PASS**" in body

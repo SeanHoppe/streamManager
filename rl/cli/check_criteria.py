@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from rl.stop_conditions import CriteriaReport, evaluate_criteria
-from rl.validate import Candidate
 
 ROOT = Path(__file__).resolve().parents[2]
 EXIT_ALL_PASS = 0
@@ -20,16 +19,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="rl.cli.check_criteria")
     p.add_argument("--shadow-db", type=Path, required=True)
     p.add_argument("--manifests", type=Path, required=True)
-    p.add_argument("--baseline-thresholds", type=Path, default=None)
     p.add_argument("--reports-dir", type=Path, default=ROOT / "reports")
     return p
 
 
 def render_report(report: CriteriaReport, ts: str) -> str:
+    runs = report.shadow_run_ids
+    runs_line = (
+        f"- Shadow soak_run_ids (window): {', '.join(f'`{r}`' for r in runs)}"
+        if runs else "- Shadow soak_run_ids (window): _none_"
+    )
     lines = [
         f"# v10 ship-criteria report — {ts}",
         "",
         f"- Overall verdict: **{'PASS' if report.overall_passed else 'FAIL'}**",
+        runs_line,
         "",
         "## Per-criterion outcomes",
         "",
@@ -45,11 +49,7 @@ def render_report(report: CriteriaReport, ts: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    if args.baseline_thresholds and args.baseline_thresholds.exists():
-        baseline = Candidate.from_json(args.baseline_thresholds)
-    else:
-        baseline = Candidate(thresholds={})
-    report = evaluate_criteria(args.shadow_db, args.manifests, baseline)
+    report = evaluate_criteria(args.shadow_db, args.manifests)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     report_path = args.reports_dir / f"v10-criteria-{ts}.md"

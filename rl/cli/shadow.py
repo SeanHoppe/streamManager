@@ -19,7 +19,6 @@ EXIT_ERROR = 1
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="rl.cli.shadow")
     p.add_argument("--proposal", type=Path, required=True)
-    p.add_argument("--soak-tier", type=int, choices=(1, 2, 3), default=3)
     p.add_argument("--soak-args", type=str, default="")
     p.add_argument("--shadow-db", type=Path, default=Path("rl_shadow.db"))
     p.add_argument("--reports-dir", type=Path, default=ROOT / "reports")
@@ -28,11 +27,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def build_soak_command(
-    proposal: Path, shadow_db: Path, soak_args: str, soak_tier: int,
+    proposal: Path, shadow_db: Path, soak_args: str,
 ) -> list[str]:
-    """Compose soak_driver argv. soak_tier is informational (logged)
-    and not forwarded (driver infers tier from --total-seconds)."""
-    del soak_tier
+    """Compose soak_driver argv. Tier (1/2/3) is inferred by
+    soak_driver from `--total-seconds` passed through `--soak-args`."""
     extra = shlex.split(soak_args) if soak_args else []
     return [
         sys.executable, str(ROOT / "tools" / "soak_driver.py"),
@@ -45,7 +43,7 @@ def build_soak_command(
 
 def _summarise_shadow_db(shadow_db: Path, soak_run_id: str) -> dict:
     empty = {"n": 0, "agreement_rate": 0.0, "fr_og_7_violations": 0,
-             "hitl_agreement": 0.0, "candidate_reward": 0.0,
+             "cand_prod_agreement": 0.0, "candidate_reward": 0.0,
              "production_reward": 0.0, "n_with_ground_truth": 0}
     if not shadow_db.exists():
         return empty
@@ -74,7 +72,7 @@ def _summarise_shadow_db(shadow_db: Path, soak_run_id: str) -> dict:
             prod_r += 1 if str(r["production_verdict"]) == gt else 0
     return {
         "n": n, "agreement_rate": agree / n, "fr_og_7_violations": viol,
-        "hitl_agreement": agree / n,
+        "cand_prod_agreement": agree / n,
         "candidate_reward": cand_r / gt_n if gt_n else 0.0,
         "production_reward": prod_r / gt_n if gt_n else 0.0,
         "n_with_ground_truth": gt_n,
@@ -96,7 +94,8 @@ def write_report(
         "## Summary",
         "",
         f"- Agreement rate: {summary['agreement_rate']:.4f}",
-        f"- HITL agreement: {summary['hitl_agreement']:.4f}",
+        f"- Cand↔Prod agreement (HITL proxy): "
+        f"{summary['cand_prod_agreement']:.4f}",
         f"- FR-OG-7 violations: {summary['fr_og_7_violations']}",
         f"- Candidate reward (ground-truth match): {summary['candidate_reward']:.4f}",
         f"- Production reward (ground-truth match): {summary['production_reward']:.4f}",
@@ -113,8 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[rl.shadow] proposal not found: {args.proposal}", file=sys.stderr)
         return EXIT_ERROR
     soak_run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    cmd = build_soak_command(args.proposal, args.shadow_db,
-                             args.soak_args, args.soak_tier)
+    cmd = build_soak_command(args.proposal, args.shadow_db, args.soak_args)
     if args.dry_run:
         print(" ".join(cmd))
         return EXIT_OK

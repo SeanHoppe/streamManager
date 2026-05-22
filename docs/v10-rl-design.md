@@ -153,6 +153,8 @@ These thresholds are pre-registered. They are NOT relaxed based on observed data
 
 Under Amendment D v10.1-mode (the active mode through v10.3 writeback unlock), criterion 5 ("Posterior CI on best arm ≤ 0.10") is structurally unreachable on non-baseline arms; the v10.1-mode entry gate substitutes baseline-arm `_total >= 200 AND posterior_ci_width(baseline_arm) <= 0.10` for the original best-arm formulation. The criteria table itself is unchanged; the gate disambiguation lives in ADR-18 §Amendments 2026-05-19.
 
+> **Footnote (v2.8 P1, 2026-05-22) — HITL-agreement criterion is a cand↔prod proxy in v10.1-mode.** Row 3 of the table above is labelled "HITL agreement". The v10 P5 evaluator (`rl/stop_conditions.py`) surfaces this criterion under the name `cand_prod_agreement` because `shadow_episodes.agree` records candidate-verdict vs production-verdict equality, NOT a HITL operator label. The pre-registered floor (1 − `HITL_AGREEMENT_DELTA` = 0.98) is unchanged; only the metric source differs from the design seed. True HITL-agreement wiring requires an IPS lookup against `rl_episodes.db` + `hitl_overrides` and lands with v10.3 writeback (a new criterion row, not a re-purposing of this row). Until then, the proxy is the binding criterion and is rendered as `cand_prod_agreement` in `rl.cli.check_criteria` reports.
+
 ### 10b. Shadow recording strategy — disposition
 
 Per P0a item G1, P5's `--shadow-recorder` flag on `tools/soak_driver.py` requires that surface to be EVOLVING (not FROZEN) under ADR-18. Current ADR-18 classification places `tools/soak_driver.py` in the EVOLVING bucket (the v2.0 P1 `worker_recycle_every_n` kwarg pass-through landed without amendment). Therefore:
