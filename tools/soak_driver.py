@@ -1613,6 +1613,10 @@ def main() -> int:
              "Default ON at v2.1 ship-gate (was OFF in P1/P2/P3); pass "
              "`--no-ppp-auto-probe` to opt out for legacy CI / Tier 1.5 smokes.",
     )
+    ap.add_argument("--shadow-recorder", type=str, default=None,
+        help="v2.8 P1 / v10 P5: path to rl_shadow.db; pair with --shadow-proposal.")
+    ap.add_argument("--shadow-proposal", type=str, default=None,
+        help="v2.8 P1 / v10 P5: rl_proposals/<UTC>Z.json manifest path.")
     args = ap.parse_args()
 
     # Task A / v1.2: replay tier. Skip the claude-on-PATH check and the
@@ -1662,6 +1666,7 @@ def main() -> int:
     # exists. Defaults to no-op so the finally-block teardown is safe
     # even when env is unset or attach is unreached.
     close_rl_subscriber: Callable[[], None] = lambda: None
+    close_shadow: Callable[[], None] = lambda: None
     state = _DriverState()
     payloads = _build_payload_sequence(args.seed)[:60]
     rss_peak: float | None = None
@@ -1708,6 +1713,21 @@ def main() -> int:
             "BRIDGE_RL_EPISODES_DB", str(gov_db.parent / "rl_episodes.db")
         )
         close_rl_subscriber = _rl_attach(bus, _rl_db_path)
+
+        # v2.8 P1 / v10 P5: optional shadow recorder attach.
+        if args.shadow_recorder and args.shadow_proposal:
+            from rl.shadow import ShadowRecorder
+            from rl.validate import Candidate as _ShadowCandidate
+            _shadow_cand = _ShadowCandidate.from_json(Path(args.shadow_proposal))
+            _shadow_rec = ShadowRecorder(
+                _shadow_cand, Path(args.shadow_recorder), soak_run_id=iso_ts,
+            )
+            bus.subscribe_decision(_shadow_rec.on_governance_decision)
+            def close_shadow() -> None:
+                try:
+                    bus.unsubscribe_decision(_shadow_rec.on_governance_decision)
+                finally:
+                    _shadow_rec.close()
 
         snap = load_project_context(str(ROOT))
 
@@ -1897,6 +1917,10 @@ def main() -> int:
         # when env was unset (lambda).
         try:
             close_rl_subscriber()
+        except Exception:
+            pass
+        try:
+            close_shadow()
         except Exception:
             pass
         if bus is not None:

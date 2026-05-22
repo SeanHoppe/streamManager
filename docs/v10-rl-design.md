@@ -134,6 +134,25 @@ Promotion to non-advisory for stage 1 requires:
 
 Tracked in [#124](https://github.com/SeanHoppe/streamManager/issues/124). The sibling P3 DR-estimator follow-up (deviation #1) is tracked in [#125](https://github.com/SeanHoppe/streamManager/issues/125).
 
+### 10d. v10 ship criteria — pre-registered (v10 P5 codification)
+
+Per v10 P5 deliverable 7 (Path-D landing at v2.8 P1), the six ship criteria below are codified as CODE CONSTANTS in `rl/stop_conditions.py` (`SHADOW_REWARD_DELTA`, `SHADOW_REWARD_WINDOW`, `FR_OG_7_VIOLATION_FLOOR`, `HITL_AGREEMENT_DELTA`, `POSTERIOR_CI_CAP`, `PARAMETER_DRIFT_CAP`, `PARAMETER_DRIFT_WINDOW`). The values are read-only at evaluation time and not overridable via environment variables (`tests/test_rl_stop_conditions.py::test_thresholds_are_constants_not_env_overrides` asserts this).
+
+| Criterion | Threshold | Window |
+|---|---|---|
+| Shadow reward improvement | reward(candidate) ≥ reward(baseline) + 0.02 | 3 consecutive Tier 3 shadows |
+| FR-OG-7 violations | 0 | every shadow (full alignment-golden + adversarial) |
+| HITL agreement | ≥ baseline − 2 % absolute | every shadow |
+| Alignment-eval pass rate | ≥ baseline pass rate | every shadow |
+| Posterior CI on best arm | ≤ 0.10 | computed at retrain |
+| Parameter drift between retrains | \|Δθ\| ≤ 0.02 | 3 consecutive retrains |
+
+These thresholds are pre-registered. They are NOT relaxed based on observed data. If criteria cannot be met after 3 retrains × 3 shadows, the v10 track enters DORMANT-N per ADR-18 Rule 2 and is reviewed for rip in the next ship cycle.
+
+`rl.cli.check_criteria` is the evaluator surface: exit code 0 = all criteria PASS (signal that v10.3 writeback can be opened — human-gated review per ADR-18, NOT auto-promotion); exit code 1 = at least one FAIL.
+
+Under Amendment D v10.1-mode (the active mode through v10.3 writeback unlock), criterion 5 ("Posterior CI on best arm ≤ 0.10") is structurally unreachable on non-baseline arms; the v10.1-mode entry gate substitutes baseline-arm `_total >= 200 AND posterior_ci_width(baseline_arm) <= 0.10` for the original best-arm formulation. The criteria table itself is unchanged; the gate disambiguation lives in ADR-18 §Amendments 2026-05-19.
+
 ### 10b. Shadow recording strategy — disposition
 
 Per P0a item G1, P5's `--shadow-recorder` flag on `tools/soak_driver.py` requires that surface to be EVOLVING (not FROZEN) under ADR-18. Current ADR-18 classification places `tools/soak_driver.py` in the EVOLVING bucket (the v2.0 P1 `worker_recycle_every_n` kwarg pass-through landed without amendment). Therefore:
