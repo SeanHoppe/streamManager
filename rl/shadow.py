@@ -110,6 +110,15 @@ class ShadowRecorder:
         self._budget_ms = float(non_invasion_budget_ms)
         self._dropped = 0
         self._recorded = 0
+        # Counter split (PR #214 review): `_dropped` counts envelopes
+        # whose row never reached the DB (pre-INSERT eval overrun,
+        # exception). `_budget_violations` counts envelopes whose row
+        # IS in the DB but whose end-to-end wall-clock breached the
+        # 50 ms budget (WAL contention / fsync stall). The invariant
+        # `recorded + dropped = total_attempted` holds; budget
+        # violations are an additional telemetry signal sitting on
+        # top of `recorded`.
+        self._budget_violations = 0
         # Cache env-derived SM-self filters at construction time —
         # hot path avoids per-envelope os.environ lookups.
         self._sm_self_session_id = _sm_self_session_id()
@@ -136,6 +145,14 @@ class ShadowRecorder:
     @property
     def dropped(self) -> int:
         return self._dropped
+
+    @property
+    def budget_violations(self) -> int:
+        """Count of envelopes whose row IS in the DB but whose total
+        wall-clock breached the non-invasion budget. Disjoint from
+        ``dropped``; both emit ``rl_shadow_dropped`` envelopes whose
+        ``reason`` field discriminates."""
+        return self._budget_violations
 
     def _is_sm_self(self, env: Mapping[str, Any]) -> bool:
         if (self._sm_self_session_id
@@ -187,19 +204,27 @@ class ShadowRecorder:
                 return
             # Re-measure end-to-end (eval + INSERT). WAL contention /
             # fsync stall can push the full path past budget even when
-            # the eval phase alone clears it; emit drop envelope so the
-            # bus operator sees the budget violation.
+            # the eval phase alone clears it. The row IS in the DB at
+            # this point, so increment the separate `_budget_violations`
+            # counter (NOT `_dropped`); both emit the same envelope so
+            # bus consumers see the signal via `reason`.
             total_ms = (time.perf_counter_ns() - start_ns) / 1e6
             if total_ms > self._budget_ms:
-                self._drop(envelope, "shadow_insert_overrun", total_ms)
+                self._budget_violations += 1
+                self._emit_dropped_envelope(
+                    envelope, "shadow_insert_overrun", total_ms)
         except Exception as exc:
             fallback_ms = eval_ms if eval_ms is not None else (
                 (time.perf_counter_ns() - start_ns) / 1e6)
             log.exception("rl.shadow: on_governance_decision failed (%s)", exc)
             self._drop(envelope, "shadow_exception", fallback_ms)
 
-    def _drop(self, env: Mapping[str, Any], reason: str, elapsed_ms: float) -> None:
-        self._dropped += 1
+    def _emit_dropped_envelope(
+        self, env: Mapping[str, Any], reason: str, elapsed_ms: float,
+    ) -> None:
+        """Emit ``rl_shadow_dropped`` to the bus without touching
+        counters. Used by both the pre-INSERT drop path and the
+        post-INSERT budget-violation path."""
         if self._bus_emit is None:
             return
         try:
@@ -214,6 +239,12 @@ class ShadowRecorder:
             })
         except Exception:
             log.exception("rl.shadow: bus_emit on drop failed")
+
+    def _drop(self, env: Mapping[str, Any], reason: str, elapsed_ms: float) -> None:
+        """Pre-INSERT drop: row will NOT be in the DB. Increments
+        `_dropped` so that `recorded + dropped = total_attempted`."""
+        self._dropped += 1
+        self._emit_dropped_envelope(env, reason, elapsed_ms)
 
 
 def _now_iso() -> str:

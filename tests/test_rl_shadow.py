@@ -143,6 +143,42 @@ def test_shadow_no_self_monitor(
     assert len(_rows(db)) == 1
 
 
+def test_post_insert_overrun_does_not_double_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-INSERT budget breach must tick `budget_violations`, not
+    `dropped`. The row IS in the DB; `recorded + dropped = attempted`
+    invariant must hold."""
+    db = tmp_path / "s.db"
+    emitted: list[dict] = []
+    rec = ShadowRecorder(_cand(), db, soak_run_id="r1",
+                         bus_emit=emitted.append, non_invasion_budget_ms=50.0)
+    real_perf = time.perf_counter_ns
+    call_count = {"n": 0}
+
+    def staged_perf_counter() -> int:
+        call_count["n"] += 1
+        # Calls 1, 2 = pre-INSERT eval (both inside budget @ ~1 ms).
+        # Call 3 = post-INSERT remeasure (well past 50 ms budget).
+        if call_count["n"] == 1:
+            return 0
+        if call_count["n"] == 2:
+            return 1_000_000          # 1 ms elapsed eval — under budget
+        return 200_000_000            # 200 ms total — overrun
+
+    monkeypatch.setattr(time, "perf_counter_ns", staged_perf_counter)
+    rec.on_governance_decision(_env())
+    monkeypatch.setattr(time, "perf_counter_ns", real_perf)
+    rec.close()
+    rows = _rows(db)
+    assert len(rows) == 1, "row must be persisted on post-INSERT overrun"
+    assert rec.recorded == 1
+    assert rec.dropped == 0, "post-INSERT overrun must not tick `dropped`"
+    assert rec.budget_violations == 1
+    assert rec.recorded + rec.dropped == 1
+    assert emitted and emitted[0]["reason"] == "shadow_insert_overrun"
+
+
 def test_candidate_decision_action_equal_preserves_verdict() -> None:
     cand = _cand(thr=BASELINE_THR)
     action, verdict = candidate_decision(
