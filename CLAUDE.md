@@ -2,61 +2,35 @@
 
 ## Firewall: certPortal isolation
 
-**SM dev sessions MUST NOT reach into the certPortal repo.** This is a hard
-boundary. Repo location: `C:\Users\SeanHoppe\VS\certPortal\` (sibling of SM
-under `C:\Users\SeanHoppe\VS\`).
+**SM dev sessions MUST NOT reach into the certPortal repo.** Hard boundary. Repo location: `C:\Users\SeanHoppe\VS\certPortal\` (sibling of SM under `C:\Users\SeanHoppe\VS\`).
 
 ### Why
 
-SM is a domain-agnostic governance product. certPortal is one **runtime
-target** SM governs (via learn-mode JSONL-tail of certPortal's Claude Code
-sessions). That coupling lives in SM's product code — it is NOT license for
-SM's dev session (this Claude Code session) to operate on certPortal's repo
-state. Crossing that boundary contaminates SM's context and routes
-operator-personal certPortal queue items (PRs, incidents, JOBs) through
-SM agents — which is out of scope.
+SM = domain-agnostic governance product. certPortal = one **runtime target** SM governs (via learn-mode JSONL-tail of certPortal Claude Code sessions). Coupling lives in SM product code — NOT license for SM dev session (this Claude Code session) to operate on certPortal repo state. Crossing boundary contaminates SM context, routes operator-personal certPortal queue items (PRs, incidents, JOBs) through SM agents — out of scope.
 
 ### What is prohibited
 
-- Reading any file under `**/certPortal/**` or
-  `C:\Users\SeanHoppe\VS\certPortal\**`
+- Reading any file under `**/certPortal/**` or `C:\Users\SeanHoppe\VS\certPortal\**`
 - Glob / Grep against any certPortal path
-- Bash / `gh` operations targeting the certPortal repo
-- Spawning sub-agents whose task is to triage / fix certPortal issues, JOBs,
-  incidents, or PRs
-- Editing SM source/docs to add new certPortal coupling beyond what is
-  already designed in (learn-mode source registry, project_context,
-  agent_profiles)
+- Bash / `gh` operations targeting certPortal repo
+- Spawning sub-agents to triage / fix certPortal issues, JOBs, incidents, PRs
+- Editing SM source/docs to add new certPortal coupling beyond already-designed (learn-mode source registry, project_context, agent_profiles)
 
-These are enforced via `.claude/settings.local.json` `permissions.deny`
-patterns. If a deny rule fires, do NOT attempt to work around it. Surface
-to the operator.
+Enforced via `.claude/settings.local.json` `permissions.deny` patterns. Deny rule fires → do NOT work around. Surface to operator.
 
 ### What is allowed
 
-- Reading SM's own source/docs that **textually reference** certPortal as a
-  test/demo target (e.g. `docs/learn-mode-design.md`,
-  `src/stream_manager/project_context.py`). These are SM-internal.
-- Modifying SM's certPortal-aware modules when the change is SM-scoped
-  (e.g. extending learn-mode parser, refactoring project_context). The
-  change must remain SM-side; do not edit anything inside the certPortal
-  repo to make SM work.
-- SM runtime (production) reading certPortal session JSONL — that is the
-  product. The firewall is a **dev-session boundary**, not a runtime one.
+- Reading SM source/docs that **textually reference** certPortal as test/demo target (e.g. `docs/learn-mode-design.md`, `src/stream_manager/project_context.py`). SM-internal.
+- Modifying SM certPortal-aware modules when change is SM-scoped (e.g. extending learn-mode parser, refactoring project_context). Change stay SM-side; do not edit anything inside certPortal repo to make SM work.
+- SM runtime (production) reading certPortal session JSONL — product. Firewall = **dev-session boundary**, not runtime.
 
 ### Operator queue separation
 
-Sean's MEMORY.md surfaces certPortal items (PRs, INCs, MASTER JOBs,
-JOB-XXXX entries) as **operator awareness context**, NOT as work-targets
-for SM dispatch. If asked to act on a certPortal item, refuse and suggest
-the operator open a Claude Code session inside the certPortal repo
-instead.
+Sean MEMORY.md surfaces certPortal items (PRs, INCs, MASTER JOBs, JOB-XXXX entries) as **operator awareness context**, NOT work-targets for SM dispatch. Asked to act on certPortal item → refuse, suggest operator open Claude Code session inside certPortal repo.
 
 ## Session-source exception rule (polarity-flip)
 
-SM monitors **NON-SM sessions**, never itself. Default-exclude SM by
-project-slug. Concrete rule for any corpus / replay / ingest / OPE / training
-code path that reads from `.claude/gov.db` or session transcripts:
+SM monitors **NON-SM sessions**, never itself. Default-exclude SM by project-slug. Concrete rule for any corpus / replay / ingest / OPE / training code path reading from `.claude/gov.db` or session transcripts:
 
 ```
 INCLUDE iff session.project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)
@@ -64,32 +38,24 @@ INCLUDE iff session.project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)
 ```
 
 - Default `STREAM_MANAGER_PROJECT_SLUGS = {"streamManager"}`.
-- Override via env `BRIDGE_SM_PROJECT_SLUGS` (comma-separated) for worktree
-  slug variants.
-- Filter at SQL `WHERE`, not post-hoc Python. Default-exclude makes leakage
-  the loud failure path (zero rows surface) rather than silent
-  corpus-poisoning.
+- Override via env `BRIDGE_SM_PROJECT_SLUGS` (comma-separated) for worktree slug variants.
+- Filter at SQL `WHERE`, not post-hoc Python. Default-exclude makes leakage loud failure path (zero rows surface) instead of silent corpus-poisoning.
+- **`project_slug` = durable read key; `session_id` = write gate + read backstop.** `project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)` is the durable read-side key — the only self-exclusion term in the read SQL `WHERE`. `session_id != BRIDGE_SM_SELF_SESSION_ID` is the load-bearing WRITE-time gate (`episode_logger` raises `SelfMonitorRefusal`; env-conditional, no-op when the env var is unset) AND is applied at read as a cheap post-hoc Python backstop on an ephemeral key (`corpus_augment` + `rl/cli/train` `_filter_self_monitor`, `rl/ope.load_episodes_from_db`) — belt-and-suspenders, not the durable selector. Do NOT put `session_id` in the SQL `WHERE` (not the durable key); keep the cheap read backstop. Caveats: write gate is a no-op when `BRIDGE_SM_SELF_SESSION_ID` unset, and the file-mediated synthetic path (cassette/probe) has only the read backstop — see `reports/proposals/2026-06-11-polarity-dual-key-read-write-split.proposal.md`.
 
-Cross-ref: `feedback_no_self_monitor.md` §"Polarity flip".
+Cross-ref: `feedback_no_self_monitor.md` §"Polarity flip"; rationale in `reports/proposals/2026-06-11-polarity-dual-key-read-write-split.proposal.md`.
 
 ## Zero contamination from monitored repo
 
-SM source/docs/tests/fixtures must NOT contain certPortal-specific (or any
-monitored-project-specific) paths, JOB IDs, agent-role names, domain logic,
-extracted artifacts, or PR scope. SM is domain-agnostic; the monitored
-project is configuration, not vocabulary. Reference is fine; logic that
-only works for one target is contamination.
+SM source/docs/tests/fixtures must NOT contain certPortal-specific (or any monitored-project-specific) paths, JOB IDs, agent-role names, domain logic, extracted artifacts, PR scope. SM = domain-agnostic; monitored project = configuration, not vocabulary. Reference fine; logic that only works for one target = contamination.
 
 Cross-ref: `feedback_certportal_dev_firewall.md` §"Zero-contamination rule".
 
 ## Other project rules
 
-- ADR-18 surface-freeze list is law for v10 / v10.x cycles. See
-  `docs/adr/ADR-18-mvp-surface-freeze.md`.
-- Long-running tasks (>5 min) launch from main thread via
-  `run_in_background` + `ScheduleWakeup`, never from sub-agents
-  (`feedback_subagent_long_task_abandonment.md`).
-- The `robin` agent owns v10 RL test verification (P1–P5). Engage robin
-  for post-soak ingest verdicts, OPE validation roll-ups, ship-gate
-  checks. Do NOT use generic agents for v10 RL verification when robin's
-  playbook covers the case.
+- ADR-18 surface-freeze list = law for v10 / v10.x cycles. See `docs/adr/ADR-18-mvp-surface-freeze.md`.
+- Long-running tasks (>5 min) launch from main thread via `run_in_background` + `ScheduleWakeup`, never from sub-agents (`feedback_subagent_long_task_abandonment.md`).
+- `robin` agent owns v10 RL test verification (P1–P5). Engage robin for post-soak ingest verdicts, OPE validation roll-ups, ship-gate checks. Do NOT use generic agents for v10 RL verification when robin playbook covers case.
+
+## Coding-nuance memory
+
+Sean persistent coding style, approach nuances, do-not-do rules live in `./MEMORY.md` (checked in, project-root). **Read at session start, update whenever Sean teaches new preference.** Distinct from auto-memory store under `C:\Users\SeanHoppe\.claude\projects\C--Users-SeanHoppe-vs-streamManager\memory\` (per-topic, machine-managed, not checked in).

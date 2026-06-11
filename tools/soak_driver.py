@@ -1304,12 +1304,39 @@ def _run_lm_dialogue_pump(
     return n_ok
 
 
+def _is_envelope_row(rec: dict) -> bool:
+    """True for an FR-PPP audit/decoy cassette row (coverage-only).
+
+    v2.1 P1+ recorder rows for the PPP envelope set
+    (``cassette_record._record_ppp_envelopes`` /
+    ``_record_decoy_envelopes``) carry a wrapped ``"envelope"`` payload
+    (or a ``"row"`` payload for the decoy-register entry) instead of the
+    verdict-replay triple ``content`` / ``recorded_latency_ms`` /
+    ``decision``. They exist for envelope-shape coverage
+    (``feedback_cassette_must_cover_new_envelopes.md``) and are NOT
+    replayed through the verdict path; the replay loop skips them.
+    """
+    return "envelope" in rec or "row" in rec
+
+
 def _load_cassette(path: Path) -> list[dict]:
     """Load a cassette JSONL file. Each line is a recorded envelope.
 
-    Required fields per row::
-        idx, kind, content, recorded_latency_ms,
-        decision: {action, confidence, reasoning}
+    Two row shapes are accepted:
+
+    * Verdict-replay rows (routine / l2_l3 / l4 / learn_dialogue) carry::
+          kind, content, recorded_latency_ms,
+          decision: {action, confidence, reasoning}
+      These drive the replay loop.
+    * FR-PPP audit/decoy coverage rows (audit_probe, audit_probe_ack,
+      audit_canary_*, audit_probe_failure, audit_hallucination_detected,
+      audit_decoy_register) carry only ``kind`` plus a wrapped
+      ``envelope`` (or ``row``) payload. They are loaded for shape
+      coverage but skipped by the verdict-replay loop. Mandating the
+      verdict triple on these rows was a latent schema conflict
+      (F5 cluster): the recorder never emits it, so a committed cassette
+      containing PPP rows would fail to load. Only ``kind`` is required
+      here; the rest is opaque pass-through.
     """
     rows: list[dict] = []
     with path.open("r", encoding="utf-8") as fp:
@@ -1323,11 +1350,16 @@ def _load_cassette(path: Path) -> list[dict]:
                 raise ValueError(
                     f"cassette {path}: malformed JSON at line {line_no}: {exc}"
                 ) from exc
-            for k in ("kind", "content", "recorded_latency_ms", "decision"):
-                if k not in rec:
-                    raise ValueError(
-                        f"cassette {path} line {line_no}: missing field {k!r}"
-                    )
+            if "kind" not in rec:
+                raise ValueError(
+                    f"cassette {path} line {line_no}: missing field 'kind'"
+                )
+            if not _is_envelope_row(rec):
+                for k in ("content", "recorded_latency_ms", "decision"):
+                    if k not in rec:
+                        raise ValueError(
+                            f"cassette {path} line {line_no}: missing field {k!r}"
+                        )
             rows.append(rec)
     if not rows:
         raise ValueError(f"cassette {path} is empty")
@@ -1384,6 +1416,13 @@ def _run_replay(args) -> int:
     try:
         for row in rows:
             kind = row.get("kind", "routine")
+            # F5 cluster: FR-PPP audit/decoy coverage rows carry a wrapped
+            # `envelope`/`row` payload, not the verdict-replay triple. They
+            # exist only for envelope-shape coverage and are not replayed
+            # through the verdict path. Skip them here; `_load_cassette`
+            # already validated their shape.
+            if _is_envelope_row(row):
+                continue
             content = row["content"]
             latency_ms = float(row["recorded_latency_ms"])
             dec = row["decision"]
@@ -1543,7 +1582,7 @@ def _emit_ppp_auto_probe(bus, session_id: str, idx: int) -> None:
     bus.write_envelope("audit.probe", payload)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--gov-db", default="tmp/soak_gov.db")
@@ -1617,7 +1656,11 @@ def main() -> int:
         help="v2.8 P1 / v10 P5: path to rl_shadow.db; pair with --shadow-proposal.")
     ap.add_argument("--shadow-proposal", type=str, default=None,
         help="v2.8 P1 / v10 P5: rl_proposals/<UTC>Z.json manifest path.")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     # Task A / v1.2: replay tier. Skip the claude-on-PATH check and the
     # BRIDGE_API_GOV / cli_pool init paths — replay exercises bus +

@@ -17,11 +17,13 @@ CREATE TABLE IF NOT EXISTS episodes (
     budget_violation    INTEGER NOT NULL,-- 0/1
     source              TEXT NOT NULL,   -- soak|cassette|probe|golden|review|live
     cycle_tag           TEXT,            -- e.g. v2.0-shipgate-soak-20260520T...
+    project_slug        TEXT,            -- nullable: monitored project_slug; enables SQL-WHERE polarity-flip on reads (CLAUDE.md L42)
     UNIQUE(session_id, trace_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_episodes_ts        ON episodes(ts_utc);
-CREATE INDEX IF NOT EXISTS idx_episodes_source    ON episodes(source);
-CREATE INDEX IF NOT EXISTS idx_episodes_cycle_tag ON episodes(cycle_tag);
+CREATE INDEX IF NOT EXISTS idx_episodes_ts           ON episodes(ts_utc);
+CREATE INDEX IF NOT EXISTS idx_episodes_source       ON episodes(source);
+CREATE INDEX IF NOT EXISTS idx_episodes_cycle_tag    ON episodes(cycle_tag);
+CREATE INDEX IF NOT EXISTS idx_episodes_project_slug ON episodes(project_slug);
 
 PRAGMA journal_mode=WAL;

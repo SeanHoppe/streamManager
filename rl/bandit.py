@@ -99,3 +99,19 @@ class BanditTrainer:
     def is_ready_for_shadow(self) -> bool:
         return (self._total >= PROMOTION_N_FLOOR
                 and self.best_arm_posterior_ci() <= PROMOTION_CI_CAP)
+
+    def is_ready_for_shadow_v10_1(self) -> bool:
+        """v10.1-mode entry gate (ADR-18 Amendment D).
+
+        Under stages 0-2 the production policy is deterministic, so the
+        P5 shadow harness fires as infrastructure validation with the
+        candidate pinned to the baseline arm. The gate therefore checks
+        the *baseline* arm rather than the empirically best arm: it
+        clears once ``_total >= 200`` effective updates have landed AND
+        the baseline arm's posterior CI has tightened to within the cap.
+        ``is_ready_for_shadow()`` keeps its v10.3-mode (best-arm)
+        semantics.
+        """
+        return (self._total >= PROMOTION_N_FLOOR
+                and self.posterior_ci_width(self.baseline_arm)
+                <= PROMOTION_CI_CAP)

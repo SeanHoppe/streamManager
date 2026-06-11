@@ -6,6 +6,48 @@ adheres to semantic versioning per `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### v2.8 cycle (in progress — not yet tagged)
+
+The v2.8 **Convergence cycle** is open but unshipped: P0 cycle-frame and
+P1 Path-D synthetic-fixture have merged to `main`, no `v2.8.0` tag exists
+yet, and the ship-gate (P3) has not fired. Entries below capture the
+code that has merged so a future `[2.8.0]` release section can be
+finalized at tag time. See `docs/v2.8-task-plan.md` for the cycle frame
+(skeleton) and `docs/v2.8-next-steps.md` for phase ledger.
+
+**ADR-18 surface freeze remains in force.** Cycle-tip anchor backfilled
+to `70e23e5` (v2.8 P0 merge of PR #211) per Amendment C + v2.7 P0 / PR
+#201 precedent. `WIRED_LEVER_LEDGER_COUNT` entering at 3 production / 0
+soak; step (3) env-split (P2, not yet fired) is expected to bump it to
+4 production.
+
+#### Added
+
+- **v2.8 P0 — Convergence-cycle frame**
+  ([PR #211](https://github.com/SeanHoppe/streamManager/pull/211),
+  merge `70e23e5`, 2026-05-22) — minted the v2.8 skeleton task-plan,
+  next-steps, and backlog scaffolding (Path-D synthetic-fixture P5 +
+  Seed v2.6-G step (3) env-split + Seed v2.7-A-CLIP corpus re-measure
+  bundled). Cycle-tip SHA backfilled via PR #212. Docs-only; 0
+  production-bucket LOC.
+- **v2.8 P1 — Path-D synthetic-fixture v10 P5 implementation**
+  ([PR #214](https://github.com/SeanHoppe/streamManager/pull/214),
+  merge `07ee05c`, 2026-05-22; prompt minted via PR #213) — v10 P5
+  ship-criteria evaluator + shadow recorder + soak-driver hook + ADR-5
+  "v10 shadow overhead" + ADR-18 v2.8 P1 amendment. `rl/shadow.py`
+  adds `ShadowRecorder` (50 ms non-invasion budget, WAL-mode
+  `rl_shadow.db`, post-INSERT budget remeasure, split `_dropped` vs
+  `_budget_violations` counters preserving the
+  `recorded + dropped = total_attempted` invariant);
+  `rl/stop_conditions.py` adds six pre-registered ship criteria
+  (`shadow_reward_improvement`, `fr_og_7_violations`,
+  `cand_prod_agreement`, `alignment_pass_rate`, `posterior_ci`,
+  `parameter_drift`) with frozen, non-env-overridable constants;
+  `rl/cli/{shadow,check_criteria}.py` expose CLI surfaces; and
+  `tools/soak_driver.py` gains opt-in `--shadow-recorder` /
+  `--shadow-proposal` flags that attach the recorder as a bus decision
+  subscriber. 24/24 tests green at merge.
+
 ## [2.7.1] — 2026-05-22
 
 Tagged ship of the v2.7.1 **corrective sub-cycle** following v2.7 P3

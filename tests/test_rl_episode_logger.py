@@ -207,6 +207,25 @@ def test_logger_rejects_unknown_source(tmp_path: Path) -> None:
             logger.record_decision(_envelope(), source="unknown")
 
 
+def test_logger_persists_project_slug_column(tmp_path: Path) -> None:
+    """Non-SM project_slug is persisted so corpus reads can enforce the
+    polarity-flip at the SQL WHERE (CLAUDE.md L42). Envelopes without a
+    project_slug persist NULL."""
+    db = tmp_path / "rl_episodes.db"
+    with EpisodeLogger(db) as logger:
+        env = _envelope(trace_id="with-slug")
+        env["project_slug"] = "monitored-proj"
+        logger.record_decision(env, source="live")
+        logger.record_decision(_envelope(trace_id="no-slug"), source="live")
+    conn = sqlite3.connect(str(db))
+    rows = dict(
+        conn.execute(
+            "SELECT trace_id, project_slug FROM episodes ORDER BY trace_id"
+        ).fetchall()
+    )
+    assert rows == {"no-slug": None, "with-slug": "monitored-proj"}
+
+
 def test_ingest_skips_malformed_json_lines(tmp_path: Path) -> None:
     db = tmp_path / "rl_episodes.db"
     cassette = tmp_path / "soak_cassette_20260507T120000Z.jsonl"

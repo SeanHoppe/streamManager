@@ -62,6 +62,35 @@ def test_promotion_gate_requires_both_n_and_ci():
     assert t2.is_ready_for_shadow() is False
 
 
+def test_v10_1_gate_checks_baseline_arm_not_best_arm():
+    """ADR-18 Amendment D: v10.1-mode gate is conjunctive on the
+    BASELINE arm (n>=200 AND baseline-arm CI<=0.10), distinct from the
+    v10.3-mode best-arm gate."""
+    # n=199 on baseline arm + tight CI -> False (insufficient n).
+    trainer = BanditTrainer(baseline_threshold=0.75)
+    for _ in range(199):
+        trainer.update(5, 1)
+    assert trainer.total_episodes() == 199
+    assert trainer.posterior_ci_width(trainer.baseline_arm) < 0.10
+    assert trainer.is_ready_for_shadow_v10_1() is False
+
+    # n=200 + tight baseline-arm CI -> True.
+    trainer.update(5, 1)
+    assert trainer.is_ready_for_shadow_v10_1() is True
+
+
+def test_v10_1_gate_wide_baseline_ci_blocks():
+    """n>=200 but a wide baseline-arm CI fails the v10.1 gate even when
+    the best-arm gate would not be consulted."""
+    t = BanditTrainer(baseline_threshold=0.75)
+    # Beta(50,50) on the baseline arm has width ~0.195 > 0.10.
+    t.alpha = [50.0] * len(L4_THRESHOLDS)
+    t.beta = [50.0] * len(L4_THRESHOLDS)
+    t._total = 200
+    assert t.posterior_ci_width(t.baseline_arm) > 0.10
+    assert t.is_ready_for_shadow_v10_1() is False
+
+
 def test_thompson_does_not_sample_outside_action_space():
     trainer = BanditTrainer(baseline_threshold=0.75)
     rng = np.random.default_rng(42)
