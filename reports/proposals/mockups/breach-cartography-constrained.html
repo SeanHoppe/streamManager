@@ -1,0 +1,1815 @@
+<!DOCTYPE html>
+<!--
+  breach-cartography-constrained.html -- KingMode mockup for BETA feature
+  "breach-cartography-constrained" (#5: Breach Cartography: temporal decision
+  causation UI, constrained v1).
+
+  PURPOSE: a static, self-contained preview the operator clicks through to
+  confirm the UI approach BEFORE any Svelte/backend code is written. This is a
+  DESIGN GATE (directive #2), not a build artefact.
+
+  WHERE IT LIVES (real build): NOT a fourth frame (M1 forbids it). A TRANSIENT
+  modal overlay launched ONLY from the M2 escalation-foreground slot -- the
+  governance_negative_regression trigger is one of the three foreground-eligible
+  signals (escalation.js:93). Composition-root sibling, mounted under
+  {#if $betaFlags["breach-cartography"]} (mirrors AwayMode / DecisionOracle at
+  App.svelte). Dismiss on action OR a 30s idle timeout -- it never becomes a
+  persistent surface the operator must manage.
+
+  REUSES THE REAL TOKENS: the :root + [data-theme="obsidian"] block below is
+  lifted verbatim from dashboard/ui-next/src/styles/theme.css so this previews
+  the actual obsidian palette (amber accent #f59e0b, AA-documented dim values),
+  the five paired action color tokens, the M4 fixed badge tokens, and the
+  --sm-* compatibility bridge.
+
+  PAIRED LABEL+COLOR (ADR-18 M5, inviolable): every decision node carries the
+  TEXT verdict + confidence ALWAYS (e.g. "BLOCK conf=1.00"), plus a tiny SHAPE
+  glyph (block=square / intervene=diamond / guide=triangle / allow=dot) so a
+  color-blind operator reads it without hue. Color alone is never a signal.
+
+  POLARITY (G2): the Surgical Revert accept button is DISABLED with a text
+  reason when the escalated session is the SM self-session. SM never governs
+  its own session. The mock data is a non-SM session (project_slug=demo-target,
+  excluded_self=1), so accept is ENABLED in the default view; a toggle flips to
+  the SM-self lockout state so the operator sees the polarity gate.
+
+  WHAT IS MOCKED (vs real build): the swimlane lanes, pattern shelf, and revert
+  proposals are the GET /api/breach/cartography mock payload from the vetted
+  mockDataSpec (alert_ts 1718150400, session sess-mock-7). When mock:true the
+  modal shows a "MOCK DATA -- live gov.db unavailable" strip so the operator is
+  never misled into reading a fabricated chain as live. maturity_delta is, in
+  v1, derived ONLY from the coarse RingDelta on the alert event
+  (governance.py:710-713) -- per-decision snapshots are unavailable without a
+  FROZEN schema edit (deferred to a future ADR-18 amendment).
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- written as two
+  hyphens), no box-drawing. System font stack only -- no external assets.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breach Cartography (constrained v1) -- KingMode mockup (BETA)</title>
+<style>
+  /* ===================================================================
+     TOKEN LAYER -- lifted from dashboard/ui-next/src/styles/theme.css
+     (obsidian theme + five action tokens + M4 fixed badge tokens + bridge).
+     Verbatim values so this mockup previews the REAL palette.
+     =================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* the five paired action color tokens (theme.css:48-52) */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* M4 fixed badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-decided-fg:     #16a34a;
+    --badge-decided-bg:     #dcfce7;
+    --badge-decided-border: #86efac;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+    --badge-timeout-fg:     #7c3aed;
+    --badge-timeout-bg:     #ede9fe;
+    --badge-timeout-border: #c4b5fd;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;   /* AA 5.37:1 on #0c1118 */
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* --sm-* compatibility bridge (one place, resolves at active theme) */
+  :root {
+    --sm-bg:          var(--bg);
+    --sm-bg-card:     var(--bg-card);
+    --sm-text:        var(--text-bright);
+    --sm-text-dim:    var(--text-dim);
+    --sm-text-bright: var(--text-bright);
+    --sm-border:      var(--border);
+    --sm-accent:      var(--accent);
+    --sm-font-mono:   var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* M17: global 2px solid amber focus ring at 2px offset on every focusable. */
+  :focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+  }
+
+  /* ===================================================================
+     PAGE SHELL -- a small stand-in "monitor" behind the modal so the
+     operator sees the launch context (an escalated Frame A header with the
+     "Map this regression" affordance), then the modal itself.
+     =================================================================== */
+  .page {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 4rem;
+  }
+
+  /* --- compact feature header strip --- */
+  .hdr {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.1rem;
+    padding-bottom: 1.1rem;
+    margin-bottom: 1.2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .hdr__id {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.25rem;
+  }
+  .hdr__title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-bright);
+    margin: 0;
+    line-height: 1.15;
+  }
+  .hdr__sub {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    margin: 0.4rem 0 0;
+    max-width: 62ch;
+    line-height: 1.45;
+  }
+  .hdr__right {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.6rem;
+  }
+
+  /* BETA pill -- paired text + tint, never tint alone. */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--ff-mono);
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 999px;
+    padding: 0.22rem 0.6rem;
+    white-space: nowrap;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline on/off toggle (client-wired -- shows the gate) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .gate__label {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+  .switch__track {
+    width: 40px; height: 22px;
+    border-radius: 999px;
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch[aria-pressed="true"] .switch__track {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .switch[aria-pressed="true"] .switch__knob {
+    transform: translateX(18px);
+    background: var(--accent);
+  }
+  .switch__state {
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    min-width: 3ch;
+    color: var(--text-dim);
+  }
+  .switch[aria-pressed="true"] .switch__state { color: var(--accent); }
+
+  /* amber gating footnote -- build is gated on the ADR-18 amendment. */
+  .amendment {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    margin: 0 0 1.3rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 6px;
+    background: rgba(234, 88, 12, 0.06);
+  }
+  .amendment__tag {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+    border: 1px solid var(--badge-warn-border);
+    border-radius: 3px;
+    padding: 0.12rem 0.4rem;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .amendment__txt {
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--text-dim);
+    margin: 0;
+  }
+
+  /* ===================================================================
+     LAUNCH CONTEXT -- the escalated Frame A header that hosts the
+     "Map this regression" affordance. This is the ONLY legal launch slot:
+     governance_negative_regression is foreground-eligible (escalation.js).
+     =================================================================== */
+  .frameA {
+    border: 1px solid var(--border);
+    border-left: 3px solid #d97706;          /* escalated foreground ring */
+    border-radius: 8px;
+    background: var(--bg-row-flash);
+    padding: 0.9rem 1rem;
+    margin-bottom: 1rem;
+  }
+  .frameA__top {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem 0.8rem;
+  }
+  .frameA__label {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  /* ACTION REQUIRED escalation badge -- paired text + amber (M4). */
+  .ar-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-system);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    line-height: 1;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+  }
+  .ar-badge .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+  .frameA__cells {
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    color: var(--text-bright);
+  }
+  .frameA__cells b { color: var(--c-block); font-weight: 700; }
+
+  /* THE LAUNCH AFFORDANCE -- a small, escalation-only "Map this regression"
+     button. Painted ONLY when the beta flag is ON (gated). Real <button>. */
+  .map-btn {
+    appearance: none;
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--border-hi);
+    border-radius: 5px;
+    padding: 0.4rem 0.7rem;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease;
+  }
+  .map-btn:hover { border-color: var(--accent); background: rgba(245,158,11,0.16); }
+  .map-btn__glyph { font-size: 0.85rem; line-height: 1; }
+  .frameA[data-gated="off"] .map-btn { display: none; }
+
+  .frameA__gatedhint {
+    display: none;
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-ui);
+    margin-left: auto;
+    font-style: italic;
+  }
+  .frameA[data-gated="off"] .frameA__gatedhint { display: inline; }
+
+  /* ===================================================================
+     SCRIM + MODAL -- transient overlay. position:fixed full-bleed scrim,
+     OPAQUE enough the swimlane never competes with bleed-through (AAA intent).
+     =================================================================== */
+  .scrim {
+    position: fixed; inset: 0;
+    background: rgba(4, 6, 8, 0.86);
+    z-index: 40;
+    display: none;
+  }
+  .scrim.is-open { display: block; }
+
+  .modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: none;
+    /* the modal does not fully fill: it bleeds off the RIGHT edge to imply the
+       timeline continues. Left gutter is anchored, right canvas runs off. */
+    padding: 2.2vh 0 2.2vh 2.2vw;
+  }
+  .modal.is-open { display: block; }
+
+  .modal__shell {
+    position: relative;
+    height: 100%;
+    width: 100%;
+    display: grid;
+    /* ASYMMETRIC: a fixed left incident gutter + a fluid swimlane that bleeds
+       off the right edge (no right padding on .modal). NOT a centered card. */
+    grid-template-columns: minmax(220px, 280px) 1fr;
+    grid-template-rows: 1fr auto;
+    gap: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+    border-right: none;
+    border-radius: 10px 0 0 10px;
+    box-shadow: -1px 0 0 var(--border-hi), 0 24px 64px rgba(0,0,0,0.55);
+    overflow: hidden;
+  }
+
+  /* ---- 30s idle dismiss meter -- a hairline bar across the modal top. ---- */
+  .idlebar {
+    position: absolute;
+    top: 0; left: 0;
+    height: 2px;
+    width: 100%;
+    background: transparent;
+    z-index: 6;
+    pointer-events: none;
+  }
+  .idlebar__fill {
+    display: block;
+    height: 100%;
+    width: 100%;
+    background: var(--accent-glow);
+    transform-origin: left center;
+  }
+
+  /* ===================================================================
+     LEFT INCIDENT GUTTER -- the SYMPTOM. Oversized display type. The
+     regressed cells + the alert time. Set in the display font where it lands
+     (system fallback in this mockup -- no external font load).
+     =================================================================== */
+  .gutter {
+    grid-row: 1 / 3;
+    background: linear-gradient(180deg, var(--bg-card), var(--bg-row-alt));
+    border-right: 1px solid var(--border);
+    padding: 1.1rem 1.1rem 1.1rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    overflow-y: auto;
+  }
+  .gutter__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0;
+  }
+  .gutter__regbadge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-system);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    line-height: 1;
+    color: var(--badge-blocked-fg);
+    background: var(--badge-blocked-bg);
+    border: 2px solid var(--badge-blocked-border);
+    align-self: flex-start;
+  }
+  .gutter__regbadge .sq {
+    width: 7px; height: 7px; background: currentColor; flex: 0 0 auto;
+  }
+  .gutter__headline {
+    font-size: 1.9rem;
+    line-height: 0.98;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text-bright);
+    margin: 0;
+  }
+  .gutter__cells {
+    list-style: none;
+    margin: 0.2rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .gutter__cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--ff-mono);
+    font-size: 0.82rem;
+    color: var(--text-bright);
+    border: 1px solid var(--badge-blocked-border);
+    border-left-width: 3px;
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+    background: rgba(239, 68, 68, 0.07);
+  }
+  .gutter__cell .arrow {
+    color: var(--c-block);
+    font-family: var(--ff-mono);
+    font-weight: 700;
+  }
+  /* maturity_delta readout -- TEXT signed number + a down-arrow glyph, never
+     color alone. Carries the v1-CONSTRAINED provenance note. */
+  .gutter__delta {
+    margin-top: auto;
+    border-top: 1px solid var(--border);
+    padding-top: 0.8rem;
+  }
+  .gutter__delta-k {
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.3rem;
+  }
+  .gutter__delta-v {
+    font-family: var(--ff-mono);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--c-block);
+    font-variant-numeric: tabular-nums;
+  }
+  .gutter__delta-note {
+    font-size: 0.62rem;
+    line-height: 1.4;
+    color: var(--text-ui);
+    margin: 0.4rem 0 0;
+    font-style: italic;
+  }
+  .gutter__meta {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .gutter__meta b { color: var(--text-bright); font-weight: 700; }
+
+  /* polarity readout chip -- excluded_self + project_slug, paired text+tint. */
+  .pol-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--badge-decided-fg);
+    background: var(--badge-decided-bg);
+    border: 1px solid var(--badge-decided-border);
+    border-radius: 3px;
+    padding: 0.14rem 0.4rem;
+    align-self: flex-start;
+  }
+  .pol-chip.is-self {
+    color: var(--badge-timeout-fg);
+    background: var(--badge-timeout-bg);
+    border-color: var(--badge-timeout-border);
+  }
+  .pol-chip .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* ===================================================================
+     RIGHT SWIMLANE CANVAS -- the CHAIN. X=time (left=older), Y=one decision
+     per lane. Nodes are left-aligned TILES carrying the paired badge. Curved
+     hairline arrows run to the pattern shelf on the far right.
+     =================================================================== */
+  .canvas {
+    position: relative;
+    overflow: hidden;
+    padding: 0.9rem 0 0.4rem;
+  }
+  .canvas__cap {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0 1rem 0.5rem 1.1rem;
+  }
+  .canvas__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .canvas__hint {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .mockstrip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--badge-timeout-fg);
+    background: var(--badge-timeout-bg);
+    border: 1px solid var(--badge-timeout-border);
+    border-radius: 3px;
+    padding: 0.12rem 0.42rem;
+  }
+  .mockstrip .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* the swimlane is a positioned plot area; the SVG arrow layer sits beneath
+     the node tiles. Time axis runs left->right; the right edge has the shelf. */
+  .plot {
+    position: relative;
+    height: calc(100% - 2.3rem);
+    min-height: 280px;
+    margin-left: 1.1rem;
+    /* faint vertical time gridlines */
+    background-image: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(20% - 1px),
+      var(--border) calc(20% - 1px),
+      var(--border) 20%
+    );
+  }
+  .arrows {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .arrows path {
+    fill: none;
+    stroke: var(--border-hi);
+    stroke-width: 1;
+  }
+  .arrows path.is-dim { stroke: var(--border); opacity: 0.5; }
+
+  /* the time axis ticks along the bottom */
+  .axis {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    color: var(--text-ui);
+    padding: 0.2rem 0.4rem 0;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---- DECISION NODE TILES -- absolutely positioned by X(time)/Y(lane). ---- */
+  .node {
+    appearance: none;
+    position: absolute;
+    z-index: 2;
+    transform: translateY(-50%);
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 9.5rem;
+    text-align: left;
+    background: var(--bg-row);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease, opacity 0.14s ease;
+  }
+  .node:hover { background: var(--bg-row-hover); border-color: var(--border-hi); }
+  /* nodes after the scrubber playhead are ghosted */
+  .node.is-future { opacity: 0.34; }
+  .node.is-target { box-shadow: 0 0 0 1px var(--accent-glow); }
+
+  /* the paired badge inside a node: TEXT verdict + conf, on the action color,
+     plus a SHAPE glyph so hue is never the only signal. */
+  .node__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
+  /* the verdict text sits on a dark inset chip OVER the action tile so even a
+     saturated token (e.g. --c-guide yellow) clears AAA for small text. */
+  .node__verdict {
+    padding: 0.16rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(4, 6, 8, 0.72);
+  }
+  .node__glyph {
+    width: 0.7rem; height: 0.7rem;
+    flex: 0 0 auto;
+    display: inline-block;
+  }
+  /* SHAPE per action (redundant with color -- the color-blind read path) */
+  .glyph-block     { background: var(--c-block); }                 /* square */
+  .glyph-intervene { background: var(--c-intervene); transform: rotate(45deg); width: 0.6rem; height: 0.6rem; } /* diamond */
+  .glyph-guide     { background: var(--c-guide); clip-path: polygon(50% 0, 100% 100%, 0 100%); }                /* triangle */
+  .glyph-allow     { background: var(--c-allow); border-radius: 50%; }                                          /* dot */
+
+  .node--BLOCK     { border-left-color: var(--c-block); }
+  .node--INTERVENE { border-left-color: var(--c-intervene); }
+  .node--GUIDE     { border-left-color: var(--c-guide); }
+  .node--ALLOW     { border-left-color: var(--c-allow); }
+  .node--BLOCK     .node__verdict { color: var(--c-block); }
+  .node--INTERVENE .node__verdict { color: var(--c-intervene); }
+  .node--GUIDE     .node__verdict { color: var(--c-guide); }
+  .node--ALLOW     .node__verdict { color: var(--c-allow); }
+
+  .node__msg {
+    font-size: 0.68rem;
+    line-height: 1.3;
+    color: var(--text);
+    max-width: 13rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .node__sub {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    color: var(--text-ui);
+  }
+  .node__hash {
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 0.25rem;
+  }
+  .node__hitl {
+    color: var(--badge-ar-fg);
+  }
+
+  /* ---- RIGHT PATTERN SHELF -- the CAUSE. Each matched_hash resolves here. ---- */
+  .shelf {
+    position: absolute;
+    top: 0; right: 0; bottom: 1.4rem;
+    width: 8.5rem;
+    border-left: 1px dashed var(--border-hi);
+    padding: 0.3rem 0.5rem 0.3rem 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    z-index: 2;
+  }
+  .shelf__cap {
+    font-family: var(--ff-mono);
+    font-size: 0.54rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .pnode {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-row-alt);
+    padding: 0.4rem 0.45rem;
+  }
+  .pnode__hash {
+    font-family: var(--ff-mono);
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--text-bright);
+  }
+  .pnode__lvl {
+    display: inline-block;
+    font-family: var(--ff-mono);
+    font-size: 0.54rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    border: 1px solid var(--border-hi);
+    border-radius: 2px;
+    padding: 0 0.25rem;
+    margin-left: 0.3rem;
+  }
+  .pnode__txt {
+    font-size: 0.62rem;
+    line-height: 1.3;
+    color: var(--text-dim);
+    margin: 0.25rem 0 0.2rem;
+  }
+  .pnode__occ {
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    color: var(--text-ui);
+  }
+  /* an immature/low-frequency pattern (L1, occ=6) gets a paired WARN flag --
+     it is the heuristic's revert-rank driver. */
+  .pnode--immature { border-color: var(--badge-warn-border); }
+  .pnode__flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 0.3rem;
+    font-family: var(--ff-mono);
+    font-size: 0.52rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 2px;
+    padding: 0.06rem 0.3rem;
+  }
+  .pnode__flag .tri {
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 6px solid currentColor;
+  }
+
+  /* ===================================================================
+     SCRUBBER -- temporal playhead along the bottom of the swimlane. Drives
+     ONLY the client (nodes before solid / after ghosted). Arrow-key steppable.
+     =================================================================== */
+  .scrub {
+    grid-column: 2 / 3;
+    border-top: 1px solid var(--border);
+    padding: 0.55rem 1rem 0.6rem 1.1rem;
+    background: var(--bg-card);
+  }
+  .scrub__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.3rem;
+  }
+  .scrub__lbl {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .scrub__read {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .scrubber {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  /* ===================================================================
+     SURGICAL REVERT PANEL -- the FIX. Spans the full modal width at the
+     bottom. Ranked list; rank-1 typographically HEAVIEST (severity-as-weight).
+     =================================================================== */
+  .revert {
+    grid-column: 1 / 3;
+    border-top: 1px solid var(--border-hi);
+    background: linear-gradient(180deg, var(--bg-card), var(--bg-row-alt));
+    padding: 0.85rem 1.1rem 1rem;
+  }
+  .revert__cap {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.6rem;
+  }
+  .revert__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .revert__hint {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .revert__list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  .rprop {
+    display: grid;
+    grid-template-columns: 2.2rem 1fr auto;
+    align-items: center;
+    gap: 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-row);
+    padding: 0.55rem 0.7rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
+  }
+  .rprop:hover { background: var(--bg-row-hover); }
+  .rprop.is-selected { border-color: var(--accent); background: var(--accent-dim); }
+  .rprop__rank {
+    font-family: var(--ff-mono);
+    font-weight: 800;
+    color: var(--accent);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  /* rank-1 heaviest type; rank-2 lighter (severity as type weight) */
+  .rprop--r1 .rprop__rank { font-size: 1.5rem; }
+  .rprop--r2 .rprop__rank { font-size: 1.05rem; color: var(--text-dim); }
+  .rprop__main { min-width: 0; }
+  .rprop__line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.2rem;
+  }
+  /* the verdict badge reused inline -- paired text + color + shape */
+  .miniverdict {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    background: rgba(4, 6, 8, 0.6);
+  }
+  .miniverdict.v-BLOCK     { color: var(--c-block); }
+  .miniverdict.v-INTERVENE { color: var(--c-intervene); }
+  .miniverdict .g {
+    width: 0.55rem; height: 0.55rem; flex: 0 0 auto;
+  }
+  .rprop__id {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-bright);
+  }
+  .rprop--r1 .rprop__id { font-weight: 700; }
+  .rprop__why {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    line-height: 1.35;
+    margin: 0;
+  }
+  .rprop--r1 .rprop__why { color: var(--text); }
+  .rprop__score {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    color: var(--text-ui);
+    text-align: right;
+    white-space: nowrap;
+  }
+  .rprop__score b {
+    display: block;
+    font-size: 0.92rem;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .rprop__select {
+    appearance: none;
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-top: 0.1rem;
+    display: none;
+  }
+
+  /* ---- the two-step accept (select -> confirm). Absolute HITL gate. ---- */
+  .acceptbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem 0.8rem;
+    margin-top: 0.7rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--border);
+  }
+  .acceptbar__status {
+    font-family: var(--ff-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+  .acceptbar__status b { color: var(--text-bright); }
+  .btn {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 5px;
+    padding: 0.45rem 0.85rem;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-row-alt);
+    color: var(--text-dim);
+    transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+  }
+  .btn--ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn--accept {
+    color: var(--accent);
+    border-color: var(--border-hi);
+    background: var(--accent-dim);
+  }
+  .btn--accept:hover:not([aria-disabled="true"]) {
+    border-color: var(--accent);
+    background: rgba(245,158,11,0.16);
+  }
+  .btn--confirm {
+    color: var(--badge-blocked-fg);
+    border: 2px solid var(--badge-blocked-border);
+    background: var(--badge-blocked-bg);
+  }
+  /* DISABLED accept (polarity G2 lockout) -- greyed + aria-disabled + reason. */
+  .btn[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    color: var(--text-ui);
+    border-color: var(--border);
+    background: var(--bg-row-alt);
+  }
+  .lockout-note {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    color: var(--badge-timeout-fg);
+    background: var(--badge-timeout-bg);
+    border: 1px solid var(--badge-timeout-border);
+    border-radius: 3px;
+    padding: 0.16rem 0.45rem;
+  }
+  .acceptbar.is-self-locked .lockout-note { display: inline-flex; }
+  .lockout-note .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* the confirm step (hidden until a proposal is selected + accept clicked) */
+  .confirm-wrap { display: none; align-items: center; gap: 0.6rem; }
+  .confirm-wrap.is-open { display: inline-flex; }
+
+  /* recorded receipt (after confirm) -- reuses the DECIDED green, paired text */
+  .receipt {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--badge-decided-fg);
+    background: var(--badge-decided-bg);
+    border: 1px solid var(--badge-decided-border);
+    border-radius: 3px;
+    padding: 0.2rem 0.5rem;
+  }
+  .receipt.is-open { display: inline-flex; }
+  .receipt .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* ---- close button (top-right of the modal, over the canvas) ---- */
+  .modal__close {
+    appearance: none;
+    position: absolute;
+    top: 0.7rem; right: 0.8rem;
+    z-index: 7;
+    width: 2rem; height: 2rem;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-row);
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .modal__close:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ===================================================================
+     TOOLTIP -- on hover/focus a node. message(100) + hash + conf + hitl note.
+     =================================================================== */
+  .tip {
+    position: fixed;
+    z-index: 60;
+    max-width: 22rem;
+    display: none;
+    background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+    border-radius: 6px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+    padding: 0.6rem 0.7rem;
+    pointer-events: none;
+  }
+  .tip.is-open { display: block; }
+  .tip__verdict {
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+  }
+  .tip__msg {
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--text);
+    margin: 0 0 0.4rem;
+  }
+  .tip__grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15rem 0.6rem;
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+  }
+  .tip__k { color: var(--text-ui); }
+  .tip__v { color: var(--text-bright); }
+
+  /* beta annotation footer pinned to the modal foot (required annotation) */
+  .modal__beta {
+    position: absolute;
+    left: 1.2rem; bottom: 0.35rem;
+    z-index: 7;
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    color: var(--text-ui);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    pointer-events: none;
+  }
+  .modal__beta .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--badge-ar-fg); }
+
+  /* ---- polarity demo toggle (mockup-only control, top of page) ---- */
+  .polctl {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0 0 1.2rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-row-alt);
+  }
+  .polctl__lbl {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-dim);
+  }
+  .polctl__lbl b { color: var(--text-bright); }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
+  }
+
+  /* reduced motion: instant scrubber + arrow draw + no idlebar animation. */
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration: 0.001ms !important; animation-duration: 0.001ms !important; }
+    .idlebar__fill { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============ FEATURE HEADER STRIP ============ -->
+  <header class="hdr">
+    <div>
+      <p class="hdr__id">BETA feature #5 -- constrained v1</p>
+      <h1 class="hdr__title">Breach Cartography: temporal decision causation</h1>
+      <p class="hdr__sub">
+        When the one focus-stealing alarm fires -- a governance negative
+        regression -- this turns "something broke" into a one-click causal
+        decision map plus a ranked surgical-revert pick, so the operator reverts
+        the offending verdict instead of blindly rolling back the whole run.
+      </p>
+    </div>
+    <div class="hdr__right">
+      <span class="beta-pill">
+        <span class="beta-pill__dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+      <span class="gate">
+        <span class="gate__label" id="gate-lbl">Breach Cartography</span>
+        <button
+          id="beta-toggle"
+          class="switch"
+          type="button"
+          role="switch"
+          aria-pressed="true"
+          aria-labelledby="gate-lbl"
+        >
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__state" id="gate-state">ON</span>
+        </button>
+      </span>
+    </div>
+  </header>
+
+  <!-- ============ AMBER BUILD-GATING FOOTNOTE ============ -->
+  <div class="amendment" role="note">
+    <span class="amendment__tag">Build gated</span>
+    <p class="amendment__txt">
+      UI is approvable now, but the BUILD is gated on an ADR-18 amendment. The
+      proposal as filed touches two FROZEN surfaces (message_bus envelope schema
+      + governance.py decision-flow hooks via a maturity_snapshots table). v1
+      CONSTRAINED ships WITHOUT those: no new table, no governance.py hook;
+      per-decision maturity_delta is unavailable as live data and is derived
+      ONLY from the coarse RingDelta already on the alert event
+      (governance.py:710-713), or shown in mock. Endpoints are additive-only
+      (GET /api/breach/cartography reads decisions/messages/patterns;
+      POST revert-accept reuses the existing /api/hitl/annotate path).
+    </p>
+  </div>
+
+  <!-- ============ POLARITY DEMO CONTROL (mockup-only) ============ -->
+  <div class="polctl">
+    <span class="polctl__lbl">Polarity (G2) demo -- escalated session is currently
+      <b id="pol-state">a NON-SM target (revert ENABLED)</b>.
+      Flip to preview the SM-self lockout:</span>
+    <button id="pol-toggle" class="btn btn--ghost" type="button" aria-pressed="false">
+      Flip to SM-self
+    </button>
+  </div>
+
+  <!-- ============ LAUNCH CONTEXT: escalated Frame A header ============ -->
+  <div class="frameA" id="frameA" data-gated="on">
+    <div class="frameA__top">
+      <span class="frameA__label">Frame A -- governance monitor</span>
+      <span class="ar-badge" title="Escalation: governance negative regression -- foreground-eligible (M2)">
+        <span class="dot" aria-hidden="true"></span>NEG REGRESSION
+      </span>
+      <span class="frameA__cells">
+        cells <b>[auth-rotation, scope-narrowing]</b> regressed
+      </span>
+      <!-- THE launch affordance (gated; escalation-only) -->
+      <button class="map-btn" id="map-btn" type="button"
+              aria-haspopup="dialog" aria-controls="modal">
+        <span class="map-btn__glyph" aria-hidden="true">&#9633;&#8594;</span>
+        Map this regression
+      </button>
+      <span class="frameA__gatedhint">
+        Breach Cartography OFF -- no "Map this regression" affordance painted. Flip ON above.
+      </span>
+    </div>
+  </div>
+
+  <p style="font-size:0.74rem;color:var(--text-dim);margin:0 0 0.4rem;line-height:1.5;">
+    The escalation header above is the ONLY legal launch slot: governance_negative_regression
+    is one of the three foreground-eligible triggers (escalation.js:93). Click
+    <b style="color:var(--text-bright);">Map this regression</b> to open the transient
+    Breach Cartography modal. It dismisses on action, on Esc, on scrim-click, or after a
+    30s idle timeout -- it never becomes a fourth frame.
+  </p>
+
+  <!-- ============ SCRIM + MODAL ============ -->
+  <div class="scrim" id="scrim" aria-hidden="true"></div>
+
+  <div class="modal" id="modal" role="dialog" aria-modal="true"
+       aria-labelledby="modal-h" aria-hidden="true">
+    <div class="modal__shell">
+
+      <!-- 30s idle dismiss meter -->
+      <div class="idlebar" aria-hidden="true"><span class="idlebar__fill" id="idle-fill"></span></div>
+
+      <button class="modal__close" id="modal-close" type="button"
+              aria-label="Close Breach Cartography">&times;</button>
+
+      <!-- ===== LEFT INCIDENT GUTTER -- the SYMPTOM ===== -->
+      <aside class="gutter">
+        <p class="gutter__eyebrow">Incident</p>
+        <span class="gutter__regbadge">
+          <span class="sq" aria-hidden="true"></span>NEG REGRESSION
+        </span>
+        <h2 class="gutter__headline" id="modal-h">Two cells<br>fell back.</h2>
+
+        <ul class="gutter__cells" aria-label="Regressed maturity cells">
+          <li class="gutter__cell"><span class="arrow" aria-hidden="true">&#8595;</span>cell-a (auth-rotation)</li>
+          <li class="gutter__cell"><span class="arrow" aria-hidden="true">&#8595;</span>cell-b (scope-narrowing)</li>
+        </ul>
+
+        <div class="gutter__meta">
+          alert <b>05:40:00</b> (t=0 ref)<br>
+          window <b>10 min</b> (600000 ms)<br>
+          session <b>sess-mock-7</b>
+        </div>
+
+        <span class="pol-chip" id="pol-chip">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="pol-chip-txt">EXCLUDED_SELF=1 -- target=demo-target</span>
+        </span>
+
+        <div class="gutter__delta">
+          <p class="gutter__delta-k">Maturity delta (RingDelta)</p>
+          <span class="gutter__delta-v">&#8595; -2 cells</span>
+          <p class="gutter__delta-note">
+            v1 CONSTRAINED: coarse delta from the alert event's RingDelta only.
+            Per-decision maturity is NOT live (FROZEN schema) -- deferred to an
+            ADR-18 amendment.
+          </p>
+        </div>
+      </aside>
+
+      <!-- ===== RIGHT SWIMLANE CANVAS -- the CHAIN ===== -->
+      <section class="canvas">
+        <div class="canvas__cap">
+          <span class="canvas__eyebrow">Decision swimlane</span>
+          <span class="canvas__hint">X = time (older left) &middot; Y = one decision per lane &middot; arrows -&gt; matched pattern</span>
+          <span class="mockstrip" id="mockstrip" title="Mock payload: live gov.db unavailable at preview time">
+            <span class="dot" aria-hidden="true"></span>MOCK DATA -- live gov.db unavailable
+          </span>
+        </div>
+
+        <div class="plot" id="plot">
+          <!-- curved hairline arrows: each decision tile -> its pattern shelf node -->
+          <svg class="arrows" id="arrows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <!-- d-101 (lane1, x10%) -> 9f1c2a (shelf top) -->
+            <path data-from="d-101" d="M 26 18 C 55 18, 60 28, 84 30"></path>
+            <!-- d-118 (lane2, x24%) -> 9f1c2a -->
+            <path data-from="d-118" d="M 38 41 C 60 41, 64 32, 84 30"></path>
+            <!-- d-130 (lane3, x68%) -> b733de (shelf bottom) -->
+            <path data-from="d-130" d="M 80 64 C 86 64, 86 70, 84 72"></path>
+            <!-- d-141 (lane4, x98% bleed) -> b733de -->
+            <path data-from="d-141" d="M 96 87 C 92 87, 88 80, 84 72"></path>
+          </svg>
+
+          <!-- DECISION NODE TILES -- positioned by X(time)/Y(lane). Each is a
+               real <button>: Tab-reachable, aria-label = paired text label. -->
+          <button class="node node--ALLOW" data-decision="d-101" data-t="0"
+                  style="left:2%; top:18%;"
+                  aria-label="ALLOW, confidence 0.94, pattern 9f1c2a: approved file-read in scope">
+            <span class="node__badge">
+              <span class="node__glyph glyph-allow" aria-hidden="true"></span>
+              <span class="node__verdict">ALLOW conf=0.94</span>
+            </span>
+            <span class="node__msg" title="approved file-read in scope ...">approved file-read in scope ...</span>
+            <span class="node__sub"><span class="node__hash">9f1c2a</span><span>t=0:00</span></span>
+          </button>
+
+          <button class="node node--GUIDE" data-decision="d-118" data-t="142000"
+                  style="left:18%; top:41%;"
+                  aria-label="GUIDE, confidence 0.92, pattern 9f1c2a: guided a scope-narrowing edit. Operator nudged.">
+            <span class="node__badge">
+              <span class="node__glyph glyph-guide" aria-hidden="true"></span>
+              <span class="node__verdict">GUIDE conf=0.92</span>
+            </span>
+            <span class="node__msg" title="guided a scope-narrowing edit ...">guided a scope-narrowing edit ...</span>
+            <span class="node__sub"><span class="node__hash">9f1c2a</span><span class="node__hitl" title="HITL override note">nudged</span><span>t=2:22</span></span>
+          </button>
+
+          <button class="node node--INTERVENE is-target" data-decision="d-130" data-t="405000"
+                  style="left:60%; top:64%;"
+                  aria-label="INTERVENE, confidence 0.61, pattern b733de: intervened on a rotation skip">
+            <span class="node__badge">
+              <span class="node__glyph glyph-intervene" aria-hidden="true"></span>
+              <span class="node__verdict">INTERVENE conf=0.61</span>
+            </span>
+            <span class="node__msg" title="intervened on a rotation skip ...">intervened on a rotation skip ...</span>
+            <span class="node__sub"><span class="node__hash">b733de</span><span>t=6:45</span></span>
+          </button>
+
+          <button class="node node--BLOCK is-target" data-decision="d-141" data-t="588000"
+                  style="left:80%; top:87%;"
+                  aria-label="BLOCK, confidence 1.00, pattern b733de: static-rule BLOCK at regression boundary">
+            <span class="node__badge">
+              <span class="node__glyph glyph-block" aria-hidden="true"></span>
+              <span class="node__verdict">BLOCK conf=1.00</span>
+            </span>
+            <span class="node__msg" title="static-rule BLOCK at regression boundary ...">static-rule BLOCK at regression boundary ...</span>
+            <span class="node__sub"><span class="node__hash">b733de</span><span>t=9:48</span></span>
+          </button>
+
+          <!-- RIGHT PATTERN SHELF -- the CAUSE. matched_hash resolves here. -->
+          <div class="shelf" aria-label="Matched pattern shelf">
+            <span class="shelf__cap">Pattern shelf</span>
+            <div class="pnode" data-hash="9f1c2a">
+              <span class="pnode__hash">9f1c2a<span class="pnode__lvl">L3</span></span>
+              <p class="pnode__txt">scope-narrowing edit</p>
+              <span class="pnode__occ">occ 41 -- mature</span>
+            </div>
+            <div class="pnode pnode--immature" data-hash="b733de">
+              <span class="pnode__hash">b733de<span class="pnode__lvl">L1</span></span>
+              <p class="pnode__txt">rotation skip</p>
+              <span class="pnode__occ">occ 6 -- immature</span>
+              <span class="pnode__flag"><span class="tri" aria-hidden="true"></span>low-freq</span>
+            </div>
+          </div>
+
+          <!-- time axis -->
+          <div class="axis" aria-hidden="true">
+            <span>0:00</span><span>2:00</span><span>4:00</span><span>6:00</span><span>8:00</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== TEMPORAL SCRUBBER ===== -->
+      <div class="scrub">
+        <div class="scrub__row">
+          <span class="scrub__lbl">Scrub the causal chain</span>
+          <span class="scrub__read" id="scrub-read">playhead 9:48 -- all 4 decisions before the alert</span>
+        </div>
+        <input class="scrubber" id="scrubber" type="range"
+               min="0" max="600000" step="1000" value="600000"
+               aria-label="Temporal playhead -- nodes before it are solid, after it ghosted"
+               aria-valuetext="playhead at 9 minutes 48 seconds, all 4 decisions visible">
+      </div>
+
+      <!-- ===== SURGICAL REVERT PANEL -- the FIX ===== -->
+      <section class="revert">
+        <div class="revert__cap">
+          <span class="revert__eyebrow">Surgical revert</span>
+          <span class="revert__hint">heuristic rank = pattern-frequency + confidence &middot; select one, then confirm (absolute HITL gate)</span>
+        </div>
+
+        <div class="revert__list" id="revert-list" role="radiogroup" aria-label="Revert proposals, ranked">
+
+          <label class="rprop rprop--r1 is-selected" data-decision="d-141" data-score="0.97">
+            <input class="rprop__select" type="radio" name="revert" value="d-141" checked>
+            <span class="rprop__rank" aria-hidden="true">1</span>
+            <span class="rprop__main">
+              <span class="rprop__line">
+                <span class="miniverdict v-BLOCK"><span class="g glyph-block" aria-hidden="true"></span>BLOCK conf=1.00</span>
+                <span class="rprop__id">d-141</span>
+              </span>
+              <p class="rprop__why">Highest-confidence verdict on the lowest-frequency (immature L1) pattern b733de at the regression boundary.</p>
+            </span>
+            <span class="rprop__score">score<b>0.97</b></span>
+          </label>
+
+          <label class="rprop rprop--r2" data-decision="d-130" data-score="0.71">
+            <input class="rprop__select" type="radio" name="revert" value="d-130">
+            <span class="rprop__rank" aria-hidden="true">2</span>
+            <span class="rprop__main">
+              <span class="rprop__line">
+                <span class="miniverdict v-INTERVENE"><span class="g glyph-intervene" aria-hidden="true"></span>INTERVENE conf=0.61</span>
+                <span class="rprop__id">d-130</span>
+              </span>
+              <p class="rprop__why">Low-confidence verdict on the same immature pattern lineage (b733de).</p>
+            </span>
+            <span class="rprop__score">score<b>0.71</b></span>
+          </label>
+
+        </div>
+
+        <!-- two-step accept (select -> accept -> confirm). Never auto-acts. -->
+        <div class="acceptbar" id="acceptbar">
+          <span class="acceptbar__status" id="accept-status">
+            Selected: <b id="accept-sel">d-141 (BLOCK, score 0.97)</b>
+          </span>
+
+          <button class="btn btn--accept" id="accept-btn" type="button">
+            Accept revert proposal
+          </button>
+
+          <span class="lockout-note" id="lockout-note" role="note">
+            <span class="dot" aria-hidden="true"></span>
+            POLARITY G2: SM-self session -- revert locked out
+          </span>
+
+          <span class="confirm-wrap" id="confirm-wrap">
+            <span class="acceptbar__status">Records an override via the existing annotate path. Confirm?</span>
+            <button class="btn btn--confirm" id="confirm-btn" type="button">Confirm revert</button>
+            <button class="btn btn--ghost" id="cancel-btn" type="button">Cancel</button>
+          </span>
+
+          <span class="receipt" id="receipt" role="status">
+            <span class="dot" aria-hidden="true"></span>
+            <span id="receipt-txt">Override recorded -- d-141 reverted</span>
+          </span>
+        </div>
+      </section>
+
+      <!-- BETA annotation footer (required) -->
+      <span class="modal__beta">
+        <span class="dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+    </div>
+  </div>
+
+  <!-- node tooltip (hover/focus) -->
+  <div class="tip" id="tip" role="tooltip" aria-hidden="true">
+    <div class="tip__verdict" id="tip-verdict"></div>
+    <p class="tip__msg" id="tip-msg"></p>
+    <div class="tip__grid">
+      <span class="tip__k">pattern</span><span class="tip__v" id="tip-hash"></span>
+      <span class="tip__k">confidence</span><span class="tip__v" id="tip-conf"></span>
+      <span class="tip__k">HITL note</span><span class="tip__v" id="tip-hitl"></span>
+    </div>
+  </div>
+
+  <!-- live region for scrubber / accept announcements -->
+  <div class="sr-only" id="live" role="status" aria-live="polite"></div>
+
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    var betaToggle = document.getElementById("beta-toggle");
+    var gateState  = document.getElementById("gate-state");
+    var frameA     = document.getElementById("frameA");
+    var mapBtn     = document.getElementById("map-btn");
+    var scrim      = document.getElementById("scrim");
+    var modal      = document.getElementById("modal");
+    var modalClose = document.getElementById("modal-close");
+    var idleFill   = document.getElementById("idle-fill");
+    var live       = document.getElementById("live");
+
+    var scrubber   = document.getElementById("scrubber");
+    var scrubRead  = document.getElementById("scrub-read");
+    var plot       = document.getElementById("plot");
+    var arrows     = document.getElementById("arrows");
+    var nodes      = plot.querySelectorAll(".node");
+
+    var revertList = document.getElementById("revert-list");
+    var acceptbar  = document.getElementById("acceptbar");
+    var acceptBtn  = document.getElementById("accept-btn");
+    var acceptSel  = document.getElementById("accept-sel");
+    var confirmWrap= document.getElementById("confirm-wrap");
+    var confirmBtn = document.getElementById("confirm-btn");
+    var cancelBtn  = document.getElementById("cancel-btn");
+    var receipt    = document.getElementById("receipt");
+    var receiptTxt = document.getElementById("receipt-txt");
+    var lockoutNote= document.getElementById("lockout-note");
+
+    var polToggle  = document.getElementById("pol-toggle");
+    var polState   = document.getElementById("pol-state");
+    var polChip    = document.getElementById("pol-chip");
+    var polChipTxt = document.getElementById("pol-chip-txt");
+
+    var tip        = document.getElementById("tip");
+    var tipVerdict = document.getElementById("tip-verdict");
+    var tipMsg     = document.getElementById("tip-msg");
+    var tipHash    = document.getElementById("tip-hash");
+    var tipConf    = document.getElementById("tip-conf");
+    var tipHitl    = document.getElementById("tip-hitl");
+
+    var lastTrigger = null;
+    var idleTimer = null, idleRAF = null;
+    var isSelfLocked = false;
+
+    // per-decision tooltip data (mirrors the mockDataSpec lanes).
+    var LANE = {
+      "d-101": { verdict: "ALLOW conf=0.94",     color: "var(--c-allow)",     msg: "approved file-read in scope ...",            hash: "9f1c2a", conf: "0.94", hitl: "--" },
+      "d-118": { verdict: "GUIDE conf=0.92",     color: "var(--c-guide)",     msg: "guided a scope-narrowing edit ...",          hash: "9f1c2a", conf: "0.92", hitl: "operator nudged" },
+      "d-130": { verdict: "INTERVENE conf=0.61", color: "var(--c-intervene)", msg: "intervened on a rotation skip ...",          hash: "b733de", conf: "0.61", hitl: "--" },
+      "d-141": { verdict: "BLOCK conf=1.00",     color: "var(--c-block)",     msg: "static-rule BLOCK at regression boundary ...", hash: "b733de", conf: "1.00", hitl: "--" }
+    };
+
+    // ---- BETA gate: paints / removes the "Map this regression" affordance. ----
+    function setGate(on) {
+      betaToggle.setAttribute("aria-pressed", on ? "true" : "false");
+      gateState.textContent = on ? "ON" : "OFF";
+      frameA.setAttribute("data-gated", on ? "on" : "off");
+      if (!on) closeModal();
+    }
+    betaToggle.addEventListener("click", function () {
+      setGate(betaToggle.getAttribute("aria-pressed") !== "true");
+    });
+
+    // ---- POLARITY (G2) demo: flip escalated session to SM-self -> lock out. ----
+    function setSelfLocked(locked) {
+      isSelfLocked = locked;
+      polToggle.setAttribute("aria-pressed", locked ? "true" : "false");
+      polToggle.textContent = locked ? "Flip to NON-SM target" : "Flip to SM-self";
+      polState.textContent = locked
+        ? "the SM SELF-session (revert LOCKED OUT)"
+        : "a NON-SM target (revert ENABLED)";
+      polChip.classList.toggle("is-self", locked);
+      polChipTxt.textContent = locked
+        ? "EXCLUDED_SELF=0 -- session=streamManager (SELF)"
+        : "EXCLUDED_SELF=1 -- target=demo-target";
+      acceptbar.classList.toggle("is-self-locked", locked);
+      if (locked) {
+        acceptBtn.setAttribute("aria-disabled", "true");
+        acceptBtn.title = "Polarity G2: SM never reverts its own session";
+        closeConfirm();
+      } else {
+        acceptBtn.removeAttribute("aria-disabled");
+        acceptBtn.removeAttribute("title");
+      }
+    }
+    polToggle.addEventListener("click", function () {
+      setSelfLocked(polToggle.getAttribute("aria-pressed") !== "true");
+    });
+
+    // ---- 30s idle dismiss (resets on any interaction) ----
+    function resetIdle() {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (idleRAF) cancelAnimationFrame(idleRAF);
+      var reduce = window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      var start = Date.now();
+      idleFill.style.transition = "none";
+      idleFill.style.transform = "scaleX(1)";
+      if (!reduce) {
+        // void to flush, then animate width down over 30s
+        // eslint-disable-next-line no-unused-expressions
+        idleFill.offsetWidth;
+        function step() {
+          var elapsed = Date.now() - start;
+          var frac = Math.max(0, 1 - elapsed / 30000);
+          idleFill.style.transform = "scaleX(" + frac + ")";
+          if (frac > 0) idleRAF = requestAnimationFrame(step);
+        }
+        idleRAF = requestAnimationFrame(step);
+      }
+      idleTimer = setTimeout(function () {
+        live.textContent = "Breach Cartography dismissed after 30s idle.";
+        closeModal();
+      }, 30000);
+    }
+
+    // ---- open / close the transient modal ----
+    function openModal(trigger) {
+      if (betaToggle.getAttribute("aria-pressed") !== "true") return;
+      lastTrigger = trigger || null;
+      scrim.classList.add("is-open");
+      modal.classList.add("is-open");
+      modal.setAttribute("aria-hidden", "false");
+      scrim.setAttribute("aria-hidden", "false");
+      modalClose.focus();
+      resetIdle();
+    }
+    function closeModal() {
+      if (!modal.classList.contains("is-open")) return;
+      scrim.classList.remove("is-open");
+      modal.classList.remove("is-open");
+      modal.setAttribute("aria-hidden", "true");
+      scrim.setAttribute("aria-hidden", "true");
+      hideTip();
+      closeConfirm();
+      if (idleTimer) clearTimeout(idleTimer);
+      if (idleRAF) cancelAnimationFrame(idleRAF);
+      if (lastTrigger && typeof lastTrigger.focus === "function") lastTrigger.focus();
+      lastTrigger = null;
+    }
+    mapBtn.addEventListener("click", function () { openModal(mapBtn); });
+    modalClose.addEventListener("click", closeModal);
+    scrim.addEventListener("click", closeModal);
+
+    // any interaction inside the modal resets the 30s idle timer.
+    modal.addEventListener("mousemove", function () {
+      if (modal.classList.contains("is-open")) resetIdle();
+    });
+    modal.addEventListener("keydown", function () {
+      if (modal.classList.contains("is-open")) resetIdle();
+    });
+
+    // ---- focus trap + Esc (M17) ----
+    document.addEventListener("keydown", function (e) {
+      if (!modal.classList.contains("is-open")) return;
+      if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+      if (e.key === "Tab") {
+        var f = modal.querySelectorAll(
+          'button, [href], input, [tabindex]:not([tabindex="-1"])'
+        );
+        var focusables = Array.prototype.filter.call(f, function (el) {
+          return !el.disabled && el.getAttribute("aria-disabled") !== "true" &&
+                 el.offsetParent !== null;
+        });
+        if (!focusables.length) return;
+        var first = focusables[0], last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault(); first.focus();
+        }
+      }
+    });
+
+    // ---- temporal scrubber: ghost nodes after the playhead. ----
+    function fmt(ms) {
+      var s = Math.round(ms / 1000);
+      var m = Math.floor(s / 60);
+      var r = s % 60;
+      return m + ":" + (r < 10 ? "0" : "") + r;
+    }
+    function applyPlayhead(ms) {
+      var visible = 0;
+      for (var i = 0; i < nodes.length; i++) {
+        var t = parseInt(nodes[i].getAttribute("data-t"), 10);
+        var future = t > ms;
+        nodes[i].classList.toggle("is-future", future);
+        if (!future) visible++;
+      }
+      // dim arrows whose source node is in the future
+      var paths = arrows.querySelectorAll("path");
+      for (var j = 0; j < paths.length; j++) {
+        var from = paths[j].getAttribute("data-from");
+        var n = plot.querySelector('.node[data-decision="' + from + '"]');
+        var isFuture = n && n.classList.contains("is-future");
+        paths[j].classList.toggle("is-dim", !!isFuture);
+      }
+      var txt = "playhead " + fmt(ms) + " -- " + visible + " of " + nodes.length +
+                " decisions before this moment";
+      scrubRead.textContent = (ms >= 588000)
+        ? ("playhead " + fmt(ms) + " -- all " + nodes.length + " decisions before the alert")
+        : txt;
+      scrubber.setAttribute("aria-valuetext", txt);
+    }
+    scrubber.addEventListener("input", function () {
+      applyPlayhead(parseInt(scrubber.value, 10));
+    });
+
+    // ---- node tooltip on hover/focus ----
+    function showTip(node) {
+      var id = node.getAttribute("data-decision");
+      var d = LANE[id];
+      if (!d) return;
+      tipVerdict.textContent = d.verdict;
+      tipVerdict.style.color = d.color;
+      tipMsg.textContent = d.msg;
+      tipHash.textContent = d.hash;
+      tipConf.textContent = d.conf;
+      tipHitl.textContent = d.hitl;
+      var r = node.getBoundingClientRect();
+      tip.style.left = Math.min(r.left, window.innerWidth - 360) + "px";
+      tip.style.top = (r.bottom + 8) + "px";
+      tip.classList.add("is-open");
+      tip.setAttribute("aria-hidden", "false");
+    }
+    function hideTip() {
+      tip.classList.remove("is-open");
+      tip.setAttribute("aria-hidden", "true");
+    }
+    for (var n = 0; n < nodes.length; n++) {
+      nodes[n].addEventListener("mouseenter", function () { showTip(this); });
+      nodes[n].addEventListener("mouseleave", hideTip);
+      nodes[n].addEventListener("focus", function () { showTip(this); });
+      nodes[n].addEventListener("blur", hideTip);
+    }
+
+    // ---- surgical revert: select a proposal (radio), then two-step accept. ----
+    function selectProp(label) {
+      var props = revertList.querySelectorAll(".rprop");
+      for (var i = 0; i < props.length; i++) props[i].classList.remove("is-selected");
+      label.classList.add("is-selected");
+      var input = label.querySelector("input");
+      if (input) input.checked = true;
+      var id = label.getAttribute("data-decision");
+      var d = LANE[id];
+      var score = label.getAttribute("data-score");
+      acceptSel.textContent = id + " (" + (d ? d.verdict.split(" ")[0] : "?") +
+                              ", score " + score + ")";
+      closeConfirm();
+      hideReceipt();
+    }
+    revertList.addEventListener("change", function (e) {
+      var label = e.target.closest(".rprop");
+      if (label) selectProp(label);
+    });
+    revertList.addEventListener("click", function (e) {
+      var label = e.target.closest(".rprop");
+      if (label) selectProp(label);
+    });
+
+    function openConfirm() { confirmWrap.classList.add("is-open"); confirmBtn.focus(); }
+    function closeConfirm() { confirmWrap.classList.remove("is-open"); }
+    function hideReceipt() { receipt.classList.remove("is-open"); }
+
+    acceptBtn.addEventListener("click", function () {
+      if (acceptBtn.getAttribute("aria-disabled") === "true") {
+        live.textContent = "Revert locked: SM-self session (polarity G2).";
+        return;
+      }
+      openConfirm(); // step 1 -> step 2, never auto-acts (absolute HITL gate)
+      live.textContent = "Confirm step opened. A second confirm records the override.";
+    });
+    cancelBtn.addEventListener("click", function () {
+      closeConfirm(); acceptBtn.focus();
+    });
+    confirmBtn.addEventListener("click", function () {
+      var sel = revertList.querySelector(".rprop.is-selected");
+      var id = sel ? sel.getAttribute("data-decision") : "?";
+      closeConfirm();
+      receiptTxt.textContent = "Override recorded -- " + id +
+        " reverted via /api/hitl/annotate";
+      receipt.classList.add("is-open");
+      live.textContent = "Override recorded for " + id +
+        ". Modal will dismiss on action.";
+      // action taken -> the transient modal self-dismisses shortly after.
+      setTimeout(closeModal, 1800);
+    });
+
+    // ---- initial paint ----
+    setGate(true);
+    setSelfLocked(false);
+    applyPlayhead(600000);
+  })();
+</script>
+</body>
+</html>

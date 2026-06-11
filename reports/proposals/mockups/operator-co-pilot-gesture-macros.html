@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<!--
+  operator-co-pilot-gesture-macros.html -- KingMode static mockup for BETA #17
+  "Operator Co-Pilot: one-tap ranked next-action macro palette for HITL rows".
+
+  PURPOSE: let the single laptop operator confirm the UI approach BEFORE any
+  code is written. Self-contained: inline <style> + inline <script>, NO external
+  assets / CDNs / fonts. System font stack only.
+
+  This previews the REAL ui-next tokens (theme.css + calm.css variable names and
+  values are reproduced verbatim below) across all three themes
+  obsidian / phosphor / paper, so the operator sees the production palette.
+
+  COMPLIANCE the mockup demonstrates:
+    - BETA gated: default OFF, an inline on/off toggle shows the gated behavior;
+      a "BETA -- default OFF, toggled in Settings > BETA features" pill is shown.
+    - Mounts IN PLACE of the #18 ConfidenceChip when #17 is ON (never both).
+    - Paired label + color + confidence-WORD badges everywhere (color is never
+      the sole signal -- ADR-18 M4/M5). Low-confidence (<60%) entries are dimmed
+      AND carry a literal "low confidence" cue.
+    - Only the APPROVE macro is binding (routes the host commit). TUNE / ESCALATE
+      / SNOOZE pre-stage existing affordances and mutate NOTHING server-side.
+    - Keyboard path (M17): Down/Up move the ranked highlight, Enter fires the
+      highlighted macro, Ctrl/Cmd+Enter fires the top (APPROVE), Esc collapses
+      and hands focus to OVERRIDE (dissent one key away, M6).
+    - SAMPLE DATA / FALLBACK RANKING state tag (state never implicit).
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- is two hyphens),
+  no box-drawing characters.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BETA #17 -- Operator Co-Pilot macro palette (mockup)</title>
+<style>
+  /* ======================================================================
+     TOKEN LAYER -- reproduced verbatim from dashboard/ui-next/src/styles/
+     theme.css + calm.css so this mockup previews the REAL palette values.
+     ====================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired-badge tokens (theme-invariant -- M4) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-decided-fg:     #16a34a;
+    --badge-decided-bg:     #dcfce7;
+    --badge-decided-border: #86efac;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+    --badge-timeout-fg:     #7c3aed;
+    --badge-timeout-bg:     #ede9fe;
+    --badge-timeout-border: #c4b5fd;
+
+    /* spacing + radius rhythm (calm.css) */
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+
+    /* motion / transition tokens (calm.css) */
+    --t-calm:  180ms ease;
+    --t-flash: 300ms ease;
+
+    /* min font sizes (NFR-UI-2) */
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+
+    /* severity type-weight ladder (calm.css) */
+    --sev-quiet-weight: 300;  --sev-base-weight: 400;
+    --sev-notice-weight: 600; --sev-critical-weight: 750;
+  }
+
+  /* THEME: OBSIDIAN -- default, dark industrial telemetry, amber glow */
+  [data-theme="obsidian"] {
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018;
+    --bg-row-hover:#131c2a; --bg-row-flash:rgba(245,158,11,0.09);
+    --border:#192030; --border-hi:rgba(245,158,11,0.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,0.09); --accent-glow:rgba(245,158,11,0.35);
+  }
+  /* THEME: PHOSPHOR -- pure CRT green phosphor terminal */
+  [data-theme="phosphor"] {
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03;
+    --bg-row-hover:#031508; --bg-row-flash:rgba(57,255,20,0.07);
+    --border:#082510; --border-hi:rgba(57,255,20,0.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,0.07); --accent-glow:rgba(57,255,20,0.3);
+  }
+  /* THEME: PAPER -- editorial print, light surface, ink + editorial-red */
+  [data-theme="paper"] {
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea;
+    --bg-row-hover:#f0eae0; --bg-row-flash:rgba(192,57,43,0.07);
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,0.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,0.07); --accent-glow:rgba(192,57,43,0.2);
+  }
+
+  /* --calm-* bridge (calm.css) -- the component layer reads these */
+  :root {
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-row:    var(--bg-row);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-accent-glow:    var(--accent-glow);
+  }
+
+  /* ======================================================================
+     PAGE CHROME -- the mockup wrapper (not part of the shipped component;
+     it stands in for the surrounding Frame A escalation surface so the
+     palette can be reviewed in context).
+     ====================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    line-height: var(--lh-body);
+    padding: var(--space-6);
+    transition: background var(--t-calm), color var(--t-calm);
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+
+  /* -- Header strip: feature title + BETA pill + theme picker + on/off -- */
+  .head {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: var(--space-4);
+    padding-bottom: var(--space-5);
+    border-bottom: 1px solid var(--calm-hairline);
+    margin-bottom: var(--space-6);
+  }
+  .head__id {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700; letter-spacing: 0.18em;
+    color: var(--calm-accent);
+    border: 1px solid var(--calm-hairline-hi);
+    border-radius: var(--radius-sharp);
+    padding: 2px 7px;
+  }
+  .head__title {
+    font-size: 20px; font-weight: 750; letter-spacing: -0.01em;
+    color: var(--calm-ink-loud);
+    margin: 0; flex: 1 1 260px; min-width: 0;
+  }
+  .head__sub {
+    display: block;
+    font-size: var(--fs-meta); font-weight: 400; letter-spacing: 0;
+    color: var(--calm-ink-quiet); margin-top: 2px;
+  }
+  /* BETA pill -- paired text + color, never color alone. */
+  .pill {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: transparent;
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 3px; padding: 3px 8px;
+    white-space: nowrap;
+  }
+  .pill__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--badge-ar-border); flex: 0 0 auto; }
+
+  /* control cluster: theme picker + master on/off */
+  .ctl { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+  .ctl__group { display: flex; align-items: center; gap: var(--space-3); }
+  .ctl__lab {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--calm-hairline); border-radius: var(--radius-sharp); overflow: hidden; }
+  .seg button {
+    appearance: none; cursor: pointer;
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 600;
+    letter-spacing: 0.04em;
+    background: var(--calm-surface-raised); color: var(--calm-ink-chrome);
+    border: 0; border-right: 1px solid var(--calm-hairline);
+    padding: 5px 9px; transition: background var(--t-calm), color var(--t-calm);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--calm-accent-wash); color: var(--calm-ink-loud); }
+  .seg button:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: -2px; }
+
+  /* master on/off switch -- paired text ON / OFF + the switch position */
+  .switch {
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    cursor: pointer; user-select: none;
+  }
+  .switch__track {
+    position: relative; width: 46px; height: 24px; flex: 0 0 auto;
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    border-radius: 999px; transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--calm-ink-chrome);
+    transition: left var(--t-calm), background var(--t-calm);
+  }
+  .switch.is-on .switch__track { background: var(--calm-accent-wash); border-color: var(--badge-ar-border); }
+  .switch.is-on .switch__knob { left: 24px; background: var(--badge-ar-border); }
+  .switch__state {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.12em; min-width: 3ch;
+  }
+  .switch__state.on  { color: var(--badge-ar-fg); }
+  .switch__state.off { color: var(--calm-ink-chrome); }
+  .switch button { appearance: none; background: transparent; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-3); }
+  .switch button:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: 3px; border-radius: 4px; }
+
+  /* ======================================================================
+     HITL ROW SHELL -- the Frame A escalation surface the palette mounts in.
+     Carries the amber left-rail spine (lean-forward grammar).
+     ====================================================================== */
+  .row {
+    border: 1px solid var(--calm-hairline);
+    border-left: 3px solid var(--badge-ar-border);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    padding: var(--space-5);
+    margin-bottom: var(--space-6);
+  }
+  .row__top { display: flex; align-items: flex-start; gap: var(--space-4); flex-wrap: wrap; }
+  .row__badge {
+    font-family: var(--ff-mono); font-size: var(--fs-badge); font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border); border-radius: var(--radius-sharp);
+    padding: 3px 8px; white-space: nowrap;
+  }
+  .row__meta { flex: 1 1 auto; min-width: 0; }
+  .row__reason { font-size: var(--fs-body); color: var(--calm-ink-loud); font-weight: 600; margin: 0 0 2px; }
+  .row__sub {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet); letter-spacing: 0.04em;
+  }
+  .row__sub b { color: var(--calm-ink-chrome); font-weight: 700; }
+
+  /* the slot the co-pilot OR the #18 chip occupies (one or the other) */
+  .slot { margin-top: var(--space-5); }
+
+  /* the #18 chip stand-in (shown when #17 is OFF), so the operator sees what
+     the palette REPLACES. Compact, single-action. */
+  .chip18 {
+    display: flex; align-items: center; gap: var(--space-4);
+    border-left: 3px solid var(--badge-ar-border);
+    background: var(--calm-accent-wash);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4) var(--space-5);
+  }
+  .chip18__dial {
+    font-family: var(--ff-mono); font-weight: 750; font-size: 22px;
+    color: var(--calm-ink-loud); font-variant-numeric: tabular-nums;
+  }
+  .chip18__txt { flex: 1 1 auto; min-width: 0; }
+  .chip18__verb { font-size: var(--fs-body); color: var(--calm-ink-loud); font-weight: 700; }
+  .chip18__verb b { color: var(--badge-ar-fg); }
+  .chip18__hint { font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--calm-ink-quiet); }
+  .chip18__note {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-chrome); margin-top: var(--space-3); letter-spacing: 0.04em;
+  }
+
+  /* the OFF placeholder when the master flag is OFF entirely */
+  .gateoff {
+    border: 1px dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-5);
+    text-align: center;
+    color: var(--calm-ink-quiet);
+    font-family: var(--ff-mono); font-size: var(--fs-meta); letter-spacing: 0.04em;
+  }
+  .gateoff b { color: var(--calm-ink-chrome); }
+
+  /* ======================================================================
+     THE CO-PILOT PALETTE (#17) -- ranked macro palette chip.
+     Asymmetric: AI glyph top-left, bold TOP-action headline, then a ranked
+     ladder of the remaining actions. Rank = ordinal + type weight, never
+     color-only.
+     ====================================================================== */
+  .cp {
+    border-left: 3px solid var(--badge-ar-border);
+    background: var(--calm-accent-wash);
+    border-radius: var(--radius-soft);
+    padding: var(--space-5);
+  }
+  .cp:focus-within { box-shadow: inset 0 0 0 1px var(--calm-hairline-hi); }
+
+  .cp__head { display: flex; align-items: flex-start; gap: var(--space-4); }
+  /* bespoke AI-shaped glyph -- a small hexADIANT mark, decorative (aria-hidden) */
+  .cp__glyph {
+    flex: 0 0 auto; width: 34px; height: 34px; margin-top: 2px;
+    display: grid; place-items: center;
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 8px 8px 8px 2px;   /* asymmetric corner -- not a generic box */
+    background: var(--calm-surface-raised);
+    color: var(--badge-ar-fg);
+    font-family: var(--ff-mono); font-weight: 750; font-size: 15px;
+    letter-spacing: -0.04em;
+  }
+  .cp__headtxt { flex: 1 1 auto; min-width: 0; }
+  .cp__tagrow { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-3); }
+  .cp__tag {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  /* state tag -- SAMPLE DATA / FALLBACK RANKING (paired text, never implicit) */
+  .cp__state {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 3px; padding: 1px 6px;
+  }
+  .cp__state--rank {
+    color: var(--badge-timeout-fg);
+    border-color: var(--badge-timeout-border);
+  }
+
+  /* TOP action headline -- the largest type in the dock (earns the co-pilot role) */
+  .cp__top {
+    display: flex; align-items: baseline; flex-wrap: wrap;
+    gap: var(--space-3); margin-top: var(--space-2);
+  }
+  .cp__top-verb {
+    font-size: 26px; font-weight: 750; letter-spacing: -0.01em;
+    color: var(--calm-ink-loud);
+    font-family: var(--ff-system);
+  }
+  .cp__top-verb b { color: var(--badge-ar-fg); }
+  .cp__top-pct {
+    font-family: var(--ff-mono); font-size: 24px; font-weight: 750;
+    color: var(--calm-ink-loud); font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .cp__top-rationale {
+    font-size: var(--fs-meta); color: var(--calm-ink); margin: var(--space-2) 0 0;
+  }
+  .cp__top-rationale .prec { color: var(--calm-ink-quiet); }
+
+  /* RANKED LADDER -- the remaining 2-4 actions */
+  .cp__ladder {
+    margin-top: var(--space-5);
+    border-top: 1px dashed var(--calm-hairline-hi);
+    padding-top: var(--space-4);
+    display: flex; flex-direction: column; gap: var(--space-2);
+  }
+  .cp__ladlab {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--calm-ink-quiet);
+    margin-bottom: var(--space-2);
+  }
+
+  /* an action button = the full interactive ladder row */
+  .act {
+    appearance: none; text-align: left; cursor: pointer; width: 100%;
+    display: grid;
+    grid-template-columns: 2.2ch minmax(0,1fr) auto;
+    align-items: center;
+    column-gap: var(--space-4); row-gap: 2px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sharp);
+    padding: var(--space-3) var(--space-3);
+    transition: background var(--t-calm), border-color var(--t-calm);
+    color: inherit;
+  }
+  .act:hover { background: var(--calm-surface-hover); }
+  /* the keyboard / pointer highlight -- calm accent-edge shift, never a flash */
+  .act.is-hi {
+    border-color: var(--badge-ar-border);
+    background: var(--calm-accent-wash);
+  }
+  .act:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: 2px; }
+
+  /* the TOP (binding) action gets the heaviest treatment in the ladder context
+     -- but here the top action is the HEADLINE above; the ladder holds ranks 2..n */
+  .act__ord {
+    font-family: var(--ff-mono); font-size: var(--fs-meta); font-weight: 600;
+    color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums; text-align: center;
+  }
+  .act__main { min-width: 0; display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+  .act__verb {
+    font-family: var(--ff-system); font-size: var(--fs-body); font-weight: 600;
+    color: var(--calm-ink-loud);
+  }
+  /* binding vs advisory paired TEXT tag -- not color alone */
+  .act__kind {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 3px; border: 1px solid;
+  }
+  .act__kind--binding {
+    color: var(--badge-ar-fg); border-color: var(--badge-ar-border); background: var(--badge-ar-bg);
+  }
+  .act__kind--advisory {
+    color: var(--calm-ink-chrome); border-color: var(--calm-hairline); background: var(--calm-surface-alt);
+  }
+  .act__conf {
+    display: inline-flex; align-items: baseline; gap: var(--space-2);
+    font-family: var(--ff-mono); font-variant-numeric: tabular-nums;
+    justify-self: end; white-space: nowrap;
+  }
+  .act__pct { font-size: var(--fs-body); font-weight: 700; color: var(--calm-ink-loud); }
+  /* confidence WORD -- the same number rendered as a word so color can be stripped */
+  .act__word {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 3px; border: 1px solid;
+  }
+  .act__word--high     { color: var(--badge-decided-fg);  border-color: var(--badge-decided-border); background: var(--badge-decided-bg); }
+  .act__word--moderate { color: var(--badge-warn-fg);     border-color: var(--badge-warn-border);    background: var(--badge-warn-bg); }
+  .act__word--low      { color: var(--badge-blocked-fg);  border-color: var(--badge-blocked-border); background: var(--badge-blocked-bg); }
+  .act__rationale {
+    grid-column: 2 / 4;
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+    line-height: var(--lh-tight);
+  }
+
+  /* low-confidence (<60%) entries: visibly DIMMED + a literal "low confidence"
+     cue. The dimming EMPHASISES the label; it is never the signal itself. */
+  .act.is-dim { opacity: 0.62; }
+  .act.is-dim .act__verb { color: var(--calm-ink); font-weight: 500; }
+
+  /* footer: BETA annotation + advisory reminder */
+  .cp__foot {
+    margin-top: var(--space-5);
+    border-top: 1px solid var(--calm-hairline);
+    padding-top: var(--space-4);
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4);
+  }
+  .cp__beta {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.08em; color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border); border-radius: 3px; padding: 2px 7px;
+  }
+  .cp__advis {
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet); font-style: italic; flex: 1 1 200px; min-width: 0;
+  }
+  .cp__keys {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--calm-ink-quiet); letter-spacing: 0.02em;
+    width: 100%;
+  }
+  .kbd {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--calm-ink-chrome);
+    background: var(--calm-surface-alt); border: 1px solid var(--calm-hairline);
+    border-radius: 3px; padding: 1px 5px;
+  }
+
+  /* the OVERRIDE control the Esc / TUNE path hands focus to (host affordance) */
+  .row__override {
+    margin-top: var(--space-5);
+    display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
+  }
+  .btn-override {
+    appearance: none; cursor: pointer;
+    font-family: var(--ff-system); font-size: var(--fs-meta); font-weight: 600;
+    color: var(--calm-ink-loud); background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline); border-radius: var(--radius-sharp);
+    padding: 7px 14px; transition: border-color var(--t-calm), background var(--t-calm);
+  }
+  .btn-override:hover { border-color: var(--calm-accent); }
+  .btn-override:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: 2px; }
+  .btn-override.is-staged {
+    border-color: var(--badge-ar-border);
+    background: var(--badge-ar-bg);
+    color: var(--badge-ar-fg);
+  }
+  .override-hint { font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--calm-ink-quiet); }
+
+  /* live action log -- shows which macro fired + that advisory ones mutate nothing */
+  .log {
+    margin-top: var(--space-6);
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    padding: var(--space-4) var(--space-5);
+  }
+  .log__h {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-3);
+  }
+  .log__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-2); }
+  .log__line { font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--calm-ink); }
+  .log__line .when { color: var(--calm-ink-quiet); }
+  .log__line .what { color: var(--calm-ink-loud); font-weight: 700; }
+  .log__line .tag-bind { color: var(--badge-ar-fg); }
+  .log__line .tag-stage { color: var(--badge-timeout-fg); }
+  .log__empty { font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--calm-ink-quiet); font-style: italic; }
+
+  /* notes block */
+  .notes {
+    margin-top: var(--space-6); padding-top: var(--space-5);
+    border-top: 1px solid var(--calm-hairline);
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+  }
+  .notes h3 {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--calm-ink-chrome); margin: 0 0 var(--space-3);
+  }
+  .notes ul { margin: 0; padding-left: 1.2em; }
+  .notes li { margin-bottom: var(--space-2); }
+
+  /* reduced-motion: snap transitions */
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= HEADER STRIP ================= -->
+  <header class="head">
+    <span class="head__id">BETA #17</span>
+    <h1 class="head__title">
+      Operator Co-Pilot -- ranked next-action macro palette
+      <span class="head__sub">One-tap, labelled, advisory. The multi-action superset of the #18 confidence chip.</span>
+    </h1>
+    <span class="pill" title="This feature is default OFF and is toggled in Settings > BETA features > HITL & operator co-pilot">
+      <span class="pill__dot" aria-hidden="true"></span>
+      BETA -- default OFF, toggled in Settings &gt; BETA features
+    </span>
+  </header>
+
+  <div class="ctl" style="margin-bottom: var(--space-6);">
+    <div class="ctl__group">
+      <span class="ctl__lab">Theme</span>
+      <div class="seg" role="group" aria-label="Theme preview">
+        <button type="button" data-theme-btn="obsidian" aria-pressed="true">obsidian</button>
+        <button type="button" data-theme-btn="phosphor" aria-pressed="false">phosphor</button>
+        <button type="button" data-theme-btn="paper" aria-pressed="false">paper</button>
+      </div>
+    </div>
+
+    <div class="ctl__group">
+      <span class="ctl__lab" id="flag-lab">Flag operator-co-pilot</span>
+      <span class="switch is-on" id="masterSwitch">
+        <button type="button" id="masterToggle" role="switch" aria-checked="true" aria-labelledby="flag-lab">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__state on" id="masterStateTxt">ON</span>
+        </button>
+      </span>
+    </div>
+
+    <div class="ctl__group">
+      <span class="ctl__lab">Ranker source</span>
+      <div class="seg" role="group" aria-label="Mock ranker source">
+        <button type="button" data-src-btn="mock" aria-pressed="true">SAMPLE DATA</button>
+        <button type="button" data-src-btn="fallback" aria-pressed="false">FALLBACK RANKING</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= HITL PENDING ROW ================= -->
+  <section class="row" aria-label="HITL pending row (escalated to Frame A)">
+    <div class="row__top">
+      <span class="row__badge">ACTION REQUIRED</span>
+      <div class="row__meta">
+        <p class="row__reason">Recurring approval pattern matched -- operator decision required</p>
+        <p class="row__sub">
+          pending <b>#4817</b> &middot; session <b>sx-7f3a</b> (NON-SM) &middot;
+          trigger <b>recurring_pattern</b> &middot; proposed <b>approve</b> &middot; conf <b>0.92</b>
+        </p>
+      </div>
+    </div>
+
+    <!-- The SINGLE slot. When #17 is ON the palette mounts here IN PLACE of the
+         #18 chip (never both). When #17 is OFF, the #18 chip stand-in shows.
+         When the master flag is OFF, the OFF placeholder shows. -->
+    <div class="slot" id="slot"><!-- filled by script --></div>
+
+    <!-- the host OVERRIDE affordance the Esc / TUNE macros pre-stage / focus -->
+    <div class="row__override">
+      <button type="button" class="btn-override" id="overrideBtn">Override (dissent)</button>
+      <span class="override-hint" id="overrideHint">existing ranked picker -- the only binding dissent path</span>
+    </div>
+  </section>
+
+  <!-- ================= ACTION LOG ================= -->
+  <section class="log" aria-label="Macro action log">
+    <p class="log__h">What each tap did (this is a mockup -- nothing leaves the browser)</p>
+    <ul class="log__list" id="log">
+      <li class="log__empty">No macro fired yet. Tap an action, or focus the palette and use the keyboard.</li>
+    </ul>
+  </section>
+
+  <!-- ================= NOTES ================= -->
+  <section class="notes">
+    <h3>What this mockup demonstrates (review before any code)</h3>
+    <ul>
+      <li><b>Mounts in place of #18:</b> flip the flag OFF and the slot falls back to the single-action #18 ConfidenceChip stand-in -- the two co-pilots are never shown together.</li>
+      <li><b>Paired signals (ADR-18 M4/M5):</b> every action carries a literal VERB + a tabular PERCENT + a confidence WORD (high / moderate / low) + a BINDING / ADVISORY text tag. Strip all color and the meaning still reads.</li>
+      <li><b>Only APPROVE is binding:</b> it routes the host commit (logged as "commit-approve"). TUNE pre-stages the OVERRIDE picker, ESCALATE focuses the escalation control, SNOOZE dims the row client-side -- none mutate the server in v1.</li>
+      <li><b>Low confidence is dimmed AND labelled:</b> the SNOOZE row (&lt; 60%) is dimmed and carries a literal "low confidence" word -- the dimming emphasises the label, it is never the sole cue, and a dimmed macro never auto-fires.</li>
+      <li><b>Keyboard (M17):</b> click the palette (or Tab to it), then Up / Down move the highlight, Enter fires the highlighted macro, Ctrl/Cmd+Enter fires APPROVE directly, Esc collapses and focuses Override (dissent one key away).</li>
+      <li><b>State never implicit:</b> the SAMPLE DATA / FALLBACK RANKING tag shows the ranking provenance; switch it with the "Ranker source" control above.</li>
+      <li><b>Domain-agnostic:</b> every label and rationale is generic governance taxonomy. No monitored-project vocabulary; the palette renders only on rows the dock already self-excludes upstream (G2 polarity).</li>
+    </ul>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- mock data (mirrors mockDataSpec returned by the read route + the
+  //      OperatorCoPilot-data.js mockNextActions fallback) ----
+  var DATA = {
+    pending_id: 4817,
+    source: "mock",                    // "live" | "fallback" | "mock"
+    ranker: "deterministic-fallback",  // "sonnet" | "deterministic-fallback"
+    actions: [
+      { key:"APPROVE",  label:"Approve",             confidence:0.92, macro:"commit-approve",   binding:true,  rationale:"matches 214 prior approvals on this pattern", precedent:214 },
+      { key:"TUNE",     label:"Tune threshold",      confidence:0.78, macro:"prestage-override", binding:false, rationale:"boundary case -- pre-fills the OVERRIDE picker (you confirm)", precedent:31 },
+      { key:"ESCALATE", label:"Escalate / hand off", confidence:0.65, macro:"focus-escalate",    binding:false, rationale:"novel pattern, not seen before this session", precedent:0 },
+      { key:"SNOOZE",   label:"Snooze 5m",           confidence:0.58, macro:"client-snooze",     binding:false, rationale:"low signal-to-noise -- defer without resolving", precedent:7 }
+    ]
+  };
+
+  // state-tag text by source
+  function stateTag(src) {
+    if (src === "mock")     return { txt: "SAMPLE DATA",     cls: "" };
+    if (src === "fallback") return { txt: "FALLBACK RANKING", cls: "cp__state--rank" };
+    return { txt: "LIVE", cls: "" };
+  }
+
+  // confidence -> word (same number, color can be stripped)
+  function confWord(c) {
+    var p = Math.round(c * 100);
+    if (p >= 75) return "high";
+    if (p >= 60) return "moderate";
+    return "low";
+  }
+  function pctOf(c) { return Math.round(c * 100); }
+
+  var slot = document.getElementById("slot");
+  var logEl = document.getElementById("log");
+  var masterOn = true;
+  var rankerSource = "mock";
+  var hiIndex = 0;             // keyboard highlight index into the ranked list
+
+  // ---- action log ----
+  function pushLog(html) {
+    var empty = logEl.querySelector(".log__empty");
+    if (empty) empty.remove();
+    var li = document.createElement("li");
+    li.className = "log__line";
+    var t = new Date();
+    var hh = String(t.getHours()).padStart(2, "0");
+    var mm = String(t.getMinutes()).padStart(2, "0");
+    var ss = String(t.getSeconds()).padStart(2, "0");
+    li.innerHTML = '<span class="when">' + hh + ':' + mm + ':' + ss + '</span> ' + html;
+    logEl.insertBefore(li, logEl.firstChild);
+  }
+
+  // ---- macro routing (mockup only -- nothing leaves the browser) ----
+  function fireMacro(action) {
+    switch (action.macro) {
+      case "commit-approve":
+        pushLog('<span class="what tag-bind">APPROVE</span> fired -> routed host commit(\'approve\') <span class="tag-bind">[BINDING]</span>');
+        break;
+      case "prestage-override":
+        stageOverride(action);
+        pushLog('<span class="what tag-stage">TUNE</span> pre-staged the OVERRIDE picker (top option pre-selected) -- you still Commit <span class="tag-stage">[ADVISORY -- no server write]</span>');
+        break;
+      case "focus-escalate":
+        var ob = document.getElementById("overrideBtn"); if (ob) ob.focus();
+        pushLog('<span class="what tag-stage">ESCALATE</span> moved focus to the escalation / hand-off control <span class="tag-stage">[ADVISORY -- no new disposition]</span>');
+        break;
+      case "client-snooze":
+        pushLog('<span class="what tag-stage">SNOOZE</span> dimmed this row client-side for 5 min (localStorage) <span class="tag-stage">[ADVISORY -- no server write]</span>');
+        break;
+      default:
+        pushLog('unknown macro');
+    }
+  }
+
+  function stageOverride(action) {
+    var ob = document.getElementById("overrideBtn");
+    var oh = document.getElementById("overrideHint");
+    if (ob) { ob.classList.add("is-staged"); ob.textContent = "Override -- pre-filled: " + action.label; ob.focus(); }
+    if (oh) { oh.textContent = "ranked picker opened, top option pre-selected -- press Commit to apply (mockup)"; }
+  }
+
+  // ---- render: the #17 palette ----
+  function renderPalette() {
+    var st = stateTag(rankerSource);
+    var top = DATA.actions[0];
+    var rest = DATA.actions.slice(1);
+
+    var html = '';
+    html += '<div class="cp" tabindex="0" role="group" aria-label="Operator Co-Pilot -- ranked advisory next-action palette. Advisory only; the operator decision is still required." id="cpRoot">';
+
+    // head: glyph + tags
+    html += '  <div class="cp__head">';
+    html += '    <span class="cp__glyph" aria-hidden="true">Co</span>';
+    html += '    <div class="cp__headtxt">';
+    html += '      <div class="cp__tagrow">';
+    html += '        <span class="cp__tag">Co-Pilot -- ranked next actions</span>';
+    html += '        <span class="cp__state ' + st.cls + '">' + st.txt + '</span>';
+    html += '      </div>';
+
+    // TOP action headline (binding, largest type)
+    html += '      <div class="cp__top">';
+    html += '        <span class="cp__top-verb">1. recommend <b>' + esc(top.label.toUpperCase()) + '</b></span>';
+    html += '        <span class="cp__top-pct">' + pctOf(top.confidence) + '%</span>';
+    html += '        <span class="act__word act__word--' + confWord(top.confidence) + '">' + confWord(top.confidence) + ' confidence</span>';
+    html += '        <span class="act__kind act__kind--binding">binding</span>';
+    html += '      </div>';
+    html += '      <p class="cp__top-rationale">' + esc(top.rationale) + ' <span class="prec">(' + top.precedent + ' precedent)</span></p>';
+    html += '    </div>';
+    html += '  </div>';
+
+    // ladder: ranks 2..n
+    html += '  <div class="cp__ladder" role="listbox" aria-label="Lower-ranked next actions" id="cpLadder">';
+    html += '    <div class="cp__ladlab">Or pick another response</div>';
+    rest.forEach(function (a, i) {
+      var rank = i + 2;
+      var pct = pctOf(a.confidence);
+      var word = confWord(a.confidence);
+      var dim = pct < 60;
+      html += '    <button type="button" class="act' + (dim ? ' is-dim' : '') + '"' +
+              ' role="option" aria-selected="false"' +
+              ' data-idx="' + rank + '"' +
+              ' aria-label="' + esc(a.label) + ', ' + pct + ' percent, ' + word + ' confidence, ' + (a.binding ? 'binding' : 'advisory') + '. ' + esc(a.rationale) + '">';
+      html += '      <span class="act__ord" aria-hidden="true">' + rank + '.</span>';
+      html += '      <span class="act__main">';
+      html += '        <span class="act__verb">' + esc(a.label) + '</span>';
+      html += '        <span class="act__kind ' + (a.binding ? 'act__kind--binding' : 'act__kind--advisory') + '">' + (a.binding ? 'binding' : 'advisory') + '</span>';
+      if (dim) html += '        <span class="act__kind act__kind--advisory" style="color:var(--badge-blocked-fg);border-color:var(--badge-blocked-border);background:var(--badge-blocked-bg);">low confidence</span>';
+      html += '      </span>';
+      html += '      <span class="act__conf">';
+      html += '        <span class="act__pct">' + pct + '%</span>';
+      html += '        <span class="act__word act__word--' + word + '">' + word + '</span>';
+      html += '      </span>';
+      html += '      <span class="act__rationale">' + esc(a.rationale) + (a.precedent ? '  (' + a.precedent + ' precedent)' : '  (no precedent this session)') + '</span>';
+      html += '    </button>';
+    });
+    html += '  </div>';
+
+    // footer
+    html += '  <div class="cp__foot">';
+    html += '    <span class="cp__beta">BETA -- default OFF, toggled in Settings</span>';
+    html += '    <span class="cp__advis">Advisory only. The absolute HITL gate stays intact -- no macro auto-fires, and only APPROVE is binding.</span>';
+    html += '    <span class="cp__keys">';
+    html += '      <span class="kbd">&uarr;</span><span class="kbd">&darr;</span> move highlight &middot; ';
+    html += '      <span class="kbd">Enter</span> fire highlighted &middot; ';
+    html += '      <span class="kbd">Ctrl+Enter</span> fire APPROVE &middot; ';
+    html += '      <span class="kbd">Esc</span> dissent (Override)';
+    html += '    </span>';
+    html += '  </div>';
+    html += '</div>';
+
+    slot.innerHTML = html;
+    hiIndex = 0;
+    wirePalette();
+  }
+
+  // ---- render: the #18 chip stand-in (shown when the #17 flag is OFF) ----
+  function renderChip18() {
+    var top = DATA.actions[0];
+    var html = '';
+    html += '<div class="chip18">';
+    html += '  <span class="chip18__dial" aria-hidden="true">' + pctOf(top.confidence) + '%</span>';
+    html += '  <span class="chip18__txt">';
+    html += '    <span class="chip18__verb">recommend <b>' + esc(top.label.toUpperCase()) + '</b> &middot; ' + confWord(top.confidence) + ' confidence</span>';
+    html += '    <div class="chip18__hint">single-action #18 chip -- one-tap APPROVE only. <span class="kbd">Ctrl+Enter</span> accept &middot; <span class="kbd">Esc</span> dissent</div>';
+    html += '  </span>';
+    html += '</div>';
+    html += '<p class="chip18__note">#17 is OFF: the slot falls back to the shipped #18 ConfidenceChip. Flip "operator-co-pilot" ON to see the multi-action palette mount IN PLACE of it.</p>';
+    slot.innerHTML = html;
+  }
+
+  // ---- render: the master-OFF placeholder ----
+  function renderGateOff() {
+    slot.innerHTML =
+      '<div class="gateoff">Flag <b>operator-co-pilot</b> is <b>OFF</b> (default). ' +
+      'Neither the #17 palette nor the #18 chip mounts -- the row shows only its native ' +
+      'Approve / Override / Dismiss affordances. No network call, no timer registered.</div>';
+  }
+
+  // The master switch in THIS mockup toggles the #17 flag specifically. When the
+  // #17 flag is ON -> palette. When OFF -> the #18 chip still renders (the host
+  // would mount #18 unless it too were OFF). So OFF here demonstrates the
+  // "mounts in place of #18" rule (the chip reappears).
+  function renderSlot() {
+    if (masterOn) renderPalette();
+    else renderChip18();
+  }
+
+  // ---- keyboard + click wiring for the palette ----
+  function wirePalette() {
+    var root = document.getElementById("cpRoot");
+    if (!root) return;
+    var actBtns = Array.prototype.slice.call(root.querySelectorAll(".act"));
+
+    // index map: 0 = top headline action (no button; fired via Ctrl+Enter or
+    // Enter when highlight is on it conceptually). The ladder buttons are 1..n.
+    // We represent the highlight over the FULL ranked list incl. the headline:
+    //   hiIndex 0 -> top (headline), 1..n -> ladder buttons.
+    function paint() {
+      actBtns.forEach(function (b, i) {
+        var on = (i + 1) === hiIndex;
+        b.classList.toggle("is-hi", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      // headline highlight is implicit (it is always the top recommendation);
+      // when hiIndex===0 we show no ladder highlight.
+    }
+    paint();
+
+    // click a ladder button -> fire its macro
+    actBtns.forEach(function (b) {
+      b.addEventListener("click", function () {
+        var idx = parseInt(b.getAttribute("data-idx"), 10) - 1; // 0-based into DATA.actions
+        fireMacro(DATA.actions[idx]);
+      });
+      b.addEventListener("mouseenter", function () {
+        hiIndex = parseInt(b.getAttribute("data-idx"), 10) - 1; // align with DATA index? use rank
+        // keep hiIndex in the headline+ladder index space: rank N -> hiIndex N-1
+        hiIndex = parseInt(b.getAttribute("data-idx"), 10) - 1;
+        paint();
+      });
+    });
+
+    // the top headline acts as a click target too (fire APPROVE)
+    var topHead = root.querySelector(".cp__top");
+    if (topHead) {
+      topHead.style.cursor = "pointer";
+      topHead.addEventListener("click", function () { fireMacro(DATA.actions[0]); });
+    }
+
+    function fireHighlighted() {
+      // hiIndex 0 -> headline (APPROVE); else ladder action
+      fireMacro(DATA.actions[hiIndex] || DATA.actions[0]);
+    }
+
+    root.addEventListener("keydown", function (e) {
+      var n = DATA.actions.length; // 0..n-1 in highlight space
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        hiIndex = Math.min(n - 1, hiIndex + 1);
+        paint();
+        if (hiIndex > 0 && actBtns[hiIndex - 1]) actBtns[hiIndex - 1].focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        hiIndex = Math.max(0, hiIndex - 1);
+        paint();
+        if (hiIndex > 0 && actBtns[hiIndex - 1]) actBtns[hiIndex - 1].focus();
+        else root.focus();
+      } else if (e.key === "Enter") {
+        if ((e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          fireMacro(DATA.actions[0]); // Ctrl/Cmd+Enter = top APPROVE directly
+        } else {
+          e.preventDefault();
+          fireHighlighted();
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        var ob = document.getElementById("overrideBtn");
+        if (ob) ob.focus();
+        pushLog('<span class="what tag-stage">Esc</span> collapsed the palette and moved focus to Override -- dissent one key away');
+      }
+    });
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // ---- master on/off switch ----
+  var sw = document.getElementById("masterSwitch");
+  var swBtn = document.getElementById("masterToggle");
+  var swTxt = document.getElementById("masterStateTxt");
+  function setMaster(on) {
+    masterOn = on;
+    sw.classList.toggle("is-on", on);
+    swBtn.setAttribute("aria-checked", on ? "true" : "false");
+    swTxt.textContent = on ? "ON" : "OFF";
+    swTxt.className = "switch__state " + (on ? "on" : "off");
+    renderSlot();
+  }
+  swBtn.addEventListener("click", function () { setMaster(!masterOn); });
+
+  // ---- theme picker ----
+  Array.prototype.forEach.call(document.querySelectorAll("[data-theme-btn]"), function (btn) {
+    btn.addEventListener("click", function () {
+      var t = btn.getAttribute("data-theme-btn");
+      document.documentElement.setAttribute("data-theme", t);
+      Array.prototype.forEach.call(document.querySelectorAll("[data-theme-btn]"), function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+    });
+  });
+
+  // ---- ranker source picker (SAMPLE DATA vs FALLBACK RANKING) ----
+  Array.prototype.forEach.call(document.querySelectorAll("[data-src-btn]"), function (btn) {
+    btn.addEventListener("click", function () {
+      rankerSource = btn.getAttribute("data-src-btn");
+      DATA.source = rankerSource;
+      DATA.ranker = (rankerSource === "fallback") ? "deterministic-fallback" : "deterministic-fallback";
+      Array.prototype.forEach.call(document.querySelectorAll("[data-src-btn]"), function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      if (masterOn) renderSlot();
+    });
+  });
+
+  // initial paint
+  renderSlot();
+})();
+</script>
+</body>
+</html>

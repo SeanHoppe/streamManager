@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<!--
+  allow-pattern-auto-graduation.html -- KingMode mockup for BETA feature
+  "allow-pattern-auto-graduation" (#1: ALLOW-pattern auto-graduation
+  (learn-mode -> static rule, operator-confirmed)).
+
+  PURPOSE: a static, self-contained preview the operator clicks through to
+  confirm the UI approach BEFORE any Svelte/backend code is written. Not a
+  build artefact -- a design gate (directive #2). The build itself is GATED on
+  two ADR-18 amendments (new pattern_graduated bus envelope + verdict
+  short-circuit architecture); the amber footnote below states this so the
+  operator knows the UI is approvable but the code is blocked.
+
+  REUSES THE REAL TOKENS: the :root + [data-theme="obsidian"] block below is
+  lifted verbatim from dashboard/ui-next/src/styles/theme.css so this previews
+  the actual obsidian palette (amber accent #f59e0b, AA-documented dim values),
+  the M4 fixed badge tokens, and the --sm-* compatibility bridge.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- written as two
+  hyphens), no box-drawing. System font stack only -- no external assets.
+
+  WHAT THE OPERATOR SEES (vs real build):
+    - A calm, still-water "Graduation Ledger" card -- NOT an escalation, never
+      auto-foregrounds (M2). Default-OFF; carries the literal "BETA -- default
+      OFF, toggled in Settings > BETA features" pill + an inline on/off switch
+      wired client-side so the gated default-OFF -> ON behaviour is visible.
+    - A three-band vertical ledger (NOT a generic table):
+        Band 1 CANDIDATES  -- the only actionable band. Each row: command SHAPE
+                              in mono display type as the hero, then a tabular-
+                              nums evidence strip (497 ALLOW / 100% conf / 0
+                              overrides / 0 blocks) rendered FROM DATA. One
+                              "Graduate to static ALLOW" button per row.
+        Band 2 GRADUATED   -- a quieter, recessed sub-list, each with a Demote
+                              affordance (the CrossSessionPatterns demote idiom).
+        Band 3 FLOOR-LOCKED -- the most distinctive band. Floor shapes show with
+                              ineligible_reason verbatim and NO graduate control
+                              in the DOM (absent, not merely disabled), so the
+                              register reads as "different in kind".
+    - The key interaction: Graduate does NOT act on click -- it opens an inline
+      confirm strip (absolute HITL gate, M8) that RESTATES the evidence with
+      explicit Confirm / Cancel. On Confirm the row moves OPTIMISTICALLY to the
+      Graduated band; a simulated POST-failure toggle shows the rollback.
+    - Paired label+colour badges everywhere (M4): CANDIDATE / GRADUATED --
+      static ALLOW / FLOOR -- NEVER GRADUATES. Remove all colour and the words
+      alone still fully convey state.
+    - Keyboard path (M17): every control is a real native <button>; Tab walks
+      candidate -> Graduate -> (confirm opens) Confirm/Cancel -> next; Enter
+      activates; Escape collapses an open confirm strip without graduating.
+      Counts + state changes announce via an aria-live=polite region.
+    - The polarity dual-key (G2) is surfaced as a visible excluded_self count:
+      SM's own session rows are excluded from the corpus aggregate.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ALLOW-pattern auto-graduation -- KingMode mockup (BETA)</title>
+<style>
+  /* ===================================================================
+     TOKEN LAYER -- lifted from dashboard/ui-next/src/styles/theme.css
+     (obsidian theme + M4 fixed badge tokens + --sm-* bridge). Verbatim
+     values so this mockup previews the REAL palette.
+     =================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* M4 fixed badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-decided-fg:     #16a34a;
+    --badge-decided-bg:     #dcfce7;
+    --badge-decided-border: #86efac;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+    --badge-timeout-fg:     #7c3aed;
+    --badge-timeout-bg:     #ede9fe;
+    --badge-timeout-border: #c4b5fd;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;   /* AA 5.37:1 on #0c1118 */
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* --sm-* compatibility bridge (one place, resolves at active theme) */
+  :root {
+    --sm-bg:          var(--bg);
+    --sm-bg-card:     var(--bg-card);
+    --sm-text:        var(--text-bright);
+    --sm-text-dim:    var(--text-dim);
+    --sm-text-bright: var(--text-bright);
+    --sm-border:      var(--border);
+    --sm-accent:      var(--accent);
+    --sm-font-mono:   var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* M17: global 2px solid amber focus ring at 2px offset on every focusable. */
+  :focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+  }
+
+  /* a11y: a visually-hidden helper for screen-reader-only text. */
+  .vh {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0; border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  /* ===================================================================
+     PAGE SHELL
+     =================================================================== */
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 4rem;
+  }
+
+  /* --- compact feature header strip --- */
+  .hdr {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.1rem;
+    padding-bottom: 1.1rem;
+    margin-bottom: 1.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .hdr__id {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.25rem;
+  }
+  .hdr__title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-bright);
+    margin: 0;
+    line-height: 1.15;
+  }
+  .hdr__sub {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    margin: 0.45rem 0 0;
+    max-width: 64ch;
+    line-height: 1.45;
+  }
+  .hdr__right {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.6rem;
+  }
+
+  /* BETA pill -- paired text + tint, never tint alone. */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 999px;
+    padding: 0.24rem 0.62rem;
+    white-space: nowrap;
+    text-align: right;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline on/off toggle (client-wired -- shows the gate) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .gate__label {
+    font-family: var(--ff-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+  .switch__track {
+    width: 40px; height: 22px;
+    border-radius: 999px;
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch[aria-pressed="true"] .switch__track {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .switch[aria-pressed="true"] .switch__knob {
+    transform: translateX(18px);
+    background: var(--accent);
+  }
+  .switch__state {
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    min-width: 3ch;
+    color: var(--text-dim);
+  }
+  .switch[aria-pressed="true"] .switch__state { color: var(--accent); }
+
+  /* amber gating footnote -- build is gated on the ADR-18 amendments. */
+  .amendment {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    margin: 0 0 1.3rem;
+    padding: 0.65rem 0.85rem;
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 6px;
+    background: rgba(234, 88, 12, 0.06);
+  }
+  .amendment__tag {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+    border: 1px solid var(--badge-warn-border);
+    border-radius: 3px;
+    padding: 0.12rem 0.4rem;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .amendment__txt {
+    font-size: 0.74rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    margin: 0;
+  }
+  .amendment__txt strong { color: var(--text-bright); font-weight: 700; }
+
+  /* ===================================================================
+     GATED BODY: when the BETA flag is OFF, everything below the header
+     collapses to a single calm "OFF" note -- demonstrating zero pollers /
+     SSE / fetch when default-OFF.
+     =================================================================== */
+  .ledger-off {
+    display: none;
+    padding: 1.4rem 1.2rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  body[data-grad="off"] .ledger-off { display: block; }
+  body[data-grad="off"] .ledger-on  { display: none; }
+
+  /* ===================================================================
+     GLANCE COUNT CHIP -- the Frame-A header-gutter entry point: a small,
+     non-escalating "Graduation candidates: N" count. Paired word + number.
+     =================================================================== */
+  .glance {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.7rem 1rem;
+    margin: 0 0 1.2rem;
+  }
+  .count-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
+  }
+  .count-chip strong {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .excluded {
+    font-family: var(--ff-mono);
+    font-size: 0.68rem;
+    color: var(--text-ui);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .excluded strong {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .excluded__mark {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 0.3rem;
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+
+  /* ===================================================================
+     LEDGER CARD -- calm, still water. NOT an escalation.
+     =================================================================== */
+  .ledger {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-card);
+    overflow: hidden;
+  }
+  .ledger__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+    padding: 0.9rem 1.1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .ledger__title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+  .ledger__thresh {
+    margin-left: auto;
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-ui);
+    letter-spacing: 0.02em;
+  }
+  .ledger__thresh b {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+  }
+
+  /* --- band shell --- */
+  .band { border-bottom: 1px solid var(--border); }
+  .band:last-child { border-bottom: none; }
+  .band__cap {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.65rem 1.1rem 0.5rem;
+  }
+  .band__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .band__n {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .band__hint {
+    margin-left: auto;
+    font-size: 0.68rem;
+    color: var(--text-ui);
+  }
+
+  /* Band 1 CANDIDATES is given the most ink (generous padding + the action). */
+  .band--candidates .row { padding: 0.95rem 1.1rem; }
+  .band--candidates { background: transparent; }
+
+  .row {
+    display: block;
+    border-top: 1px solid var(--border);
+  }
+  .band__cap + .row { border-top: none; }
+
+  .row__main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.7rem 1rem;
+  }
+
+  /* hero command shape in mono display type */
+  .shape {
+    font-family: var(--ff-mono);
+    font-size: 0.98rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: -0.005em;
+  }
+
+  /* tight tabular-nums evidence strip -- aligns like a flight board */
+  .evidence {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0 0.95rem;
+    font-family: var(--ff-mono);
+    font-size: 0.74rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .ev {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.32rem;
+  }
+  .ev__n {
+    color: var(--text-bright);
+    font-weight: 700;
+  }
+  .ev__k {
+    color: var(--text-dim);
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  /* the zero-risk evidence terms read green to reinforce "clean" -- still paired
+     with their key word so colour is never the only signal. */
+  .ev--clean .ev__n { color: var(--c-allow); }
+
+  .row__spacer { flex: 1 1 auto; }
+
+  /* paired label+colour badges (M4) */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .badge__dot { width: 7px; height: 7px; border-radius: 2px; flex: 0 0 auto; }
+  .badge--candidate {
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+  }
+  .badge--candidate .badge__dot { background: var(--badge-ar-fg); }
+  .badge--graduated {
+    color: var(--badge-decided-fg);
+    background: var(--badge-decided-bg);
+    border: 1px solid var(--badge-decided-border);
+  }
+  .badge--graduated .badge__dot { background: var(--badge-decided-fg); }
+  .badge--floor {
+    color: var(--badge-timeout-fg);
+    background: var(--badge-timeout-bg);
+    border: 1px solid var(--badge-timeout-border);
+  }
+  /* the floor badge carries a paired lock glyph + label so it reads without
+     colour (M4 / colourblind). The "[L]" is an ASCII lock stand-in. */
+  .badge--floor .badge__lock {
+    font-size: 0.62rem;
+    font-weight: 800;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    padding: 0 0.18rem;
+    line-height: 1.2;
+  }
+
+  /* the per-candidate Graduate action -- AAA contrast amber-on-dark control */
+  .grad-btn {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 6px;
+    padding: 0.42rem 0.8rem;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .grad-btn:hover {
+    background: var(--accent);
+    color: #0a0a0a;
+  }
+
+  /* inline confirm strip (absolute HITL gate -- no auto-apply, M8) */
+  .confirm {
+    margin-top: 0.8rem;
+    border: 1px solid var(--badge-ar-border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    background: rgba(245, 158, 11, 0.05);
+    padding: 0.75rem 0.9rem;
+  }
+  .confirm[hidden] { display: none; }
+  .confirm__q {
+    font-size: 0.82rem;
+    color: var(--text-bright);
+    margin: 0 0 0.35rem;
+    line-height: 1.45;
+  }
+  .confirm__q code {
+    font-family: var(--ff-mono);
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .confirm__note {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin: 0 0 0.7rem;
+    line-height: 1.45;
+  }
+  .confirm__note b { color: var(--text); font-weight: 700; }
+  .confirm__actions {
+    display: flex;
+    gap: 0.55rem;
+  }
+  .btn-confirm {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #0a0a0a;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.42rem 0.85rem;
+    cursor: pointer;
+  }
+  .btn-confirm:hover { filter: brightness(1.08); }
+  .btn-cancel {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.42rem 0.85rem;
+    cursor: pointer;
+  }
+  .btn-cancel:hover { color: var(--text-bright); border-color: var(--text-ui); }
+
+  /* Band 2 GRADUATED -- quieter, recessed sub-list (lower contrast text but
+     still AAA for its own size, NOT relying on dimness alone). */
+  .band--graduated { background: var(--bg-row-alt); }
+  .band--graduated .row { padding: 0.7rem 1.1rem; }
+  .band--graduated .shape { font-size: 0.85rem; color: var(--text); }
+  .band--graduated .ev__n { color: var(--text); }
+  .grad-meta {
+    font-family: var(--ff-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .demote-btn {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.34rem 0.7rem;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .demote-btn:hover { color: var(--badge-warn-fg); border-color: var(--badge-warn-border); }
+
+  /* Band 3 FLOOR-LOCKED -- the most distinctive band. Dense, locked,
+     deliberately un-pretty. A struck register: a hatched left rule + a locked
+     surface. NO graduate control exists in this band's DOM at all. */
+  .band--floor {
+    background:
+      repeating-linear-gradient(
+        135deg,
+        rgba(124, 58, 237, 0.05) 0px,
+        rgba(124, 58, 237, 0.05) 6px,
+        transparent 6px,
+        transparent 12px
+      ),
+      var(--bg-row);
+  }
+  .band--floor .band__eyebrow { color: var(--badge-timeout-fg); }
+  .band--floor .row { padding: 0.7rem 1.1rem; }
+  .band--floor .shape {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-decoration: line-through;
+    text-decoration-color: var(--badge-timeout-border);
+    text-decoration-thickness: 1px;
+  }
+  .floor-reason {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    line-height: 1.4;
+    margin: 0.3rem 0 0;
+    max-width: 70ch;
+  }
+  .floor-reason b { color: var(--badge-timeout-fg); font-weight: 700; }
+  /* an explicit "no action" affordance label so the absence reads as intent,
+     not omission. */
+  .floor-noact {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    white-space: nowrap;
+  }
+
+  /* empty-band note */
+  .band__empty {
+    padding: 0.7rem 1.1rem 0.9rem;
+    font-size: 0.74rem;
+    color: var(--text-ui);
+    border-top: 1px solid var(--border);
+  }
+  .band__cap + .band__empty { border-top: none; }
+
+  /* mock-source + degraded-toggle footer controls */
+  .controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+    margin: 1.2rem 0 0;
+    padding-top: 1rem;
+    border-top: 1px dashed var(--border);
+    font-size: 0.72rem;
+    color: var(--text-ui);
+  }
+  .controls__lbl {
+    font-family: var(--ff-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .mini-toggle {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.34rem 0.7rem;
+    cursor: pointer;
+  }
+  .mini-toggle[aria-pressed="true"] {
+    color: var(--badge-warn-fg);
+    border-color: var(--badge-warn-border);
+    background: rgba(234, 88, 12, 0.07);
+  }
+  .mock-flag {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.12rem 0.42rem;
+  }
+
+  /* rollback flash on a graduated row that failed to persist */
+  .row--rollback { animation: rollbackFlash 0.9s ease; }
+  @keyframes rollbackFlash {
+    0%   { background: rgba(220, 38, 38, 0.18); }
+    100% { background: transparent; }
+  }
+
+  /* reduced-motion: still water -- no flashes, no transitions. */
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body data-grad="on">
+  <div class="page">
+
+    <!-- ============ HEADER STRIP ============ -->
+    <header class="hdr">
+      <div class="hdr__left">
+        <p class="hdr__id">BETA FEATURE #1 -- group: hitl</p>
+        <h1 class="hdr__title">ALLOW-pattern auto-graduation</h1>
+        <p class="hdr__sub">
+          Turn the corpus's proven "this is always fine" into a cheap static
+          ALLOW rule with one operator-confirmed click -- killing latency and
+          quota on routine toil while the safety floor stays permanently
+          un-graduatable. Surfaces candidates only; it never promotes anything
+          itself.
+        </p>
+      </div>
+      <div class="hdr__right">
+        <span class="beta-pill">
+          <span class="beta-pill__dot" aria-hidden="true"></span>
+          BETA -- default OFF, toggled in Settings &gt; BETA features
+        </span>
+        <span class="gate">
+          <span class="gate__label" id="gate-text">Feature</span>
+          <button type="button" class="switch" id="grad-toggle"
+                  aria-pressed="true" aria-labelledby="gate-text gate-state">
+            <span class="switch__track" aria-hidden="true">
+              <span class="switch__knob"></span>
+            </span>
+            <span class="switch__state" id="gate-state">ON</span>
+          </button>
+        </span>
+      </div>
+    </header>
+
+    <!-- ============ AMENDMENT FOOTNOTE (build gated) ============ -->
+    <div class="amendment" role="note">
+      <span class="amendment__tag">Build gated</span>
+      <p class="amendment__txt">
+        <strong>UI is approvable; the build is blocked on two ADR-18
+        amendments.</strong>
+        (1) a new <code>pattern_graduated</code> bus envelope (FROZEN schema
+        family) with same-PR cassette + soak coverage, and (2) the verdict
+        short-circuit architecture for where a graduated rule fast-checks in the
+        decision path. The graduation WRITE touches a FROZEN seam
+        (governance.py / message_bus.py) -- this preview confirms the UX before
+        any code lands.
+      </p>
+    </div>
+
+    <!-- ============ OFF STATE (flag default-OFF) ============ -->
+    <div class="ledger-off" role="status">
+      <strong>Graduation Ledger is OFF.</strong> No corpus aggregate is read, no
+      candidates are computed, and no graduation control is mounted. Flip the
+      toggle above (or Settings &gt; BETA features) to preview the ON behaviour.
+      Default-OFF means zero work happens until you opt in.
+    </div>
+
+    <!-- ============ ON STATE ============ -->
+    <div class="ledger-on">
+
+      <!-- glance entry point: count chip + visible excluded_self (G2 polarity) -->
+      <div class="glance">
+        <span class="count-chip">
+          Graduation candidates:
+          <strong id="cand-count" aria-hidden="true">3</strong>
+          <span class="vh" id="cand-count-sr">3 candidates</span>
+        </span>
+        <span class="excluded" title="Polarity dual-key: SM's own session rows are excluded from the corpus aggregate (project_slug NOT IN {streamManager} AND session_id != self).">
+          <span class="excluded__mark">excluded self</span>
+          <strong>1142</strong> SM-self decisions held out of the corpus
+        </span>
+      </div>
+
+      <!-- aria-live region: count + state changes announce here (M17) -->
+      <div class="vh" id="live" role="status" aria-live="polite"></div>
+
+      <!-- ============ THE LEDGER (three bands) ============ -->
+      <section class="ledger" aria-label="Graduation Ledger">
+
+        <div class="ledger__head">
+          <h2 class="ledger__title">Graduation Ledger</h2>
+          <span class="ledger__thresh">
+            thresholds: n_allow &gt;= <b>30</b> &nbsp; mean_conf &gt;= <b>0.95</b>
+          </span>
+        </div>
+
+        <!-- ---------- BAND 1: CANDIDATES (actionable) ---------- -->
+        <div class="band band--candidates">
+          <div class="band__cap">
+            <span class="badge badge--candidate" title="Proven-routine shapes that clear both thresholds and never matched the safety floor. Surfaced for one-tap operator sign-off; never self-promote.">
+              <span class="badge__dot" aria-hidden="true"></span>CANDIDATE
+            </span>
+            <span class="band__eyebrow">Proven routine -- awaiting sign-off</span>
+            <span class="band__n"><span id="cand-band-n">3</span> shapes</span>
+          </div>
+          <ul class="band__list" id="cand-list" role="list">
+            <!-- rows injected from the mock fixture -->
+          </ul>
+          <p class="band__empty" id="cand-empty" hidden>
+            No candidates clear the thresholds right now. Routine shapes appear
+            here once the corpus proves them.
+          </p>
+        </div>
+
+        <!-- ---------- BAND 2: GRADUATED (recessed + demote) ---------- -->
+        <div class="band band--graduated">
+          <div class="band__cap">
+            <span class="badge badge--graduated" title="Shapes the operator confirmed into a static ALLOW rule. The verdict path short-circuits on these. Reversible via Demote.">
+              <span class="badge__dot" aria-hidden="true"></span>GRADUATED -- static ALLOW
+            </span>
+            <span class="band__eyebrow">Settled -- verdict short-circuits</span>
+            <span class="band__n"><span id="grad-band-n">1</span> rules</span>
+          </div>
+          <ul class="band__list" id="grad-list" role="list">
+            <!-- rows injected from the mock fixture + optimistic moves -->
+          </ul>
+          <p class="band__empty" id="grad-empty" hidden>
+            Nothing graduated yet. Confirm a candidate above to add a static
+            ALLOW rule here.
+          </p>
+        </div>
+
+        <!-- ---------- BAND 3: FLOOR-LOCKED (no control in DOM) ---------- -->
+        <div class="band band--floor" aria-label="Permanently ineligible -- safety floor">
+          <div class="band__cap">
+            <span class="badge badge--floor" title="Safety-floor shapes (destructive shell, force-push, credential exfil, eval/exec) are never learnable. They can never become candidates -- even at 100% ALLOW with n_allow=999. No graduate control exists here.">
+              <span class="badge__lock" aria-hidden="true">L</span>FLOOR -- NEVER GRADUATES
+            </span>
+            <span class="band__eyebrow">Safety floor -- not learnable</span>
+            <span class="band__n"><span id="floor-band-n">1</span> shapes</span>
+            <span class="band__hint">read-only register</span>
+          </div>
+          <ul class="band__list" id="floor-list" role="list">
+            <!-- rows injected from the mock fixture; NO graduate button -->
+          </ul>
+        </div>
+
+      </section>
+
+      <!-- mock-source + simulate-POST-failure controls -->
+      <div class="controls">
+        <span class="controls__lbl">Preview controls</span>
+        <button type="button" class="mini-toggle" id="fail-toggle" aria-pressed="false"
+                title="When ON, the next Confirm simulates a POST failure so you can see the optimistic move roll back.">
+          Simulate POST failure: OFF
+        </button>
+        <span class="mock-flag" title="This preview renders from the deterministic fixture (mock:true). The live component renders identically from GET /api/graduation/candidates.">mock:true</span>
+      </div>
+
+    </div><!-- /.ledger-on -->
+
+  </div>
+
+<script>
+  (function () {
+    "use strict";
+
+    // =================================================================
+    // MOCK FIXTURE -- mirrors GET /api/graduation/candidates exactly so
+    // the live component renders identically when gov.db is unavailable.
+    // ASCII-only, domain-agnostic shapes (generic dev commands).
+    // The ineligible_floor entry is LOAD-BEARING for test verification:
+    // a seeded 100%-ALLOW destructive shape MUST appear permanently
+    // ineligible, NEVER as a candidate (floor-guard proof).
+    // =================================================================
+    var FIXTURE = {
+      generated_at: 1749614400000,
+      thresholds: { min_n_allow: 30, min_mean_confidence: 0.95 },
+      excluded_self: 1142,
+      own_session_id: "sm-self-xxxx",
+      mock: true,
+      candidates: [
+        { hash: "a1b2c3d4e5f6", shape: "git status", n_allow: 497, mean_confidence: 1.0, n_override: 0, n_block_ever: 0, floor_eligible: true, first_seen: 1748400000000, last_seen: 1749610000000, sessions_seen: 6, status: "candidate" },
+        { hash: "b2c3d4e5f6a1", shape: "ruff check src/", n_allow: 213, mean_confidence: 0.992, n_override: 0, n_block_ever: 0, floor_eligible: true, first_seen: 1748500000000, last_seen: 1749600000000, sessions_seen: 4, status: "candidate" },
+        { hash: "c3d4e5f6a1b2", shape: "pytest tests/ -q", n_allow: 156, mean_confidence: 0.971, n_override: 0, n_block_ever: 0, floor_eligible: true, first_seen: 1748600000000, last_seen: 1749590000000, sessions_seen: 5, status: "candidate" }
+      ],
+      graduated: [
+        { hash: "d4e5f6a1b2c3", shape: "git diff --stat", graduated_at: 1749500000000, n_allow_at_graduation: 88, graduated_by: "operator", status: "graduated" }
+      ],
+      ineligible_floor: [
+        { hash: "e5f6a1b2c3d4", shape: "rm -rf --no-preserve-root /", n_allow: 412, mean_confidence: 1.0, floor_eligible: false, ineligible_reason: "matches safety-floor (destructive_shell) -- the floor is not learnable", status: "permanently_ineligible" }
+      ]
+    };
+
+    // mock POST /api/graduation/{hash}/confirm
+    function confirmGraduation(hash) {
+      if (failNext) {
+        return { ok: false, error: "simulated POST failure" };
+      }
+      return { ok: true, hash: hash, status: "graduated", graduated_at: 1749614400000 };
+    }
+    // mock POST /api/graduation/{hash}/demote (idempotent; 404 == already-gone == ok)
+    function demoteGraduation(hash) {
+      return { ok: true, hash: hash, status: "candidate" };
+    }
+
+    // ---- in-memory ledger state (deep copy of fixture arrays) ----
+    var candidates = FIXTURE.candidates.map(function (c) { return shallow(c); });
+    var graduated  = FIXTURE.graduated.map(function (g) { return shallow(g); });
+    var floor      = FIXTURE.ineligible_floor.map(function (f) { return shallow(f); });
+    var failNext   = false;
+
+    function shallow(o) { var r = {}; for (var k in o) if (o.hasOwnProperty(k)) r[k] = o[k]; return r; }
+
+    // ---- element refs ----
+    var bodyEl     = document.body;
+    var toggle     = document.getElementById("grad-toggle");
+    var gateState  = document.getElementById("gate-state");
+    var live       = document.getElementById("live");
+    var candList   = document.getElementById("cand-list");
+    var gradList   = document.getElementById("grad-list");
+    var floorList  = document.getElementById("floor-list");
+    var candEmpty  = document.getElementById("cand-empty");
+    var gradEmpty  = document.getElementById("grad-empty");
+    var candCount  = document.getElementById("cand-count");
+    var candCountSr= document.getElementById("cand-count-sr");
+    var candBandN  = document.getElementById("cand-band-n");
+    var gradBandN  = document.getElementById("grad-band-n");
+    var floorBandN = document.getElementById("floor-band-n");
+    var failToggle = document.getElementById("fail-toggle");
+
+    var lastTrigger = null; // restore focus here after a confirm/cancel (M17)
+
+    // ---- formatting helpers (presentation only; values come from data) ----
+    function confPct(v) {
+      var pct = v <= 1 ? v * 100 : v;
+      // show 100% / 99.2% style without trailing-zero noise
+      var rounded = Math.round(pct * 10) / 10;
+      return (rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)) + "%";
+    }
+    function tsLabel(ms) {
+      var d = new Date(ms);
+      var mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()];
+      function p(n){ return (n < 10 ? "0" : "") + n; }
+      return mo + " " + d.getUTCDate() + ", " + d.getUTCFullYear() +
+             " -- " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + " UTC";
+    }
+    function esc(s) {
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+    function announce(msg) { live.textContent = msg; }
+
+    // ---- evidence strip (FROM DATA, tabular-nums) ----
+    function evidenceHtml(c) {
+      return (
+        '<span class="evidence">' +
+          '<span class="ev ev--clean"><span class="ev__n">' + c.n_allow + '</span><span class="ev__k">ALLOW</span></span>' +
+          '<span class="ev"><span class="ev__n">' + confPct(c.mean_confidence) + '</span><span class="ev__k">conf</span></span>' +
+          '<span class="ev ev--clean"><span class="ev__n">' + c.n_override + '</span><span class="ev__k">overrides</span></span>' +
+          '<span class="ev ev--clean"><span class="ev__n">' + c.n_block_ever + '</span><span class="ev__k">blocks ever</span></span>' +
+          '<span class="ev"><span class="ev__n">' + c.sessions_seen + '</span><span class="ev__k">sessions</span></span>' +
+        '</span>'
+      );
+    }
+
+    // ---- render the CANDIDATES band ----
+    function renderCandidates() {
+      candList.innerHTML = "";
+      candidates.forEach(function (c) {
+        var li = document.createElement("li");
+        li.className = "row";
+        li.setAttribute("data-hash", c.hash);
+        li.innerHTML =
+          '<div class="row__main">' +
+            '<span class="badge badge--candidate" title="Clears both thresholds; zero overrides, zero blocks ever; never matched the safety floor.">' +
+              '<span class="badge__dot" aria-hidden="true"></span>CANDIDATE</span>' +
+            '<span class="shape">' + esc(c.shape) + '</span>' +
+            '<span class="row__spacer"></span>' +
+            evidenceHtml(c) +
+            '<button type="button" class="grad-btn" data-act="open" data-hash="' + c.hash + '" ' +
+              'aria-expanded="false" aria-controls="confirm-' + c.hash + '">' +
+              'Graduate to static ALLOW</button>' +
+          '</div>' +
+          '<div class="confirm" id="confirm-' + c.hash + '" role="group" ' +
+              'aria-label="Confirm graduation of ' + esc(c.shape) + '" hidden>' +
+            '<p class="confirm__q">Graduate <code>' + esc(c.shape) + '</code>? ' +
+              c.n_allow + ' ALLOW, ' + confPct(c.mean_confidence) + ' conf, ' +
+              c.n_override + ' overrides, ' + c.n_block_ever + ' blocks ever.</p>' +
+            '<p class="confirm__note">Persists a static ALLOW rule the verdict path ' +
+              'short-circuits on. <b>Reversible via Demote</b> -- irreversibility is ' +
+              'reversible. Your sign-off is recorded.</p>' +
+            '<div class="confirm__actions">' +
+              '<button type="button" class="btn-confirm" data-act="confirm" data-hash="' + c.hash + '">' +
+                'Confirm graduation</button>' +
+              '<button type="button" class="btn-cancel" data-act="cancel" data-hash="' + c.hash + '">' +
+                'Cancel</button>' +
+            '</div>' +
+          '</div>';
+        candList.appendChild(li);
+      });
+      candEmpty.hidden = candidates.length > 0;
+      candBandN.textContent = candidates.length;
+      candCount.textContent = candidates.length;
+      candCountSr.textContent = candidates.length + " candidate" + (candidates.length === 1 ? "" : "s");
+    }
+
+    // ---- render the GRADUATED band ----
+    function renderGraduated(flashHash) {
+      gradList.innerHTML = "";
+      graduated.forEach(function (g) {
+        var li = document.createElement("li");
+        li.className = "row" + (g.hash === flashHash ? " row--graduated-new" : "");
+        li.setAttribute("data-hash", g.hash);
+        var meta = (g.graduated_at ? "graduated " + tsLabel(g.graduated_at) : "graduated") +
+                   (g.graduated_by ? " by " + esc(g.graduated_by) : "") +
+                   (g.n_allow_at_graduation != null ? " -- " + g.n_allow_at_graduation + " ALLOW at graduation" : "");
+        li.innerHTML =
+          '<div class="row__main">' +
+            '<span class="badge badge--graduated" title="Static ALLOW rule; the verdict path short-circuits on this shape. Reversible via Demote.">' +
+              '<span class="badge__dot" aria-hidden="true"></span>GRADUATED</span>' +
+            '<span class="shape">' + esc(g.shape) + '</span>' +
+            '<span class="row__spacer"></span>' +
+            '<span class="grad-meta">' + meta + '</span>' +
+            '<button type="button" class="demote-btn" data-act="demote" data-hash="' + g.hash + '" ' +
+              'title="Reverse the graduation -- the shape returns to candidate review. Idempotent.">' +
+              'Demote</button>' +
+          '</div>';
+        gradList.appendChild(li);
+      });
+      gradEmpty.hidden = graduated.length > 0;
+      gradBandN.textContent = graduated.length;
+    }
+
+    // ---- render the FLOOR-LOCKED band (NO graduate control in the DOM) ----
+    function renderFloor() {
+      floorList.innerHTML = "";
+      floor.forEach(function (f) {
+        var li = document.createElement("li");
+        li.className = "row";
+        li.setAttribute("data-hash", f.hash);
+        li.innerHTML =
+          '<div class="row__main">' +
+            '<span class="badge badge--floor" title="Safety floor -- never learnable. No graduate control exists for this register.">' +
+              '<span class="badge__lock" aria-hidden="true">L</span>FLOOR -- NEVER GRADUATES</span>' +
+            '<span class="shape">' + esc(f.shape) + '</span>' +
+            '<span class="row__spacer"></span>' +
+            '<span class="evidence"><span class="ev"><span class="ev__n">' + f.n_allow +
+              '</span><span class="ev__k">ALLOW (ignored)</span></span></span>' +
+            '<span class="floor-noact" aria-hidden="true">no action -- locked</span>' +
+          '</div>' +
+          '<p class="floor-reason">Ineligible: <b>' + esc(f.ineligible_reason) + '</b>. ' +
+            'Even at ' + f.n_allow + ' clean ALLOW (' + confPct(f.mean_confidence) +
+            '), a floor shape can never become a candidate.</p>';
+        floorList.appendChild(li);
+      });
+      floorBandN.textContent = floor.length;
+    }
+
+    // ---- confirm-strip open/close (one open at a time) ----
+    function closeAllConfirms() {
+      var strips = candList.querySelectorAll(".confirm");
+      Array.prototype.forEach.call(strips, function (s) { s.hidden = true; });
+      var btns = candList.querySelectorAll('.grad-btn[aria-expanded="true"]');
+      Array.prototype.forEach.call(btns, function (b) { b.setAttribute("aria-expanded", "false"); });
+    }
+    function openConfirm(hash, trigger) {
+      closeAllConfirms();
+      var strip = document.getElementById("confirm-" + hash);
+      if (!strip) return;
+      strip.hidden = false;
+      if (trigger) trigger.setAttribute("aria-expanded", "true");
+      lastTrigger = trigger || null;
+      var confirmBtn = strip.querySelector(".btn-confirm");
+      if (confirmBtn) confirmBtn.focus();
+      announce("Confirm graduation of " + hash + ". Press Confirm or Cancel.");
+    }
+    function cancelConfirm(hash) {
+      var strip = document.getElementById("confirm-" + hash);
+      if (strip) strip.hidden = true;
+      var trig = candList.querySelector('.grad-btn[data-hash="' + hash + '"]');
+      if (trig) { trig.setAttribute("aria-expanded", "false"); trig.focus(); }
+      announce("Cancelled -- " + hash + " stays a candidate.");
+    }
+
+    // ---- the graduation move (optimistic -> rollback on POST failure) ----
+    function doGraduate(hash) {
+      var idx = -1, row = null;
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].hash === hash) { idx = i; row = candidates[i]; break; }
+      }
+      if (!row) return;
+
+      // optimistic: remove from candidates, push onto graduated, re-render both
+      candidates.splice(idx, 1);
+      var gradRow = {
+        hash: row.hash, shape: row.shape, graduated_at: 1749614400000,
+        n_allow_at_graduation: row.n_allow, graduated_by: "operator", status: "graduated"
+      };
+      graduated.unshift(gradRow);
+      renderCandidates();
+      renderGraduated(hash);
+
+      var res = confirmGraduation(hash);
+      if (res.ok) {
+        announce("Graduated " + row.shape + " to a static ALLOW rule. Reversible via Demote.");
+      } else {
+        // ROLLBACK: pull it back out of graduated, restore to candidates
+        var gi = -1;
+        for (var j = 0; j < graduated.length; j++) { if (graduated[j].hash === hash) { gi = j; break; } }
+        if (gi >= 0) graduated.splice(gi, 1);
+        candidates.splice(idx, 0, row);
+        renderCandidates();
+        renderGraduated();
+        // flash the restored candidate row red (rollback signal)
+        var restored = candList.querySelector('.row[data-hash="' + hash + '"]');
+        if (restored) {
+          restored.classList.add("row--rollback");
+          setTimeout(function () { restored.classList.remove("row--rollback"); }, 950);
+        }
+        announce("Graduation of " + row.shape + " FAILED to persist -- rolled back. The shape stays a candidate.");
+      }
+    }
+
+    // ---- demote (idempotent; move graduated -> candidate) ----
+    function doDemote(hash) {
+      var idx = -1, row = null;
+      for (var i = 0; i < graduated.length; i++) {
+        if (graduated[i].hash === hash) { idx = i; row = graduated[i]; break; }
+      }
+      if (!row) return;
+      var res = demoteGraduation(hash); // 404 == already-gone == success (idempotent)
+      if (res.ok) {
+        graduated.splice(idx, 1);
+        // return to candidates with reconstructed evidence (mock: prove the move)
+        candidates.push({
+          hash: row.hash, shape: row.shape,
+          n_allow: row.n_allow_at_graduation != null ? row.n_allow_at_graduation : 0,
+          mean_confidence: 1.0, n_override: 0, n_block_ever: 0,
+          floor_eligible: true, sessions_seen: 1, status: "candidate"
+        });
+        renderGraduated();
+        renderCandidates();
+        announce("Demoted " + row.shape + " -- the static ALLOW rule is removed; the shape returns to candidate review.");
+      }
+    }
+
+    // ---- event delegation on the candidate + graduated lists ----
+    candList.addEventListener("click", function (e) {
+      var btn = e.target.closest ? e.target.closest("button[data-act]") : null;
+      if (!btn) return;
+      var act = btn.getAttribute("data-act");
+      var hash = btn.getAttribute("data-hash");
+      if (act === "open") {
+        var strip = document.getElementById("confirm-" + hash);
+        if (strip && !strip.hidden) { cancelConfirm(hash); }
+        else { openConfirm(hash, btn); }
+      } else if (act === "cancel") {
+        cancelConfirm(hash);
+      } else if (act === "confirm") {
+        doGraduate(hash);
+      }
+    });
+    gradList.addEventListener("click", function (e) {
+      var btn = e.target.closest ? e.target.closest("button[data-act='demote']") : null;
+      if (!btn) return;
+      doDemote(btn.getAttribute("data-hash"));
+    });
+
+    // Escape collapses an open confirm strip without graduating (M17).
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        var open = candList.querySelector(".confirm:not([hidden])");
+        if (open) {
+          var hash = open.id.replace("confirm-", "");
+          cancelConfirm(hash);
+        }
+      }
+    });
+
+    // ---- BETA gate toggle (client-wired -- shows default-OFF -> ON) ----
+    toggle.addEventListener("click", function () {
+      var on = toggle.getAttribute("aria-pressed") === "true";
+      var next = !on;
+      toggle.setAttribute("aria-pressed", String(next));
+      gateState.textContent = next ? "ON" : "OFF";
+      bodyEl.setAttribute("data-grad", next ? "on" : "off");
+      announce(next
+        ? "Graduation Ledger ON -- candidates loaded."
+        : "Graduation Ledger OFF -- no corpus read.");
+    });
+
+    // ---- simulate-POST-failure preview toggle ----
+    failToggle.addEventListener("click", function () {
+      failNext = !failNext;
+      failToggle.setAttribute("aria-pressed", String(failNext));
+      failToggle.textContent = "Simulate POST failure: " + (failNext ? "ON" : "OFF");
+    });
+
+    // ---- initial render ----
+    renderCandidates();
+    renderGraduated();
+    renderFloor();
+  })();
+</script>
+</body>
+</html>

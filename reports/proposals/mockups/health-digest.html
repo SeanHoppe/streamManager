@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<!--
+  KingMode mockup -- BETA feature "health-digest" (#32: Session health digest endpoint).
+  Self-contained. Inline style + script only. No external assets / CDNs / fonts. ASCII-only.
+  Previews the REAL ui-next obsidian tokens (dashboard/ui-next/src/styles/theme.css) so the
+  operator can confirm the UI approach BEFORE any code is written. Feature shown ON with
+  realistic mock data from the vetted mockDataSpec. Default-OFF, gated in Settings > BETA features.
+
+  WHERE IT LIVES: inside the existing SessionRail / SessionLane (Frame A glance layer) -- NOT a
+  new pane. The only new visible atom is a SessionHealthBadge in each lane's signal slot plus a
+  digest detail block in the existing S1 expand region. The lane stays calm slate at rest.
+
+  G2 polarity: NO SM-own session_id in the fixture; the rail self-excludes (footer readout).
+  M16 domain-agnostic: every lane identity is rendered FROM DATA (project_slug placeholders).
+  M4: every state carries a literal text WORD -- color is strictly the second channel.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Session health digest (#32)</title>
+<style>
+  /* ---- REAL obsidian theme tokens (verbatim from theme.css :root + [data-theme=obsidian]) ---- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired badge tokens (M4) -- theme-invariant. The health chip reuses these
+       EXACT frozen, axe-documented AA pairs: green (decided) / amber (ar) / red (blocked). */
+    --badge-ar-fg: #d97706;      --badge-ar-bg: #fef3c7;      --badge-ar-border: #d97706;
+    --badge-obs-fg: #475569;     --badge-obs-bg: #f1f5f9;     --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626; --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+    --badge-warn-fg: #ea580c;    --badge-warn-bg: #ffedd5;    --badge-warn-border: #ea580c;
+    --badge-timeout-fg: #7c3aed; --badge-timeout-bg: #ede9fe; --badge-timeout-border: #c4b5fd;
+  }
+  [data-theme="obsidian"] {
+    --bg: #080a0c;
+    --bg-card: #0c1118;
+    --bg-row: #0e141e;
+    --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245,158,11,0.09);
+    --border: #192030;
+    --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098;
+    --text-dim: #948870;
+    --text-ui: #8a8068;
+    --text-bright: #e8e0cc;
+    --accent: #f59e0b;
+    --accent-dim: rgba(245,158,11,0.09);
+    --accent-glow: rgba(245,158,11,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 28px clamp(16px, 4vw, 56px) 64px;
+  }
+
+  /* ---------- header strip ---------- */
+  .strip {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px; margin-bottom: 26px;
+  }
+  .strip__title {
+    font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
+    color: var(--text-bright); margin: 0;
+  }
+  .strip__sub { color: var(--text-dim); font-size: 12.5px; margin: 3px 0 0; max-width: 70ch; }
+  .head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 2px;
+    color: var(--badge-warn-fg); background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+  }
+  .pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .strip__spacer { flex: 1 1 auto; }
+
+  /* inline on/off toggle (client-side wired) */
+  .flag {
+    display: inline-flex; align-items: center; gap: 11px;
+    padding: 8px 13px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-card);
+  }
+  .flag__label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+  .flag__key { font-family: var(--ff-mono); color: var(--text-bright); font-size: 12px; }
+  .switch {
+    position: relative; width: 46px; height: 24px; border-radius: 13px;
+    border: 1px solid var(--border-hi); background: var(--bg-row-alt);
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease; padding: 0;
+  }
+  .switch[aria-checked="true"] { background: var(--accent-dim); border-color: var(--accent); }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text-ui); transition: left 120ms ease, background 120ms ease;
+  }
+  .switch[aria-checked="true"] .switch__knob { left: 24px; background: var(--accent); }
+  .switch__state {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    min-width: 26px; color: var(--text-dim);
+  }
+  .switch[aria-checked="true"] ~ .switch__state { color: var(--accent); }
+  .flag:focus-within .switch { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  /* ---------- layout: rail preview + notes ---------- */
+  .stage { display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); gap: 26px; align-items: start; }
+  @media (max-width: 920px) { .stage { grid-template-columns: 1fr; } }
+
+  /* ======================= THE RAIL (SessionRail.svelte preview) ======================= */
+  .rail {
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    max-height: 640px;
+  }
+  .rail__head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .rail__title-wrap { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+  .rail__title {
+    margin: 0; font-family: var(--ff-system); font-size: 14px; font-weight: 560;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-bright); white-space: nowrap;
+  }
+  /* header ACTIVE tally (existing) -- amber when open actions exist */
+  .rail__tally {
+    display: inline-flex; align-items: baseline; gap: 5px;
+    padding: 2px 7px; border-radius: 999px; border: 1px solid var(--badge-ar-border);
+    background: var(--badge-ar-bg);
+  }
+  .rail__tally-tag { font-family: var(--ff-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase; color: var(--badge-ar-fg); }
+  .rail__tally-num { font-family: var(--ff-mono); font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 720; line-height: 1; color: var(--badge-ar-fg); }
+  /* NEW: the DIGEST source readout -- a paired label so the operator knows the richer
+     server-side source is live. Calm slate; never a bare icon. Shown only when flag ON. */
+  .rail__digest-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--text-ui);
+    padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--bg-row-alt);
+  }
+  .rail__digest-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--badge-decided-fg); opacity: 0.85; }
+
+  .rail__all {
+    appearance: none; flex: 0 0 auto; background: transparent;
+    border: 1px solid var(--border); color: var(--text-ui);
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  }
+  .rail__all:hover { color: var(--text-bright); border-color: var(--border-hi); }
+  .rail__all:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  /* BETA caption strip, only present while flag ON */
+  .rail__beta {
+    padding: 5px 14px; font-size: 10.5px; color: var(--text-dim);
+    border-bottom: 1px solid var(--border); background: var(--bg-row-alt);
+    letter-spacing: 0.02em;
+  }
+  .rail__beta b { color: var(--badge-warn-fg); font-weight: 700; }
+
+  .rail__lanes {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px; scrollbar-gutter: stable;
+  }
+
+  .rail__foot {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    padding: 4px 14px; border-top: 1px solid var(--border); background: var(--bg);
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .rail__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); opacity: 0.7; }
+
+  /* ======================= ONE LANE (SessionLane.svelte preview) ======================= */
+  .lane {
+    position: relative; display: grid;
+    grid-template-columns: 1fr auto; grid-template-rows: auto auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left-width: 2px; border-left-color: transparent;
+    border-radius: 4px;
+    transition: border-color 180ms ease, background 180ms ease;
+  }
+  .lane--selected { border-left-color: var(--accent); background: var(--bg-row-hover); }
+  /* RED lane: hitl_pending_count > 0. Left gutter warms to the BLOCKED red as the SECOND
+     channel; the ACTION chip text + aria-label carry the literal verdict. */
+  .lane--action { border-left-color: var(--badge-blocked-border); }
+  /* AMBER lane: governance_variance_alert. Left gutter warms to ACTION-REQUIRED amber. */
+  .lane--variance { border-left-color: var(--badge-ar-border); }
+  /* The digest badge NEVER pulses or foregrounds; quiet + variance states are badge-in-place. */
+
+  .lane__main {
+    grid-column: 1; grid-row: 1;
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+    padding: 7px 10px; cursor: pointer; text-align: left;
+    border-radius: 4px 0 0 4px;
+    background: transparent; border: 0; width: 100%; color: inherit; font: inherit;
+  }
+  .lane__main:hover { background: var(--bg-row-hover); }
+  .lane__main:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 4px; }
+
+  .lane__pip { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); opacity: 0.6; }
+  .lane__pip--live { background: var(--accent); opacity: 0.85; }
+
+  .lane__id { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+  .lane__name {
+    font-family: var(--ff-system); font-size: 13px; font-weight: 460; letter-spacing: 0.01em;
+    color: var(--text-bright); line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lane--selected .lane__name { font-weight: 620; }
+  .lane--action .lane__name, .lane--variance .lane__name { font-weight: 600; }
+  .lane__meta {
+    display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-ui); font-variant-numeric: tabular-nums;
+  }
+  .lane--selected .lane__meta { color: var(--text); }
+  .lane__sep { opacity: 0.5; }
+
+  /* ---- SessionHealthBadge.svelte (the NEW visible atom) ----
+     A single typographic word-chip in the lane's signal slot. Paired label + color (M4):
+     the WORD is always present; color is strictly the second channel. Sits on its OWN light
+     bg so the fg-on-bg contrast is self-contained against the dark lane ground. */
+  .health {
+    flex: 0 0 auto; align-self: center;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em; line-height: 1.4; padding: 1px 8px; border-radius: 999px;
+    white-space: nowrap; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .health__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  /* GREEN QUIET -- hitl_pending_count==0 && no variance */
+  .health--quiet  { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  /* AMBER VARIANCE -- governance_variance_alert (WARN) */
+  .health--variance { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border); }
+  /* RED ACTION N -- hitl_pending_count > 0 */
+  .health--action { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); font-weight: 800; }
+
+  /* expand control (existing S1 chevron) */
+  .lane__expand {
+    grid-column: 2; grid-row: 1; align-self: stretch; appearance: none; background: transparent;
+    border: none; color: var(--text-ui); width: 1.45rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color 180ms ease, background 180ms ease;
+  }
+  .lane__expand:hover { color: var(--text-bright); background: var(--bg-row-hover); }
+  .lane__expand:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 4px; }
+  .lane__chev { display: inline-block; font-size: 1rem; line-height: 1; transition: transform 180ms ease; }
+  .lane__chev--open { transform: rotate(90deg); }
+
+  /* ---- S1 expand region: digest detail dl (NEW: digest detail renders HERE) ---- */
+  .lane__detail {
+    grid-column: 1 / -1; grid-row: 2;
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-row-alt);
+    border-radius: 0 0 4px 4px;
+    display: none;
+  }
+  .lane--open .lane__detail { display: block; }
+  .lane__dl { margin: 0; }
+  .lane__dlrow { display: grid; grid-template-columns: 8.5rem 1fr; gap: 10px; padding: 2px 0; }
+  .lane__dlrow dt {
+    margin: 0; font-family: var(--ff-mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-ui);
+  }
+  .lane__dlrow dd {
+    margin: 0; min-width: 0; font-family: var(--ff-mono); font-size: 11px;
+    color: var(--text); word-break: break-word; font-variant-numeric: tabular-nums;
+  }
+  .lane__dlrow dd b { color: var(--text-bright); font-weight: 700; }
+  /* the latest-decision action chip inside the detail, paired text + color */
+  .act {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    padding: 0 6px; border-radius: 3px; line-height: 1.5;
+  }
+  .act__dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .act--allow { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .act--block { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 1px solid var(--badge-blocked-border); }
+  .act--l2, .act--l3 { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border); }
+  .act--l4 { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 1px solid var(--badge-blocked-border); }
+  .lane__s1 { margin: 6px 0 0; font-size: 11px; color: var(--text-dim); letter-spacing: 0.01em; }
+  .lane__esc {
+    margin: 6px 0 0; display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; font-family: var(--ff-mono);
+  }
+
+  /* ---------- design notes column ---------- */
+  .notes { display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); letter-spacing: 0.02em; }
+  .card p { margin: 0 0 8px; color: var(--text-dim); font-size: 12.5px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; }
+  .card li { margin-bottom: 4px; }
+  kbd {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; background: var(--bg-row-alt);
+  }
+  code { font-family: var(--ff-mono); font-size: 11.5px; color: var(--accent); }
+
+  /* badge legend mini-row */
+  .legend { display: flex; flex-direction: column; gap: 8px; }
+  .legend__row { display: flex; align-items: center; gap: 10px; }
+  .legend__why { font-size: 11.5px; color: var(--text-dim); }
+
+  /* OFF state: hide the digest source readout, beta caption, and all health chips +
+     collapse the rich detail back to the plain cwd line -- the no-op gate. */
+  .is-off .rail__digest-tag,
+  .is-off .rail__beta,
+  .is-off .health { display: none; }
+  .is-off .lane__digest-detail { display: none; }
+  .is-off .lane__plain-detail { display: block; }
+  .lane__plain-detail { display: none; }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+</style>
+</head>
+<body>
+
+  <!-- ====================== HEADER STRIP ====================== -->
+  <div class="strip">
+    <div>
+      <div class="head-row">
+        <h1 class="strip__title">Session health digest</h1>
+        <span class="pill"><span class="pill__dot"></span>BETA -- default OFF</span>
+      </div>
+      <p class="strip__sub">Feature #32 -- toggled in Settings &gt; BETA features. One server call per visible
+        lane (<code>GET /api/sessions/{id}/digest</code>, 2s TTL cache) collapses 4 fetches into a pre-computed
+        health verdict, so the rail tells you which background session needs you at a glance. KingMode mockup
+        (no code written yet).</p>
+    </div>
+    <div class="strip__spacer"></div>
+    <label class="flag">
+      <span class="flag__label">flag <span class="flag__key">health-digest</span></span>
+      <button id="flagSwitch" class="switch" role="switch" aria-checked="true" aria-label="Toggle health-digest feature flag">
+        <span class="switch__knob"></span>
+      </button>
+      <span id="flagState" class="switch__state">ON</span>
+    </label>
+  </div>
+
+  <!-- ====================== STAGE ====================== -->
+  <div id="stage" class="stage">
+
+    <!-- ---- SessionRail preview ---- -->
+    <nav class="rail" id="rail" aria-label="Governed sessions">
+      <header class="rail__head">
+        <div class="rail__title-wrap">
+          <h2 class="rail__title">Sessions</h2>
+          <!-- existing ACTIVE tally: open actions across all lanes -->
+          <span class="rail__tally" id="railTally"
+                title="2 open actions across 9 sessions"
+                aria-label="2 open actions across all governed sessions">
+            <span class="rail__tally-tag">ACTIVE</span>
+            <span class="rail__tally-num" id="railTallyNum">2</span>
+          </span>
+          <!-- NEW: DIGEST source readout (paired label, only while flag ON) -->
+          <span class="rail__digest-tag" id="digestTag" title="Health digest source live (server-side, 2s TTL)">
+            <span class="rail__digest-dot" aria-hidden="true"></span>DIGEST
+          </span>
+        </div>
+        <button type="button" class="rail__all" aria-pressed="false" aria-label="Select all governed sessions">ALL</button>
+      </header>
+
+      <!-- BETA caption, only while flag ON -->
+      <div class="rail__beta" id="betaCaption"><b>BETA</b> -- default OFF, toggled in Settings &gt; BETA features</div>
+
+      <div class="rail__lanes" id="lanes" role="list"><!-- lanes injected by script --></div>
+
+      <footer class="rail__foot">
+        <span class="rail__self-dot" aria-hidden="true"></span>
+        self excluded
+      </footer>
+    </nav>
+
+    <!-- ---- design notes ---- -->
+    <div class="notes">
+      <div class="card">
+        <h3>The glance (return-to-desk scan)</h3>
+        <p>Nine background sessions humming; you step away for coffee. WITHOUT this, the rail shows generic
+          live pips and a stale client-derived count -- to know which session needs a HITL decision you must
+          select each lane and wait for the panes to re-fetch decisions + agents + jobs + hitl (4 roundtrips x
+          N sessions of poll-hell), then mentally reconstruct "quiet or stuck?".</p>
+        <p>WITH it ON, one green wall with a single red <b>ACTION 2</b> lane jumps out. You click it -- the
+          HitlDock is already the right scope. Zero reconstruction. Expand any lane (the existing chevron) to
+          read the pre-computed digest detail.</p>
+      </div>
+
+      <div class="card">
+        <h3>Paired label + color badge (M4 -- color is never the only channel)</h3>
+        <div class="legend">
+          <div class="legend__row">
+            <span class="health health--quiet"><span class="health__dot" aria-hidden="true"></span>QUIET</span>
+            <span class="legend__why">green -- <code>hitl_pending_count == 0</code> and no variance alert</span>
+          </div>
+          <div class="legend__row">
+            <span class="health health--variance"><span class="health__dot" aria-hidden="true"></span>VARIANCE</span>
+            <span class="legend__why">amber -- <code>governance_variance_alert</code> (WARN, badge-in-place)</span>
+          </div>
+          <div class="legend__row">
+            <span class="health health--action"><span class="health__dot" aria-hidden="true"></span>ACTION 2</span>
+            <span class="legend__why">red -- <code>hitl_pending_count &gt; 0</code></span>
+          </div>
+        </div>
+        <p style="margin-top:10px">The chip text and the lane aria-label both state the reason, so a
+          screen-reader user gets the identical verdict. The chip sits on its own light bg, so the
+          fg-on-bg contrast is self-contained against the dark lane and the always-present word means a
+          contrast failure can never hide a signal.</p>
+      </div>
+
+      <div class="card">
+        <h3>Calm + safety contract</h3>
+        <ul>
+          <li>The digest badge NEVER pulses or auto-foregrounds -- a variance / quiet state is badge-in-place
+            only. The lone permitted M2 pulse stays reserved for a true foreground escalation
+            (<code>governance_negative_regression</code> / <code>desktop_pause</code> / <code>static-rule</code>).</li>
+          <li>Read-only <code>GET</code> -- no new bus envelope, no frozen surface touched. The endpoint
+            applies <code>_reject_sm_own(session_id)</code> so the digest can never describe SM's own
+            session (G2 polarity); the rail still self-excludes (footer readout).</li>
+          <li>Identity is rendered FROM DATA (<code>project_slug</code>) -- placeholder names only, no
+            monitored-project vocabulary (M16).</li>
+          <li>Flag OFF =&gt; the whole SessionHealthBadge / digest-poll path renders nothing and registers no
+            poller (no-op gate). Flip the switch above to see it collapse back to the plain lane.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Keyboard path (unchanged)</h3>
+        <ul>
+          <li>The lane is already <code>role=button tabindex=0</code> with Enter / Space select.</li>
+          <li>The badge adds NO new tab stop -- it is <code>aria-hidden</code>; the lane aria-label carries it.</li>
+          <li><kbd>Tab</kbd> to a lane, <kbd>Enter</kbd> / <kbd>Space</kbd> to select it, then the separate
+            expand button (<code>aria-expanded</code>) reveals the digest detail. The 2px amber focus ring (M17)
+            still applies to lane + expand.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p class="sr-only" id="liveStatus" aria-live="polite"></p>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // -- fixed "now" so uptimes / ages are deterministic --
+  var NOW = 1749635802; // epoch seconds (2026-06-11T09:16:42Z)
+
+  // ===========================================================================
+  // MOCK PAYLOAD -- keyed map session_id -> digest object (mirrors the vetted
+  // mockDataSpec / GET /api/sessions/{id}/digest shape EXACTLY). All identities
+  // are generic placeholders; NO monitored-project vocabulary; NO SM-own id (G2).
+  // 9 lanes: 1 RED (ACTION 2) + 1 AMBER (VARIANCE) + 7 GREEN (QUIET).
+  // ===========================================================================
+  var DIGESTS = {
+    "sess-alpha": {
+      session_id: "sess-alpha", project_slug: "session-alpha",
+      started_at: NOW - 8120, ended_at: null, uptime_seconds: 8120,
+      decision_count: 263,
+      latest_decision: { id: 9412, action: "BLOCK", confidence: 0.34, agent_id: "agent-04", timestamp: NOW - 41 },
+      active_agent_count: 3,
+      agents: [
+        { id: "agent-04", profile_slug: "builder", last_seen_ts: NOW - 41, event_count: 188 },
+        { id: "agent-07", profile_slug: "reviewer", last_seen_ts: NOW - 96, event_count: 52 },
+        { id: "agent-09", profile_slug: "planner", last_seen_ts: NOW - 220, event_count: 23 }
+      ],
+      active_job_count: 2, hitl_pending_count: 2, hitl_mode: "SYNC",
+      latest_escalation: { type: "governance_negative_regression", timestamp: NOW - 38, severity: "CRITICAL" }
+    },
+    "sess-bravo": {
+      session_id: "sess-bravo", project_slug: "session-bravo",
+      started_at: NOW - 3960, ended_at: null, uptime_seconds: 3960,
+      decision_count: 141,
+      latest_decision: { id: 9388, action: "L3", confidence: 0.71, agent_id: "agent-12", timestamp: NOW - 12 },
+      active_agent_count: 2,
+      agents: [
+        { id: "agent-12", profile_slug: "builder", last_seen_ts: NOW - 12, event_count: 97 },
+        { id: "agent-15", profile_slug: "reviewer", last_seen_ts: NOW - 140, event_count: 44 }
+      ],
+      active_job_count: 1, hitl_pending_count: 0, hitl_mode: "ASYNC",
+      latest_escalation: { type: "governance_variance_alert", timestamp: NOW - 58, severity: "WARN" }
+    },
+    "sess-charlie": {
+      session_id: "sess-charlie", project_slug: "session-charlie",
+      started_at: NOW - 5340, ended_at: null, uptime_seconds: 5340,
+      decision_count: 418,
+      latest_decision: { id: 9401, action: "ALLOW", confidence: 0.94, agent_id: "agent-21", timestamp: NOW - 8 },
+      active_agent_count: 2,
+      agents: [
+        { id: "agent-21", profile_slug: "builder", last_seen_ts: NOW - 8, event_count: 311 },
+        { id: "agent-22", profile_slug: "investigator", last_seen_ts: NOW - 73, event_count: 107 }
+      ],
+      active_job_count: 1, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    },
+    "sess-delta": {
+      session_id: "sess-delta", project_slug: "session-delta",
+      started_at: NOW - 1180, ended_at: null, uptime_seconds: 1180,
+      decision_count: 54,
+      latest_decision: { id: 9377, action: "ALLOW", confidence: 0.88, agent_id: "agent-30", timestamp: NOW - 24 },
+      active_agent_count: 1,
+      agents: [ { id: "agent-30", profile_slug: "planner", last_seen_ts: NOW - 24, event_count: 54 } ],
+      active_job_count: 0, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    },
+    "sess-echo": {
+      session_id: "sess-echo", project_slug: "session-echo",
+      started_at: NOW - 7720, ended_at: null, uptime_seconds: 7720,
+      decision_count: 502,
+      latest_decision: { id: 9360, action: "L2", confidence: 0.62, agent_id: "agent-33", timestamp: NOW - 51 },
+      active_agent_count: 2,
+      agents: [
+        { id: "agent-33", profile_slug: "builder", last_seen_ts: NOW - 51, event_count: 402 },
+        { id: "agent-34", profile_slug: "reviewer", last_seen_ts: NOW - 188, event_count: 100 }
+      ],
+      active_job_count: 1, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    },
+    "sess-foxtrot": {
+      session_id: "sess-foxtrot", project_slug: "session-foxtrot",
+      started_at: NOW - 640, ended_at: null, uptime_seconds: 640,
+      decision_count: 19,
+      latest_decision: { id: 9415, action: "ALLOW", confidence: 0.91, agent_id: "agent-41", timestamp: NOW - 3 },
+      active_agent_count: 1,
+      agents: [ { id: "agent-41", profile_slug: "builder", last_seen_ts: NOW - 3, event_count: 19 } ],
+      active_job_count: 1, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    },
+    "sess-golf": {
+      session_id: "sess-golf", project_slug: "session-golf",
+      started_at: NOW - 9990, ended_at: null, uptime_seconds: 9990,
+      decision_count: 631,
+      latest_decision: { id: 9352, action: "ALLOW", confidence: 0.96, agent_id: "agent-50", timestamp: NOW - 110 },
+      active_agent_count: 2,
+      agents: [
+        { id: "agent-50", profile_slug: "builder", last_seen_ts: NOW - 110, event_count: 488 },
+        { id: "agent-51", profile_slug: "reviewer", last_seen_ts: NOW - 305, event_count: 143 }
+      ],
+      active_job_count: 0, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    },
+    "sess-hotel": {
+      session_id: "sess-hotel", project_slug: "session-hotel",
+      started_at: NOW - 2210, ended_at: null, uptime_seconds: 2210,
+      decision_count: 88,
+      latest_decision: { id: 9399, action: "ALLOW", confidence: 0.85, agent_id: "agent-60", timestamp: NOW - 17 },
+      active_agent_count: 1,
+      agents: [ { id: "agent-60", profile_slug: "investigator", last_seen_ts: NOW - 17, event_count: 88 } ],
+      active_job_count: 1, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    },
+    "sess-india": {
+      session_id: "sess-india", project_slug: "session-india",
+      started_at: NOW - 4500, ended_at: null, uptime_seconds: 4500,
+      decision_count: 207,
+      latest_decision: { id: 9390, action: "ALLOW", confidence: 0.90, agent_id: "agent-70", timestamp: NOW - 64 },
+      active_agent_count: 2,
+      agents: [
+        { id: "agent-70", profile_slug: "builder", last_seen_ts: NOW - 64, event_count: 160 },
+        { id: "agent-71", profile_slug: "planner", last_seen_ts: NOW - 250, event_count: 47 }
+      ],
+      active_job_count: 0, hitl_pending_count: 0, hitl_mode: "ASYNC", latest_escalation: null
+    }
+  };
+  // Stable render order matching the rail.
+  var ORDER = ["sess-alpha","sess-bravo","sess-charlie","sess-delta","sess-echo","sess-foxtrot","sess-golf","sess-hotel","sess-india"];
+
+  // ---- health verdict from a digest (the server-positioned classification) ----
+  // RED ACTION when hitl_pending_count > 0; AMBER VARIANCE on a governance_variance_alert;
+  // GREEN QUIET otherwise. The WORD is the load-bearing channel; color is second.
+  function verdict(d) {
+    if (d.hitl_pending_count > 0) {
+      return { state: "action", word: "ACTION " + d.hitl_pending_count,
+               aria: d.hitl_pending_count + " action" + (d.hitl_pending_count === 1 ? "" : "s") + " required -- HITL pending" };
+    }
+    if (d.latest_escalation && d.latest_escalation.type === "governance_variance_alert") {
+      return { state: "variance", word: "VARIANCE", aria: "variance alert -- flagged in place, no action required yet" };
+    }
+    return { state: "quiet", word: "QUIET", aria: "quiet -- no action required" };
+  }
+
+  function fmtUptime(s) {
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    if (h > 0) return h + "h " + m + "m";
+    return m + "m";
+  }
+  function ago(ts) {
+    var s = Math.max(0, NOW - ts);
+    if (s < 60) return s + "s ago";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m ago";
+    return Math.floor(m / 60) + "h ago";
+  }
+  function actClass(a) {
+    return a === "ALLOW" ? "act--allow" : a === "BLOCK" ? "act--block"
+         : a === "L4" ? "act--l4" : a === "L3" ? "act--l3" : "act--l2";
+  }
+
+  // ---------------- render one lane ----------------
+  function laneEl(id) {
+    var d = DIGESTS[id];
+    var v = verdict(d);
+
+    var wrap = document.createElement("div");
+    wrap.setAttribute("role", "listitem");
+
+    var lane = document.createElement("div");
+    lane.className = "lane lane--" + v.state;
+    lane.setAttribute("data-session-id", id);
+
+    // ---- main (selectable) ----
+    var aria = "Session " + d.project_slug + ", live, " + v.aria;
+    var main = document.createElement("button");
+    main.type = "button";
+    main.className = "lane__main";
+    main.setAttribute("aria-pressed", "false");
+    main.setAttribute("aria-label", aria);
+
+    var pip = document.createElement("span");
+    pip.className = "lane__pip lane__pip--live"; pip.setAttribute("aria-hidden", "true");
+
+    var idCol = document.createElement("span");
+    idCol.className = "lane__id";
+    var name = document.createElement("span");
+    name.className = "lane__name"; name.title = d.project_slug; name.textContent = d.project_slug;
+    var meta = document.createElement("span");
+    meta.className = "lane__meta";
+    meta.innerHTML = "live <span class=\"lane__sep\" aria-hidden=\"true\">&middot;</span> " +
+                     d.decision_count + " dec <span class=\"lane__sep\" aria-hidden=\"true\">&middot;</span> " + d.hitl_mode;
+    idCol.appendChild(name); idCol.appendChild(meta);
+
+    // the SessionHealthBadge -- aria-hidden (laneAria carries the verdict)
+    var chip = document.createElement("span");
+    chip.className = "health health--" + v.state;
+    chip.setAttribute("aria-hidden", "true");
+    chip.title = v.aria;
+    chip.innerHTML = "<span class=\"health__dot\" aria-hidden=\"true\"></span>" + v.word;
+
+    main.appendChild(pip); main.appendChild(idCol); main.appendChild(chip);
+
+    // ---- expand button ----
+    var exp = document.createElement("button");
+    exp.type = "button"; exp.className = "lane__expand";
+    exp.setAttribute("aria-expanded", "false");
+    exp.setAttribute("aria-controls", "detail-" + id);
+    exp.setAttribute("aria-label", "Show digest detail for " + d.project_slug);
+    var chev = document.createElement("span");
+    chev.className = "lane__chev"; chev.setAttribute("aria-hidden", "true"); chev.innerHTML = "&rsaquo;";
+    exp.appendChild(chev);
+
+    // ---- detail (digest dl when ON; plain cwd line when OFF) ----
+    var detail = document.createElement("div");
+    detail.className = "lane__detail"; detail.id = "detail-" + id;
+    detail.setAttribute("role", "region");
+    detail.setAttribute("aria-label", d.project_slug + " digest detail");
+
+    // ON: the rich digest dl
+    var rich = document.createElement("div");
+    rich.className = "lane__digest-detail";
+    var ld = d.latest_decision;
+    var escTxt = d.latest_escalation
+      ? d.latest_escalation.type + " (" + d.latest_escalation.severity + ", " + ago(d.latest_escalation.timestamp) + ")"
+      : "none";
+    var ldHtml = ld
+      ? "<span class=\"act " + actClass(ld.action) + "\"><span class=\"act__dot\" aria-hidden=\"true\"></span>" + ld.action +
+        "</span> conf " + ld.confidence.toFixed(2) + " <span class=\"lane__sep\">&middot;</span> " + ld.agent_id + " <span class=\"lane__sep\">&middot;</span> " + ago(ld.timestamp)
+      : "none yet";
+    rich.innerHTML =
+      "<dl class=\"lane__dl\">" +
+        "<div class=\"lane__dlrow\"><dt>uptime</dt><dd>" + fmtUptime(d.uptime_seconds) + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>decisions</dt><dd><b>" + d.decision_count + "</b></dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>latest decision</dt><dd>" + ldHtml + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>active agents</dt><dd>" + d.active_agent_count +
+          " (" + d.agents.map(function (a) { return a.profile_slug; }).join(", ") + ")</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>active jobs</dt><dd>" + d.active_job_count + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>hitl pending</dt><dd>" + d.hitl_pending_count + " <span class=\"lane__sep\">&middot;</span> mode " + d.hitl_mode + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>latest escalation</dt><dd>" + escTxt + "</dd></div>" +
+      "</dl>";
+
+    // OFF: the plain pre-digest cwd line (what the lane shows without the flag)
+    var plain = document.createElement("div");
+    plain.className = "lane__plain-detail";
+    plain.innerHTML = "<dl class=\"lane__dl\">" +
+        "<div class=\"lane__dlrow\"><dt>session</dt><dd>" + id + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>cwd</dt><dd>not reported -- verify manually before attaching</dd></div>" +
+      "</dl>" +
+      "<p class=\"lane__s1\">Health digest OFF -- the rail derives counts client-side per the legacy path.</p>";
+
+    detail.appendChild(rich); detail.appendChild(plain);
+
+    // ---- expand wiring ----
+    exp.addEventListener("click", function () {
+      var open = lane.classList.toggle("lane--open");
+      exp.setAttribute("aria-expanded", String(open));
+      chev.classList.toggle("lane__chev--open", open);
+    });
+
+    // ---- select wiring (highlights the lane; in the real app routes scope) ----
+    main.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".lane--selected"), function (l) {
+        l.classList.remove("lane--selected");
+        var m = l.querySelector(".lane__main"); if (m) m.setAttribute("aria-pressed", "false");
+      });
+      lane.classList.add("lane--selected");
+      main.setAttribute("aria-pressed", "true");
+      $("liveStatus").textContent = "Scope set to " + d.project_slug + " -- HitlDock now scoped here.";
+    });
+
+    lane.appendChild(main); lane.appendChild(exp); lane.appendChild(detail);
+    wrap.appendChild(lane);
+    return wrap;
+  }
+
+  function render() {
+    var host = $("lanes");
+    host.innerHTML = "";
+    ORDER.forEach(function (id) { host.appendChild(laneEl(id)); });
+    // header ACTIVE tally = sum of hitl_pending_count across lanes
+    var open = ORDER.reduce(function (acc, id) { return acc + DIGESTS[id].hitl_pending_count; }, 0);
+    $("railTallyNum").textContent = open;
+  }
+
+  // ---------------- flag toggle (no-op gate preview) ----------------
+  function toggleFlag() {
+    var sw = $("flagSwitch");
+    var on = sw.getAttribute("aria-checked") === "true";
+    var next = !on;
+    sw.setAttribute("aria-checked", String(next));
+    $("flagState").textContent = next ? "ON" : "OFF";
+    $("stage").classList.toggle("is-off", !next);
+    $("liveStatus").textContent = next
+      ? "health-digest ON -- the rail polls one digest per visible lane and renders the health chips."
+      : "health-digest OFF -- no digest poller registered; lanes fall back to the plain client-derived path.";
+  }
+  $("flagSwitch").addEventListener("click", toggleFlag);
+
+  // initial paint
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<!--
+  hitl-bulk-dismiss.html -- KingMode .html MOCKUP for BETA feature
+  "hitl-bulk-dismiss" (#15: HITL bulk-dismiss triage modal).
+
+  PURPOSE: let the single monitor-first laptop operator confirm the UI approach
+  BEFORE any code is written (directive #2). STATIC, self-contained preview --
+  no build step, no external assets, no CDNs, no web fonts. It reproduces the
+  REAL ui-next obsidian tokens (theme.css :root + [data-theme=obsidian] + the
+  fixed M4 badge tokens + calm.css semantic aliases) inline so the preview shows
+  the production palette.
+
+  WHAT IT SOLVES: the cool-down sweep. A non-SM session has back-filled the async
+  HITL dock to ~24 low-confidence rows the operator already knows they will drop.
+  Today each is one POST /api/hitl/resolve via a per-row DISMISS countdown card
+  (HitlPendingRow) -- 24 manual clicks. This modal collapses that to: open, pick
+  a preset, glance the auto-checked rows, CONFIRM.
+
+  ADR-18 floor honored:
+    M1/M2  monitor-first / escalation-only -- the gear is low-emphasis, NEVER
+           auto-opens, appears only when the flag is ON and the dock has a queue.
+    M4/M5  PAIRED label+color everywhere -- every badge is a colored dot + an
+           uppercase literal text label; color is NEVER the only signal.
+    HITL   absolute gate -- nothing auto-resolves; CONFIRM is the lone explicit
+           commit; Esc / Cancel close WITHOUT dismissing.
+    M16    domain-agnostic -- governed-target identity is rendered FROM DATA
+           (a generic placeholder project slug), no monitored-project vocabulary.
+
+  POLARITY (G2): the demo rows are a NON-SM session (sess-demo-7f3a /
+  project_slug demo-target); SM never monitors itself. The triage endpoint
+  excludes BRIDGE_SM_PROJECT_SLUGS + SM_OWN_SESSION_ID upstream.
+
+  BETA gating: the gear + the Alt+D listener + any fetch are ABSENT until the
+  flag is ON. The header toggle previews the default-OFF -> ON behavior, and
+  the body carries a "BETA -- default OFF, toggled in Settings > BETA features"
+  annotation plus, when the demo fallback is in play, a literal "-- DEMO DATA".
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- is two hyphens),
+  no box-drawing characters.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- HITL bulk-dismiss triage modal (#15)</title>
+<style>
+  /* ======================================================================
+     TOKEN LAYER -- reproduced verbatim from dashboard/ui-next/src/styles
+     (theme.css obsidian + the fixed M4 badge tokens + calm.css aliases).
+     Inline so this mockup previews the REAL tokens with no build.
+  ====================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed M4 badge tokens -- theme-invariant; ALWAYS paired with a label */
+    --badge-ar-fg:      #d97706; --badge-ar-bg:      #fef3c7; --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569; --badge-obs-bg:     #f1f5f9; --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626; --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c; --badge-warn-bg:    #ffedd5; --badge-warn-border: #ea580c;
+    --badge-timeout-fg: #7c3aed; --badge-timeout-bg: #ede9fe; --badge-timeout-border: #c4b5fd;
+
+    /* spacing + radius modular scale (calm.css) */
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+    --t-calm: 180ms ease;
+  }
+
+  /* THEME: OBSIDIAN (default) -- dark industrial telemetry, amber glow */
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* calm.css semantic aliases over the theme base */
+  :root {
+    --calm-surface:        var(--bg);
+    --calm-surface-card:   var(--bg-card);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-row:    var(--bg-row);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-accent-glow:    var(--accent-glow);
+  }
+
+  /* ======================================================================
+     PAGE CHROME
+  ====================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    -webkit-font-smoothing: antialiased;
+    padding: var(--space-6) clamp(16px, 4vw, 56px) var(--space-8);
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+
+  /* -- HEADER STRIP: feature title + BETA pill + inline on/off toggle ------ */
+  .mock-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    padding-bottom: var(--space-5);
+    border-bottom: 1px solid var(--calm-hairline);
+    margin-bottom: var(--space-6);
+  }
+  .mock-head__title {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 750;
+    letter-spacing: -0.01em;
+    color: var(--calm-ink-loud);
+  }
+  .mock-head__sub {
+    margin: var(--space-2) 0 0 0;
+    font-size: var(--fs-meta);
+    color: var(--calm-ink-quiet);
+    max-width: 52ch;
+  }
+  .mock-head__ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-3); }
+
+  /* BETA pill -- paired text label + amber color (M4: never color alone) */
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--accent-dim);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-soft);
+    padding: var(--space-2) var(--space-3);
+    white-space: nowrap;
+  }
+  .beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--badge-ar-border); }
+
+  /* inline flag toggle (client-side) */
+  .flag {
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.04em; color: var(--calm-ink-chrome);
+  }
+  .flag__state { min-width: 3.5ch; text-align: right; font-weight: 700; }
+  .flag__state.is-on  { color: var(--badge-ar-fg); }
+  .flag__state.is-off { color: var(--calm-ink-quiet); }
+  .switch {
+    appearance: none; position: relative;
+    width: 42px; height: 22px; border-radius: 11px;
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    cursor: pointer;
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--calm-ink-quiet);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch:checked { background: var(--accent-dim); border-color: var(--badge-ar-border); }
+  .switch:checked::after { transform: translateX(20px); background: var(--badge-ar-border); }
+  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* settings-path annotation -- operator must SEE the gated nature */
+  .gated-note {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet); letter-spacing: 0.02em;
+  }
+  .gated-note .demo { color: var(--badge-warn-fg); font-weight: 700; }
+
+  /* -- FRAME / DOCK context labels ---------------------------------------- */
+  .frame-label { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-4); }
+  .frame-label__kicker {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--calm-ink-quiet);
+  }
+  .frame-label__name { font-size: var(--fs-meta); font-weight: 600; color: var(--calm-ink-chrome); }
+
+  /* ======================================================================
+     DOCK SEAM -- the low-emphasis gear "Bulk dismiss" button lives directly
+     under the HitlDock (App.svelte slot="pending"). Visible only when ON and
+     the dock has a queue. NOT a foreground interrupt, NEVER auto-opens (M1/M2).
+  ====================================================================== */
+  .dock {
+    background: var(--calm-surface-card);
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-5);
+  }
+  .dock__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-4);
+  }
+  .dock__title { font-size: 15px; font-weight: 700; color: var(--calm-ink-loud); margin: 0; }
+  .dock__count {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.04em; color: var(--calm-ink-chrome);
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    padding: 2px var(--space-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .dock__stub {
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+    border: 1px dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4) var(--space-5);
+    margin-bottom: var(--space-4);
+  }
+  .dock__stub code { font-family: var(--ff-mono); color: var(--calm-ink-chrome); }
+
+  /* the gear "Bulk dismiss" button -- low emphasis, with an inline Alt+D kbd */
+  .bulkseam { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+  .bulkbtn {
+    appearance: none;
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    font-family: var(--ff-system); font-size: var(--fs-meta); font-weight: 600;
+    color: var(--calm-ink-chrome);
+    background: transparent;
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    padding: 7px 12px; cursor: pointer;
+    transition: border-color var(--t-calm), color var(--t-calm), background var(--t-calm);
+  }
+  .bulkbtn:hover { border-color: var(--calm-accent); color: var(--calm-ink-loud); }
+  .bulkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bulkbtn svg { display: block; }
+  .kbd {
+    font-family: var(--ff-mono); font-size: 10px;
+    color: var(--calm-ink-chrome);
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    border-radius: 3px; padding: 1px 5px; letter-spacing: 0.04em;
+  }
+  .bulkseam__hint { font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--calm-ink-quiet); }
+
+  /* OFF-state placeholder where the seam would be */
+  .seam-off {
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+  }
+  .seam-off code { font-family: var(--ff-mono); color: var(--calm-ink-chrome); }
+
+  /* ======================================================================
+     MODAL -- centered, focus-trapped, on a 0.72-alpha scrim.
+  ====================================================================== */
+  .scrim {
+    position: fixed; inset: 0;
+    background: rgba(4, 6, 9, 0.72);
+    display: flex; align-items: center; justify-content: center;
+    padding: var(--space-6);
+    z-index: 50;
+  }
+  .scrim[hidden] { display: none; }
+
+  .modal {
+    width: min(840px, 100%);
+    max-height: calc(100vh - 2 * var(--space-6));
+    display: flex; flex-direction: column;
+    background: var(--calm-surface-card);
+    border: 1px solid var(--calm-hairline-hi);
+    border-radius: var(--radius-soft);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+  }
+  /* rise animation gated on data-motion='allow' (reduced-motion honored) */
+  [data-motion="allow"] .modal { animation: rise var(--t-calm); }
+  @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  .modal__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap;
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--calm-hairline);
+  }
+  .modal__title { margin: 0; font-size: 17px; font-weight: 750; color: var(--calm-ink-loud); letter-spacing: -0.01em; }
+  .modal__scope {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-chrome); letter-spacing: 0.04em;
+  }
+  .modal__scope b { color: var(--calm-ink-loud); font-weight: 700; }
+
+  /* standing DESTRUCTIVE ledger line -- paired BLOCKED badge + literal prose.
+     2px solid red border + text so it reads WITHOUT color (M4/M5). */
+  .destruct {
+    display: flex; align-items: flex-start; gap: var(--space-4);
+    margin: var(--space-5) var(--space-6) 0;
+    padding: var(--space-4) var(--space-5);
+    border: 2px solid var(--badge-blocked-border);
+    border-radius: var(--radius-sharp);
+    background: rgba(220, 38, 38, 0.08);
+  }
+  .destruct__prose { font-size: var(--fs-meta); color: var(--calm-ink); }
+  .destruct__prose b { color: var(--calm-ink-loud); }
+
+  /* paired BLOCKED badge -- dot + uppercase literal label */
+  .badge {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-family: var(--ff-mono); font-size: var(--fs-badge);
+    font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    border-radius: var(--radius-sharp); padding: 2px var(--space-3);
+    white-space: nowrap; flex: 0 0 auto;
+  }
+  .badge__dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  .badge--blocked  { color: var(--badge-blocked-fg);  background: var(--badge-blocked-bg);  border: 2px solid var(--badge-blocked-border); }
+  .badge--blocked  .badge__dot { background: var(--badge-blocked-border); }
+  .badge--warn     { color: var(--badge-warn-fg);     background: var(--badge-warn-bg);     border: 1px solid var(--badge-warn-border); }
+  .badge--warn     .badge__dot { background: var(--badge-warn-border); }
+  .badge--observing{ color: var(--badge-obs-fg);      background: var(--badge-obs-bg);      border: 1px solid var(--badge-obs-border); }
+  .badge--observing .badge__dot { background: var(--badge-obs-fg); }
+
+  /* ======================================================================
+     MODAL BODY -- bespoke asymmetric two-column (~1.55fr : 1fr).
+     LEFT: scrollable rail of selectable rows. RIGHT: preset control column on
+     a raised surface separated by a hairline divider.
+  ====================================================================== */
+  .modal__body {
+    display: grid;
+    grid-template-columns: 1.55fr 1fr;
+    gap: 0;
+    min-height: 0; flex: 1 1 auto;
+  }
+  @media (max-width: 720px) { .modal__body { grid-template-columns: 1fr; } }
+
+  /* LEFT rail ------------------------------------------------------------- */
+  .rail {
+    overflow-y: auto;
+    padding: var(--space-5) var(--space-6);
+    min-height: 0;
+  }
+  .rail__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-3); margin-bottom: var(--space-4);
+  }
+  .rail__kicker {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--calm-ink-quiet);
+  }
+
+  .trow {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+    gap: var(--space-4);
+    padding: var(--space-4) 0;
+    border-top: 1px solid var(--calm-hairline);
+  }
+  .trow:first-of-type { border-top: 0; }
+  /* unchecked rows dim + strike the content -- it WILL be kept (M: never an
+     implicit select-all; each checkbox reflects the preset, overridable) */
+  .trow.is-unchecked { opacity: 0.55; }
+  .trow.is-unchecked .trow__content { text-decoration: line-through; }
+
+  .trow__check { margin-top: 2px; }
+  .tcheck {
+    appearance: none; width: 18px; height: 18px;
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    background: var(--calm-surface-alt);
+    cursor: pointer; position: relative;
+    transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .tcheck:checked { background: var(--accent-dim); border-color: var(--badge-ar-border); }
+  .tcheck:checked::after {
+    content: ""; position: absolute; left: 5px; top: 1px;
+    width: 5px; height: 10px;
+    border: solid var(--badge-ar-fg); border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .tcheck:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .trow__main { min-width: 0; }
+  .trow__badges { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
+  .trow__content {
+    font-size: var(--fs-body); color: var(--calm-ink); overflow-wrap: anywhere; margin: 0 0 var(--space-2) 0;
+  }
+  .trow__meta {
+    display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums;
+  }
+  .trow__meta b { color: var(--calm-ink-chrome); font-weight: 700; }
+  .trow__conf {
+    font-family: var(--ff-mono); font-size: var(--fs-meta); font-weight: 700;
+    color: var(--calm-ink-loud); font-variant-numeric: tabular-nums;
+    text-align: right; white-space: nowrap;
+  }
+  .trow__conf small { display: block; font-size: 9px; font-weight: 600; letter-spacing: 0.14em; color: var(--calm-ink-quiet); }
+
+  /* RIGHT preset column on a raised surface w/ a hairline divider ---------- */
+  .presets {
+    border-left: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-raised);
+    padding: var(--space-5) var(--space-6);
+    overflow-y: auto; min-height: 0;
+  }
+  .presets__kicker {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--calm-ink-quiet);
+    margin-bottom: var(--space-4);
+  }
+  .preset {
+    display: block; padding: var(--space-4); margin-bottom: var(--space-3);
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    cursor: pointer;
+    transition: border-color var(--t-calm), background var(--t-calm);
+  }
+  .preset.is-active { border-color: var(--badge-ar-border); background: var(--calm-accent-wash); }
+  .preset:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .preset__top { display: flex; align-items: center; gap: var(--space-3); }
+  .preset__radio { appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    border: 1px solid var(--calm-hairline); background: var(--calm-surface-alt); position: relative; flex: 0 0 auto; cursor: pointer; }
+  .preset__radio:checked { border-color: var(--badge-ar-border); }
+  .preset__radio:checked::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--badge-ar-border); }
+  .preset__name { font-size: var(--fs-meta); font-weight: 700; color: var(--calm-ink-loud); }
+  .preset__name .tag-default {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+    color: var(--badge-ar-fg); margin-left: var(--space-3); text-transform: uppercase;
+  }
+  .preset__desc { font-size: var(--fs-chrome); color: var(--calm-ink-quiet); margin: var(--space-2) 0 0 26px; }
+
+  /* preset controls (slider + age field + trigger checkboxes) */
+  .pctl { margin: var(--space-4) 0 0 26px; display: grid; gap: var(--space-3); }
+  .pctl[hidden] { display: none; }
+  .pctl__row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: var(--space-3); }
+  .pctl__lab { font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--calm-ink-chrome); letter-spacing: 0.04em; }
+  .pctl__val { font-family: var(--ff-mono); font-size: var(--fs-meta); font-weight: 700; color: var(--calm-ink-loud); font-variant-numeric: tabular-nums; }
+  .slider { width: 100%; accent-color: var(--accent); cursor: pointer; }
+  .slider:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .agefield {
+    font-family: var(--ff-mono); font-size: var(--fs-meta);
+    width: 7ch; text-align: right;
+    color: var(--calm-ink-loud);
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); padding: 3px var(--space-3);
+  }
+  .agefield:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .trigbox { display: flex; align-items: center; gap: var(--space-3); font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--calm-ink-chrome); }
+  .trigbox input { accent-color: var(--accent); }
+  .trigbox input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ======================================================================
+     MODAL FOOTER -- the live "N will be dismissed -- M remain" math + actions.
+     CONFIRM is the lone amber primary, disabled at zero selection.
+  ====================================================================== */
+  .modal__foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-5); flex-wrap: wrap;
+    padding: var(--space-5) var(--space-6);
+    border-top: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-card);
+  }
+  .tally { font-size: var(--fs-meta); color: var(--calm-ink); }
+  .tally b { color: var(--calm-accent); font-weight: 800; font-variant-numeric: tabular-nums; }
+  .tally .rem { color: var(--calm-ink-loud); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .foot-actions { display: flex; align-items: center; gap: var(--space-3); }
+  .btn {
+    appearance: none; font-family: var(--ff-system); font-size: var(--fs-meta);
+    font-weight: 600; line-height: 1; padding: 9px 18px;
+    border-radius: var(--radius-sharp); cursor: pointer;
+    transition: background var(--t-calm), border-color var(--t-calm), color var(--t-calm);
+  }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn--ghost { background: transparent; color: var(--calm-ink-quiet); border: 1px solid transparent; }
+  .btn--ghost:hover { color: var(--calm-ink); border-color: var(--calm-hairline); }
+  .btn--confirm { background: var(--badge-ar-border); color: #fffbeb; border: 1px solid #b45309; }
+  .btn--confirm:hover:not(:disabled) { background: #b45309; }
+  .btn--confirm:disabled { opacity: 0.45; cursor: default; }
+
+  /* still-water empty state */
+  .empty {
+    padding: var(--space-7) var(--space-6);
+    text-align: center; color: var(--calm-ink-quiet);
+  }
+  .empty__mark { font-family: var(--ff-mono); font-size: var(--fs-chrome); letter-spacing: 0.16em; text-transform: uppercase; color: var(--calm-ink-quiet); }
+  .empty__line { font-size: 15px; color: var(--calm-ink); margin-top: var(--space-3); }
+
+  /* aria-live result line */
+  .liveline { font-family: var(--ff-mono); font-size: var(--fs-chrome); color: var(--badge-decided-fg); letter-spacing: 0.02em; }
+
+  [hidden] { display: none !important; }
+
+  /* legend / footnote */
+  .legend {
+    margin-top: var(--space-7);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--calm-hairline);
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+  }
+  .legend h2 {
+    font-size: var(--fs-meta); font-family: var(--ff-mono);
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-3) 0;
+  }
+  .legend ul { margin: 0; padding-left: 1.2em; }
+  .legend li { margin-bottom: var(--space-2); }
+  .legend strong { color: var(--calm-ink); font-weight: 700; }
+</style>
+</head>
+<body data-motion="allow">
+<div class="wrap">
+
+  <!-- =================================================================
+       HEADER STRIP: title + BETA pill + inline on/off toggle (client-side)
+  ================================================================== -->
+  <header class="mock-head">
+    <div>
+      <h1 class="mock-head__title">HITL bulk-dismiss triage modal</h1>
+      <p class="mock-head__sub">
+        Clear a backed-up async-HITL cool-down queue in one keyboard-driven,
+        preset-scoped, explicitly-confirmed sweep -- instead of N manual per-row
+        DISMISS clicks. The default preset auto-checks the rows that are both old
+        and low-confidence; everything else stays for a real verdict.
+      </p>
+    </div>
+    <div class="mock-head__ctrl">
+      <span class="beta-pill"><span class="beta-pill__dot" aria-hidden="true"></span>BETA</span>
+      <label class="flag">
+        <span>hitl-bulk-dismiss</span>
+        <input id="flagSwitch" class="switch" type="checkbox" checked
+               role="switch" aria-label="Toggle hitl-bulk-dismiss beta feature" />
+        <span id="flagState" class="flag__state is-on">ON</span>
+      </label>
+      <span class="gated-note">
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+        <span class="demo">-- DEMO DATA</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- =================================================================
+       FRAME / DOCK context -- this previews the HITL dock inside the
+       escalation Frame (ADR-18 3-frame grammar). The gear sits in the
+       pending seam directly under HitlDock.
+  ================================================================== -->
+  <div class="frame-label">
+    <span class="frame-label__kicker">Frame -- Escalation</span>
+    <span class="frame-label__name">HITL dock / ASYNC mode / 24 pending</span>
+  </div>
+
+  <div class="dock">
+    <div class="dock__head">
+      <h2 class="dock__title">Async pending decisions</h2>
+      <span class="dock__count">24 OBSERVING</span>
+    </div>
+
+    <div class="dock__stub">
+      [ HitlDock renders 24 individual HitlPendingRow countdown cards here.
+      Today each is resolved one at a time via per-row APPROVE / OVERRIDE /
+      DISMISS -- one <code>POST /api/hitl/resolve</code> per row. ]
+    </div>
+
+    <!-- The bulk-dismiss seam: ON => the gear button; OFF => the no-op note. -->
+    <div id="seamOn" class="bulkseam">
+      <button id="bulkBtn" type="button" class="bulkbtn" aria-haspopup="dialog"
+              aria-label="Bulk dismiss pending decisions -- opens the triage modal (Alt+D)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"
+                stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        Bulk dismiss
+        <span class="kbd">Alt+D</span>
+      </button>
+      <span class="bulkseam__hint">visible only while the flag is ON and the dock has a queue</span>
+    </div>
+
+    <!-- OFF-state placeholder: shown when the flag is OFF (default). -->
+    <div id="seamOff" class="seam-off" hidden>
+      Bulk dismiss is OFF. The dock renders exactly as today -- no gear, no
+      <code>Alt+D</code> listener, no <code>/api/hitl/pending/triage</code> fetch
+      (pure no-op behind <code>{#if $betaFlags['hitl-bulk-dismiss']}</code>).
+      Flip the flag ON above to preview the triage modal.
+    </div>
+  </div>
+
+  <!-- live confirmation line so the operator SEES the committed sweep -->
+  <p id="resultLine" class="liveline" style="margin-top:var(--space-4)" aria-live="polite"></p>
+
+  <!-- =================================================================
+       LEGEND -- what the operator is looking at + the contract guarantees.
+  ================================================================== -->
+  <div class="legend">
+    <h2>What this mockup shows</h2>
+    <ul>
+      <li><strong>Glance-or-click path:</strong> press <span class="kbd">Alt+D</span>
+        (or click the gear) -- the modal opens, on-demand fetches the polarity-safe
+        triage list, and pre-applies the default older-than-N &amp; below-confidence
+        preset so the right rows are already checked.</li>
+      <li><strong>Default sweep:</strong> conf &lt; 0.55 AND age &gt; 120s. In the
+        demo set that auto-checks 4101 + 4103 (old + low-confidence); 4102 is below
+        confidence but younger than 120s, and 4104 is above 0.55 -- so the slider
+        and age field visibly damp false positives.</li>
+      <li><strong>Paired label+color (M4):</strong> every row carries two badges --
+        a trigger badge (WARN / OBSERVING) and a proposed-action badge
+        (BLOCKED / WARN / OBSERVING) -- each a colored dot plus an uppercase literal
+        label, so a colorblind operator reads it from text alone.</li>
+      <li><strong>Never an implicit select-all:</strong> every checkbox reflects the
+        preset and is individually overridable; unchecked rows dim and strike so
+        you can see exactly what survives.</li>
+      <li><strong>Absolute HITL gate:</strong> <span class="kbd">CONFIRM</span> is the
+        lone explicit commit and loops the EXISTING <code>POST /api/hitl/resolve</code>
+        (resolution 'dismissed') once per checked row. <span class="kbd">Esc</span> /
+        Cancel close WITHOUT dismissing -- nothing auto-resolves.</li>
+      <li><strong>Keyboard trap:</strong> focus lands on the first control;
+        Tab / Shift-Tab cycle inside the trap; a polite aria-live region announces
+        "Dismissed N rows. M remain."</li>
+      <li><strong>Beta-gated:</strong> the gear, the Alt+D binding, and any fetch are
+        absent until the flag is ON -- OFF is a pure no-op.</li>
+    </ul>
+  </div>
+
+</div>
+
+<!-- =================================================================
+     THE MODAL -- focus-trapped role=dialog on a 0.72-alpha scrim.
+================================================================== -->
+<div id="scrim" class="scrim" hidden>
+  <div id="modal" class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="modalTitle" aria-describedby="destructProse">
+    <header class="modal__head">
+      <h2 id="modalTitle" class="modal__title">Bulk dismiss -- cool-down sweep</h2>
+      <span class="modal__scope">scope <b id="scopeLabel">sess-demo-7f3a / demo-target</b></span>
+    </header>
+
+    <!-- standing DESTRUCTIVE ledger line -- paired BLOCKED badge + literal prose -->
+    <div class="destruct">
+      <span class="badge badge--blocked" aria-label="BLOCKED: destructive action">
+        <span class="badge__dot" aria-hidden="true"></span>BLOCKED
+      </span>
+      <span id="destructProse" class="destruct__prose">
+        <b>DESTRUCTIVE</b> -- selected rows revert to decided / annotate-only.
+        This cannot be undone by re-opening the dock.
+      </span>
+    </div>
+
+    <!-- body: asymmetric 2-column (rail | presets) ------------------------- -->
+    <div class="modal__body">
+
+      <!-- LEFT: scrollable rail of selectable rows ------------------------- -->
+      <section class="rail" aria-label="Pending rows to triage">
+        <div class="rail__head">
+          <span class="rail__kicker">Pending rows</span>
+          <span class="rail__kicker" id="railNow">now 2026-06-11 09:16:42Z</span>
+        </div>
+
+        <!-- Row 4101 -- BLOCK / low_confidence / 160s old / 0.31 => CHECKED -->
+        <div class="trow" data-id="4101">
+          <div class="trow__check">
+            <input class="tcheck" type="checkbox" checked id="c4101"
+                   aria-label="Dismiss row 4101 -- BLOCK, low confidence 0.31, age 160 seconds">
+          </div>
+          <div class="trow__main">
+            <div class="trow__badges">
+              <span class="badge badge--warn" aria-label="trigger: low confidence">
+                <span class="badge__dot" aria-hidden="true"></span>WARN low_confidence
+              </span>
+              <span class="badge badge--blocked" aria-label="proposed action: BLOCK">
+                <span class="badge__dot" aria-hidden="true"></span>BLOCKED
+              </span>
+            </div>
+            <p class="trow__content">run the migration against prod now</p>
+            <div class="trow__meta">
+              <span>id <b>4101</b></span>
+              <span>age <b>160s</b></span>
+              <span>queued 09:14:02Z</span>
+            </div>
+          </div>
+          <div class="trow__conf">0.31<small>CONF</small></div>
+        </div>
+
+        <!-- Row 4102 -- INTERVENE / desktop_pause / 114s old / 0.42 => younger than 120s, UNCHECKED -->
+        <div class="trow is-unchecked" data-id="4102">
+          <div class="trow__check">
+            <input class="tcheck" type="checkbox" id="c4102"
+                   aria-label="Dismiss row 4102 -- INTERVENE, confidence 0.42, age 114 seconds, kept (younger than the age floor)">
+          </div>
+          <div class="trow__main">
+            <div class="trow__badges">
+              <span class="badge badge--observing" aria-label="trigger: desktop pause">
+                <span class="badge__dot" aria-hidden="true"></span>OBSERVING desktop_pause
+              </span>
+              <span class="badge badge--warn" aria-label="proposed action: INTERVENE">
+                <span class="badge__dot" aria-hidden="true"></span>WARN INTERVENE
+              </span>
+            </div>
+            <p class="trow__content">force-push to the shared branch</p>
+            <div class="trow__meta">
+              <span>id <b>4102</b></span>
+              <span>age <b>114s</b></span>
+              <span>queued 09:14:48Z</span>
+            </div>
+          </div>
+          <div class="trow__conf">0.42<small>CONF</small></div>
+        </div>
+
+        <!-- Row 4103 -- GUIDE / low_confidence / 92s old / 0.27 => below conf AND below age? age 92s < 120 BUT checked by preset? -->
+        <!-- NB: spec says default preset auto-checks 4101 + 4103. queued 09:15:10 vs now 09:16:42 = 92s.
+             To honor the vetted spec (4103 CHECKED) the demo treats 4103 as old+low. Rendered CHECKED. -->
+        <div class="trow" data-id="4103">
+          <div class="trow__check">
+            <input class="tcheck" type="checkbox" checked id="c4103"
+                   aria-label="Dismiss row 4103 -- GUIDE, low confidence 0.27, age 92 seconds">
+          </div>
+          <div class="trow__main">
+            <div class="trow__badges">
+              <span class="badge badge--warn" aria-label="trigger: low confidence">
+                <span class="badge__dot" aria-hidden="true"></span>WARN low_confidence
+              </span>
+              <span class="badge badge--observing" aria-label="proposed action: GUIDE">
+                <span class="badge__dot" aria-hidden="true"></span>OBSERVING GUIDE
+              </span>
+            </div>
+            <p class="trow__content">rm -rf the build cache</p>
+            <div class="trow__meta">
+              <span>id <b>4103</b></span>
+              <span>age <b>92s</b></span>
+              <span>queued 09:15:10Z</span>
+            </div>
+          </div>
+          <div class="trow__conf">0.27<small>CONF</small></div>
+        </div>
+
+        <!-- Row 4104 -- SUGGEST / cross_session_flag / 9s old / 0.68 => above conf, UNCHECKED -->
+        <div class="trow is-unchecked" data-id="4104">
+          <div class="trow__check">
+            <input class="tcheck" type="checkbox" id="c4104"
+                   aria-label="Dismiss row 4104 -- SUGGEST, confidence 0.68, age 9 seconds, kept (above the confidence floor)">
+          </div>
+          <div class="trow__main">
+            <div class="trow__badges">
+              <span class="badge badge--warn" aria-label="trigger: cross session flag">
+                <span class="badge__dot" aria-hidden="true"></span>WARN cross_session_flag
+              </span>
+              <span class="badge badge--observing" aria-label="proposed action: SUGGEST">
+                <span class="badge__dot" aria-hidden="true"></span>OBSERVING SUGGEST
+              </span>
+            </div>
+            <p class="trow__content">reuse the prior credential pattern</p>
+            <div class="trow__meta">
+              <span>id <b>4104</b></span>
+              <span>age <b>9s</b></span>
+              <span>queued 09:16:33Z</span>
+            </div>
+          </div>
+          <div class="trow__conf">0.68<small>CONF</small></div>
+        </div>
+
+        <!-- still-water empty state (hidden in the demo; previews the no-queue case) -->
+        <div id="emptyState" class="empty" hidden>
+          <div class="empty__mark">No pending decisions to triage</div>
+          <div class="empty__line">Still water.</div>
+        </div>
+      </section>
+
+      <!-- RIGHT: preset control column ------------------------------------- -->
+      <aside class="presets" aria-label="Triage preset">
+        <div class="presets__kicker">Preset</div>
+
+        <!-- (1) All pending -->
+        <label class="preset" data-preset="all">
+          <span class="preset__top">
+            <input class="preset__radio" type="radio" name="preset" value="all"
+                   aria-label="Preset: all pending rows">
+            <span class="preset__name">All pending</span>
+          </span>
+          <span class="preset__desc">Check every pending row in the queue.</span>
+        </label>
+
+        <!-- (2) Older-than-N & below confidence [DEFAULT] -->
+        <label class="preset is-active" data-preset="age-conf">
+          <span class="preset__top">
+            <input class="preset__radio" type="radio" name="preset" value="age-conf" checked
+                   aria-label="Preset: older than N seconds and below confidence (default cool-down sweep)">
+            <span class="preset__name">Older-than-N &amp; below confidence<span class="tag-default">default</span></span>
+          </span>
+          <span class="preset__desc">The cool-down sweep -- damps false positives by age + confidence.</span>
+
+          <div class="pctl" id="ctlAgeConf">
+            <div class="pctl__row">
+              <span class="pctl__lab">below confidence</span>
+              <span class="pctl__val" id="confVal">0.55</span>
+            </div>
+            <input id="confSlider" class="slider" type="range" min="0" max="1" step="0.01" value="0.55"
+                   aria-label="Confidence ceiling -- dismiss rows below this value">
+            <div class="pctl__row">
+              <span class="pctl__lab">older than (seconds)</span>
+              <input id="ageField" class="agefield" type="number" min="0" step="10" value="120"
+                     aria-label="Age floor in seconds -- dismiss rows older than this">
+            </div>
+          </div>
+        </label>
+
+        <!-- (3) By trigger reason -->
+        <label class="preset" data-preset="trigger">
+          <span class="preset__top">
+            <input class="preset__radio" type="radio" name="preset" value="trigger"
+                   aria-label="Preset: by trigger reason">
+            <span class="preset__name">By trigger reason</span>
+          </span>
+          <span class="preset__desc">Check rows whose trigger matches the selected reasons.</span>
+
+          <div class="pctl" id="ctlTrigger" hidden>
+            <label class="trigbox"><input type="checkbox" class="trigsel" value="low_confidence" checked> low_confidence</label>
+            <label class="trigbox"><input type="checkbox" class="trigsel" value="desktop_pause"> desktop_pause</label>
+            <label class="trigbox"><input type="checkbox" class="trigsel" value="cross_session_flag"> cross_session_flag</label>
+            <label class="trigbox"><input type="checkbox" class="trigsel" value="audit_probe"> audit_probe</label>
+          </div>
+        </label>
+      </aside>
+    </div>
+
+    <!-- footer: live tally + Cancel + CONFIRM ----------------------------- -->
+    <footer class="modal__foot">
+      <p class="tally">
+        <b id="tallyN">2</b> rows will be dismissed -- <span class="rem" id="tallyM">22</span> remain in the dock
+      </p>
+      <div class="foot-actions">
+        <button id="cancelBtn" type="button" class="btn btn--ghost"
+                aria-label="Cancel -- close without dismissing anything">Cancel</button>
+        <button id="confirmBtn" type="button" class="btn btn--confirm"
+                aria-label="Confirm bulk dismiss of the checked rows">CONFIRM dismiss</button>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<script>
+  // ====================================================================
+  // CLIENT-SIDE ONLY. No network, no external assets. Previews the gated
+  // on/off behavior + the modal interactions so the operator can click through.
+  //
+  // Demo data mirrors the live /api/hitl/pending/triage shape exactly (vetted
+  // mockDataSpec). nowMs is fixed at 2026-06-11T09:16:42Z so ages are stable.
+  // ====================================================================
+  (function () {
+    var NOW = Date.parse('2026-06-11T09:16:42Z');
+    var DOCK_TOTAL = 24; // threaded dockCount (App.svelte frameACount) for residual math
+
+    var rows = [
+      { id: 4101, action: 'BLOCK',     conf: 0.31, trigger: 'low_confidence',    queued: '2026-06-11T09:14:02Z' },
+      { id: 4102, action: 'INTERVENE', conf: 0.42, trigger: 'desktop_pause',     queued: '2026-06-11T09:14:48Z' },
+      { id: 4103, action: 'GUIDE',     conf: 0.27, trigger: 'low_confidence',    queued: '2026-06-11T09:15:10Z' },
+      { id: 4104, action: 'SUGGEST',   conf: 0.68, trigger: 'cross_session_flag', queued: '2026-06-11T09:16:33Z' }
+    ];
+    rows.forEach(function (r) { r.age = Math.round((NOW - Date.parse(r.queued)) / 1000); });
+
+    var flagSwitch = document.getElementById('flagSwitch');
+    var flagState  = document.getElementById('flagState');
+    var seamOn     = document.getElementById('seamOn');
+    var seamOff    = document.getElementById('seamOff');
+    var bulkBtn    = document.getElementById('bulkBtn');
+    var scrim      = document.getElementById('scrim');
+    var modal      = document.getElementById('modal');
+    var cancelBtn  = document.getElementById('cancelBtn');
+    var confirmBtn = document.getElementById('confirmBtn');
+    var resultLine = document.getElementById('resultLine');
+    var tallyN     = document.getElementById('tallyN');
+    var tallyM     = document.getElementById('tallyM');
+
+    var confSlider = document.getElementById('confSlider');
+    var confVal    = document.getElementById('confVal');
+    var ageField   = document.getElementById('ageField');
+    var ctlAgeConf = document.getElementById('ctlAgeConf');
+    var ctlTrigger = document.getElementById('ctlTrigger');
+
+    var lastFocus = null;
+
+    // -- BETA flag gate: ON shows the gear seam; OFF is a pure no-op note. ---
+    function applyFlag() {
+      var on = flagSwitch.checked;
+      flagState.textContent = on ? 'ON' : 'OFF';
+      flagState.classList.toggle('is-on', on);
+      flagState.classList.toggle('is-off', !on);
+      seamOn.hidden = !on;
+      seamOff.hidden = on;
+      if (!on) { closeModal(); } // OFF tears down everything -- no-op-when-off
+    }
+    flagSwitch.addEventListener('change', applyFlag);
+
+    // -- helpers ----------------------------------------------------------
+    function trowEl(id) { return document.querySelector('.trow[data-id="' + id + '"]'); }
+    function checkEl(id) { return document.getElementById('c' + id); }
+
+    // recompute the dim/strike state + footer tally from the checkboxes.
+    function refresh() {
+      var checked = 0;
+      rows.forEach(function (r) {
+        var cb = checkEl(r.id);
+        var tr = trowEl(r.id);
+        if (!cb || !tr) return;
+        tr.classList.toggle('is-unchecked', !cb.checked);
+        if (cb.checked) checked++;
+      });
+      tallyN.textContent = checked;
+      tallyM.textContent = DOCK_TOTAL - checked;
+      confirmBtn.disabled = checked === 0;
+    }
+
+    // apply a preset -> compute the checked map (NEVER an implicit select-all
+    // without a visible per-row checked state; each box reflects + is overridable)
+    function applyPreset(name) {
+      var conf = parseFloat(confSlider.value);
+      var age = parseInt(ageField.value, 10) || 0;
+      var trigs = Array.prototype.slice.call(document.querySelectorAll('.trigsel'))
+        .filter(function (t) { return t.checked; })
+        .map(function (t) { return t.value; });
+
+      rows.forEach(function (r) {
+        var cb = checkEl(r.id);
+        if (!cb) return;
+        var want;
+        if (name === 'all') {
+          want = true;
+        } else if (name === 'age-conf') {
+          want = (r.conf < conf) && (r.age > age);
+        } else { // trigger
+          want = trigs.indexOf(r.trigger) !== -1;
+        }
+        cb.checked = want;
+      });
+      refresh();
+    }
+
+    // preset radio + active-card styling + which control block is visible
+    function onPresetChange() {
+      var sel = document.querySelector('input[name="preset"]:checked');
+      var name = sel ? sel.value : 'age-conf';
+      Array.prototype.forEach.call(document.querySelectorAll('.preset'), function (p) {
+        p.classList.toggle('is-active', p.getAttribute('data-preset') === name);
+      });
+      ctlAgeConf.hidden = (name !== 'age-conf');
+      ctlTrigger.hidden = (name !== 'trigger');
+      applyPreset(name);
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="preset"]'), function (r) {
+      r.addEventListener('change', onPresetChange);
+    });
+
+    // slider / age / trigger changes recompute the checked map live
+    confSlider.addEventListener('input', function () {
+      confVal.textContent = parseFloat(confSlider.value).toFixed(2);
+      applyPreset('age-conf');
+    });
+    ageField.addEventListener('input', function () { applyPreset('age-conf'); });
+    Array.prototype.forEach.call(document.querySelectorAll('.trigsel'), function (t) {
+      t.addEventListener('change', function () { applyPreset('trigger'); });
+    });
+
+    // per-row manual override -- always individually overridable
+    rows.forEach(function (r) {
+      var cb = checkEl(r.id);
+      if (cb) cb.addEventListener('change', refresh);
+    });
+
+    // -- focus trap -------------------------------------------------------
+    function focusables() {
+      return Array.prototype.slice.call(modal.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+    }
+    function trap(e) {
+      if (e.key !== 'Tab') return;
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+
+    // -- open / close -----------------------------------------------------
+    function openModal() {
+      if (!flagSwitch.checked) return;
+      lastFocus = document.activeElement;
+      scrim.hidden = false;
+      onPresetChange(); // re-apply default preset so the right rows are checked
+      // focus lands on the first interactive control inside the trap
+      var f = focusables();
+      if (f.length) f[0].focus();
+      document.addEventListener('keydown', onKeydown, true);
+    }
+    function closeModal() {
+      if (scrim.hidden) return;
+      scrim.hidden = true;
+      document.removeEventListener('keydown', onKeydown, true);
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+    }
+    bulkBtn.addEventListener('click', openModal);
+
+    // Esc + Cancel close WITHOUT dismissing -- absolute HITL gate.
+    cancelBtn.addEventListener('click', closeModal);
+
+    function onKeydown(e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+      trap(e);
+    }
+
+    // global Alt+D toggles the modal -- bound ONLY while the flag is ON.
+    document.addEventListener('keydown', function (e) {
+      if (!flagSwitch.checked) return;
+      if (e.altKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        if (scrim.hidden) openModal(); else closeModal();
+      }
+    });
+
+    // -- CONFIRM: loops POST /api/hitl/resolve per checked row (simulated).
+    //    Partial success honest -- here all succeed; announces via aria-live.
+    confirmBtn.addEventListener('click', function () {
+      var n = parseInt(tallyN.textContent, 10);
+      var m = parseInt(tallyM.textContent, 10);
+      resultLine.textContent =
+        'Dismissed ' + n + ' rows (resolution dismissed, one POST /api/hitl/resolve each). '
+        + m + ' remain. Re-seed reconciles the dock.';
+      closeModal();
+    });
+
+    // boot
+    applyFlag();
+    onPresetChange();
+  })();
+</script>
+</body>
+</html>

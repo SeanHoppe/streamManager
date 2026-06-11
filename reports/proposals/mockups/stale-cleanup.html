@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<!--
+  stale-cleanup.html -- KingMode self-contained MOCKUP (operator sign-off gate).
+  BETA feature #46: Operator-driven stale session cleanup (soft-delete + restore).
+
+  STATUS: approvable UI / build GATED on an ADR-18 + UI-DESIGN-SPEC amendment.
+  This is a preview-only artifact -- no Svelte, no fetch, no real gov.db. The
+  data below is the mockDataSpec mock served when gov.db is unavailable. All
+  client behavior (beta toggle, modal open/close, slider live-preview, confirm,
+  per-row restore, keyboard path) is wired in inline JS so the operator can
+  click through the exact interaction before any code is written.
+
+  Tokens are lifted VERBATIM from dashboard/ui-next/src/styles/theme.css +
+  calm.css + focus.css so this previews the REAL palette (obsidian default).
+  ASCII-only: no smart quotes, no em-dashes (-- used), no box-drawing.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BETA -- stale session cleanup (mockup)</title>
+<style>
+  /* ====================================================================
+     TOKEN LAYER -- verbatim from theme.css / calm.css / focus.css.
+     obsidian theme (default). Only the active theme is inlined here.
+  ==================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed badge tokens (M5) -- theme-INVARIANT, paired with text label */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+
+    /* focus-ring contract (focus.css) -- 2px solid #d97706, 2px offset */
+    --focus-ring-color: #d97706; --focus-ring-width: 2px;
+    --focus-ring-offset: 2px;    --focus-ring-style: solid;
+
+    /* spacing rhythm + radius (calm.css) */
+    --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+
+    /* motion / transition tokens (calm.css) */
+    --t-calm: 180ms ease; --t-flash: 300ms ease; --motion-pulse: 1.6s;
+
+    /* min font sizes (calm.css NFR-UI-2) */
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+
+    /* severity weights (calm.css) */
+    --sev-quiet-weight: 300; --sev-base-weight: 400;
+    --sev-notice-weight: 600; --sev-critical-weight: 750;
+  }
+
+  [data-theme="obsidian"] {
+    --bg: #080a0c; --bg-card: #0c1118; --bg-row: #0e141e; --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a; --bg-row-flash: rgba(245,158,11,0.09);
+    --border: #192030; --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098; --text-dim: #948870; --text-ui: #8a8068; --text-bright: #e8e0cc;
+    --accent: #f59e0b; --accent-dim: rgba(245,158,11,0.09); --accent-glow: rgba(245,158,11,0.35);
+    --font-h: var(--ff-system); --font-d: var(--ff-mono);
+  }
+
+  /* calm semantic aliases (calm.css) */
+  :root {
+    --calm-surface: var(--bg); --calm-surface-raised: var(--bg-card);
+    --calm-surface-row: var(--bg-row); --calm-surface-alt: var(--bg-row-alt);
+    --calm-surface-hover: var(--bg-row-hover);
+    --calm-hairline: var(--border); --calm-hairline-hi: var(--border-hi);
+    --calm-ink: var(--text); --calm-ink-quiet: var(--text-dim);
+    --calm-ink-chrome: var(--text-ui); --calm-ink-loud: var(--text-bright);
+    --calm-accent: var(--accent); --calm-accent-wash: var(--accent-dim);
+    --calm-accent-glow: var(--accent-glow);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--calm-surface); color: var(--calm-ink);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ====================================================================
+     FOCUS-RING CONTRACT (focus.css) -- universal :focus-visible ring.
+  ==================================================================== */
+  :focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  .sev-quiet  { font-weight: 300; letter-spacing: 0.06em; color: var(--calm-ink-quiet);
+                font-variant-numeric: tabular-nums; }
+  .sev-base   { font-weight: 400; letter-spacing: 0.02em; color: var(--calm-ink);
+                font-variant-numeric: tabular-nums; }
+  .sev-notice { font-weight: 600; letter-spacing: 0; color: var(--calm-ink-loud);
+                font-variant-numeric: tabular-nums; }
+  .sev-critical { font-weight: 750; letter-spacing: -0.01em; color: var(--badge-ar-fg);
+                font-variant-numeric: tabular-nums; }
+
+  /* ====================================================================
+     PAGE SCAFFOLD -- a slim mock dashboard so the rail + footer trigger
+     read in their real context (SessionRail is a left column).
+  ==================================================================== */
+  .page {
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  /* compact header strip (mockup requirement): title + BETA pill + inline toggle */
+  .topbar {
+    display: flex; align-items: center; gap: var(--space-5);
+    flex-wrap: wrap;
+    padding: var(--space-4) var(--space-6);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface-raised);
+  }
+  .topbar__brand {
+    font-family: var(--font-d);
+    font-size: var(--fs-chrome); letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .topbar__title {
+    margin: 0;
+    font-size: 17px; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--calm-ink-loud);
+  }
+  .topbar__spacer { flex: 1 1 auto; }
+
+  /* BETA pill (paired text + amber -- never color alone) */
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: var(--hairline) solid var(--badge-ar-border);
+    background: var(--badge-ar-bg); color: var(--badge-ar-fg);
+    font-family: var(--font-d);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--badge-ar-fg);
+  }
+
+  /* inline on/off toggle (wired) -- mirrors SettingsDrawer .sd-switch idiom */
+  .flag {
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    font-family: var(--font-d); font-size: 11px; letter-spacing: 0.06em;
+    color: var(--calm-ink-chrome);
+  }
+  .flag__label { text-transform: uppercase; }
+  .switch { display: inline-flex; align-items: center; gap: var(--space-3); cursor: pointer; }
+  .switch input {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    border: 0; clip: rect(0 0 0 0); overflow: hidden;
+  }
+  .switch__track {
+    position: relative; width: 38px; height: 20px; border-radius: 999px;
+    background: var(--calm-surface-row);
+    border: var(--hairline) solid var(--calm-hairline);
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--calm-ink-chrome);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch input:checked + .switch__track { background: var(--calm-accent-wash); border-color: var(--calm-hairline-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform: translateX(18px); background: var(--calm-accent); }
+  .switch input:focus-visible + .switch__track {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+  .switch__text {
+    min-width: 3ch; font-family: var(--font-d); font-size: var(--fs-meta);
+    letter-spacing: 0.06em; color: var(--calm-ink-quiet);
+  }
+  .switch__text[data-on="true"] { color: var(--calm-accent); }
+
+  /* ====================================================================
+     STAGE: the SessionRail mock (left), an explainer (right).
+  ==================================================================== */
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) 1fr;
+    gap: var(--space-6);
+    padding: var(--space-6);
+    align-items: start;
+  }
+  @media (max-width: 760px) { .stage { grid-template-columns: 1fr; } }
+
+  /* --- SessionRail (graft from SessionRail.svelte) --- */
+  .rail {
+    display: flex; flex-direction: column;
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    overflow: hidden;
+    max-height: 78vh;
+  }
+  .rail__head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); padding: var(--space-4) var(--space-5);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface);
+  }
+  .rail__title-wrap { display: inline-flex; align-items: baseline; gap: var(--space-4); min-width: 0; }
+  .rail__title {
+    margin: 0; font-family: var(--font-h); font-size: var(--fs-body);
+    font-weight: 560; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--calm-ink-loud); white-space: nowrap;
+  }
+  .rail__tally {
+    display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 7px;
+    border-radius: 999px; border: var(--hairline) solid transparent;
+    background: var(--calm-accent-wash);
+  }
+  .rail__tally-tag {
+    font-family: var(--font-d); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .rail__tally-num {
+    font-family: var(--font-d); font-variant-numeric: tabular-nums;
+    font-size: var(--fs-meta); font-weight: 560; line-height: 1;
+    color: var(--calm-ink-quiet); min-width: 1ch; text-align: right;
+  }
+  .rail__lanes {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding: var(--space-4); scrollbar-gutter: stable;
+  }
+  /* a lane (graft from SessionLane idiom) */
+  .lane {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-left: 2px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    transition: opacity var(--t-calm), border-color var(--t-calm),
+                max-height 220ms ease, padding 220ms ease, margin 220ms ease;
+    overflow: hidden;
+  }
+  .lane__slug {
+    font-family: var(--font-d); font-size: var(--fs-meta);
+    color: var(--calm-ink-loud); letter-spacing: 0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lane__meta {
+    font-family: var(--font-d); font-size: 10px;
+    color: var(--calm-ink-quiet); letter-spacing: 0.04em; white-space: nowrap;
+  }
+  .lane__spacer { flex: 1 1 auto; }
+  /* a STALE (dead) lane reads grey + carries the text marker "stale" */
+  .lane--stale { border-left-color: #2a3344; }
+  .lane--stale .lane__slug { color: var(--calm-ink-chrome); }
+  /* a live lane carries the amber action edge (data-driven) */
+  .lane--live { border-left-color: var(--calm-accent); }
+  /* the dead-tag chip beside a stale lane (paired text + color) */
+  .lane__tag {
+    font-family: var(--font-d); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 999px;
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: var(--hairline) solid var(--badge-obs-border);
+  }
+  .lane__tag--live {
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border-color: var(--badge-ar-border);
+  }
+  /* collapsing animation on archive */
+  .lane.is-archiving {
+    max-height: 0; padding-top: 0; padding-bottom: 0;
+    margin-top: 0; margin-bottom: 0; opacity: 0; border-width: 0;
+  }
+
+  /* rail footer (graft from SessionRail.svelte rail__foot) -- houses the
+     self-excluded readout AND the new ghost ARCHIVE STALE trigger. */
+  .rail__foot {
+    flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface);
+  }
+  .rail__self {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .rail__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--calm-ink-quiet); opacity: 0.7; }
+  .rail__foot-spacer { flex: 1 1 auto; }
+
+  /* the hairline ghost trigger -- only renders when flag ON + stale lanes exist */
+  .archive-trigger {
+    appearance: none; display: inline-flex; align-items: center; gap: 6px;
+    background: transparent;
+    border: var(--hairline) solid var(--calm-hairline);
+    color: var(--calm-ink-chrome);
+    font-family: var(--font-d); font-size: 10px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; cursor: pointer;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .archive-trigger:hover {
+    color: var(--calm-accent); border-color: var(--calm-hairline-hi);
+    background: var(--calm-accent-wash);
+  }
+  .archive-trigger__count {
+    font-variant-numeric: tabular-nums; color: var(--calm-ink-loud);
+  }
+  .archive-trigger[hidden] { display: none; }
+
+  /* explainer column */
+  .explain {
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    padding: var(--space-6);
+  }
+  .explain h3 {
+    margin: 0 0 var(--space-3); font-size: var(--fs-body);
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--calm-ink-loud);
+  }
+  .explain p { margin: 0 0 var(--space-4); font-size: var(--fs-meta); line-height: var(--lh-body); color: var(--calm-ink); max-width: 60ch; }
+  .explain ol { margin: 0 0 var(--space-5); padding-left: 1.3em; }
+  .explain li { font-size: var(--fs-meta); line-height: var(--lh-body); color: var(--calm-ink); margin-bottom: 4px; }
+  .explain code {
+    font-family: var(--font-d); font-size: 12px;
+    color: var(--calm-accent); background: var(--calm-surface-alt);
+    padding: 1px 5px; border-radius: var(--radius-sharp);
+  }
+
+  /* legend of the paired badge scheme (M5) */
+  .legend { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-5); }
+  .legend__row { display: flex; align-items: center; gap: var(--space-4); }
+  .legend__txt { font-size: 12px; color: var(--calm-ink-quiet); }
+
+  /* ====================================================================
+     MODAL (SessionCleanupModal.svelte) -- right-anchored calm panel that
+     reuses the SettingsDrawer dialog idiom (scrim + slide-in + focus trap).
+  ==================================================================== */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(8,10,12,0.55);
+    backdrop-filter: blur(1px); z-index: 80;
+  }
+  .scrim[hidden], .modal[hidden] { display: none; }
+
+  .modal {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: min(460px, 94vw); z-index: 81;
+    display: flex; flex-direction: column;
+    background: var(--calm-surface-raised);
+    border-left: var(--hairline) solid var(--calm-hairline-hi);
+    box-shadow: -18px 0 48px -24px rgba(0,0,0,0.7);
+    color: var(--calm-ink); font-family: var(--ff-system);
+    overflow: hidden;
+  }
+  .modal__head {
+    flex: 0 0 auto;
+    padding: var(--space-5) var(--space-6);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+  }
+  .modal__head-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .modal__title {
+    margin: 0; font-family: var(--font-h); font-size: 18px;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--calm-ink-loud);
+  }
+  .modal__close {
+    appearance: none; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); color: var(--calm-ink-chrome);
+    width: 28px; height: 28px; line-height: 1; font-size: 14px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .modal__close:hover { color: var(--calm-accent); border-color: var(--calm-hairline-hi); }
+  .modal__beta {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: var(--space-3);
+    padding: 2px 8px; border-radius: 999px;
+    border: var(--hairline) solid var(--badge-ar-border);
+    background: var(--badge-ar-bg); color: var(--badge-ar-fg);
+    font-family: var(--font-d); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+
+  .modal__body {
+    flex: 1 1 auto; overflow-y: auto;
+    padding: var(--space-5) var(--space-6) var(--space-7);
+    display: flex; flex-direction: column; gap: var(--space-6);
+  }
+
+  /* window control (slider) -- .sd-range idiom */
+  .field { display: flex; flex-direction: column; gap: var(--space-3); }
+  .field__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
+  .field__label { font-size: var(--fs-meta); font-weight: 600; letter-spacing: 0.02em; color: var(--calm-ink-loud); }
+  .field__val { font-family: var(--font-d); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; color: var(--calm-accent); }
+  .range { width: 100%; margin: var(--space-2) 0 0; accent-color: var(--calm-accent); cursor: pointer; }
+  .field__desc { margin: 0; font-size: var(--fs-chrome); line-height: var(--lh-body); color: var(--calm-ink-quiet); max-width: 48ch; }
+
+  /* preview summary -- ONE bold paired tally line (M5: count never alone) */
+  .tally {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border: var(--hairline) solid var(--calm-hairline-hi);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-alt);
+  }
+  .tally__seg { display: inline-flex; align-items: baseline; gap: 6px; }
+  .tally__num {
+    font-family: var(--font-d); font-variant-numeric: tabular-nums;
+    font-size: 22px; font-weight: 750; line-height: 1; color: var(--badge-ar-fg);
+  }
+  .tally__lbl { font-family: var(--font-d); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--calm-ink-chrome); }
+  .tally__verb { font-family: var(--font-d); font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-loud); }
+
+  /* per-session list */
+  .slist { display: flex; flex-direction: column; gap: var(--space-3); }
+  .slist__head { font-size: var(--fs-chrome); letter-spacing: 0.08em; text-transform: uppercase; color: var(--calm-ink-chrome); font-family: var(--font-d); }
+  .srow {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--calm-surface-row);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+  }
+  .srow__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .srow__slug { font-family: var(--font-d); font-size: var(--fs-meta); color: var(--calm-ink-loud); }
+  .srow__when { font-family: var(--font-d); font-size: 10px; color: var(--calm-ink-quiet); letter-spacing: 0.03em; }
+  .srow__spacer { flex: 1 1 auto; }
+
+  /* PAIRED label+color badges (M5) -- color is NEVER the sole signal */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-d); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .badge__dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+  /* STALE -> calm slate (archivable default) */
+  .badge--stale   { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .badge--stale .badge__dot { background: var(--badge-obs-fg); }
+  /* PROTECTED -> amber ACTION-REQUIRED palette (excluded; cannot archive) */
+  .badge--protected { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 2px solid var(--badge-ar-border); }
+  .badge--protected .badge__dot { background: var(--badge-ar-fg); }
+  /* ARCHIVED -> settled green (post-confirm) */
+  .badge--archived { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .badge--archived .badge__dot { background: var(--badge-decided-fg); }
+  /* SELF -> dim self-dot palette (echoed in footer; never a list row) */
+  .badge--self { color: var(--badge-obs-fg); background: transparent; border: 1px dashed var(--badge-obs-border); }
+  .badge--self .badge__dot { background: var(--calm-ink-quiet); opacity: 0.7; }
+
+  .srow--protected { border-color: var(--badge-ar-border); }
+  .srow__reason { font-size: 10px; color: var(--badge-ar-fg); font-family: var(--font-d); margin-top: 2px; letter-spacing: 0.02em; }
+
+  /* RESTORE button (ghost, accent-on-hover) -- paired text, never icon alone */
+  .restore {
+    appearance: none; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline-hi);
+    color: var(--calm-ink-loud); font-family: var(--font-d);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: var(--radius-sharp); cursor: pointer;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .restore:hover { color: var(--calm-accent); border-color: var(--calm-accent); background: var(--calm-accent-wash); }
+
+  /* modal footer: self-exclude echo + action bar */
+  .modal__foot {
+    flex: 0 0 auto;
+    border-top: var(--hairline) solid var(--calm-hairline);
+    padding: var(--space-4) var(--space-6);
+    display: flex; flex-direction: column; gap: var(--space-4);
+    background: var(--calm-surface);
+  }
+  .modal__self {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .modal__self code { color: var(--calm-ink-quiet); background: transparent; }
+  .actionbar { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-4); }
+  .actionbar__spacer { flex: 1 1 auto; }
+  .btn-cancel {
+    appearance: none; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline);
+    color: var(--calm-ink-chrome); font-family: var(--ff-system);
+    font-size: var(--fs-meta); font-weight: 600; letter-spacing: 0.04em;
+    padding: var(--space-3) var(--space-5); border-radius: var(--radius-sharp); cursor: pointer;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .btn-cancel:hover { color: var(--calm-ink-loud); border-color: var(--calm-hairline-hi); }
+  /* CONFIRM -- the ONLY saturated control. Deliberate, not destructive-red:
+     soft-delete is reversible, so the language is "archive", not "delete". */
+  .btn-confirm {
+    appearance: none; background: var(--calm-accent);
+    border: var(--hairline) solid var(--calm-accent);
+    color: #1a1206; font-family: var(--ff-system);
+    font-size: var(--fs-meta); font-weight: 750; letter-spacing: 0.04em;
+    padding: var(--space-3) var(--space-5); border-radius: var(--radius-sharp); cursor: pointer;
+    transition: filter var(--t-calm);
+  }
+  .btn-confirm:hover { filter: brightness(1.08); }
+  .btn-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* post-confirm receipt line */
+  .receipt {
+    font-family: var(--font-d); font-size: var(--fs-meta);
+    color: var(--badge-decided-fg); letter-spacing: 0.02em;
+  }
+  .receipt[hidden] { display: none; }
+
+  /* the amber build-gated footnote (mockup requirement) */
+  .gatenote {
+    margin: var(--space-6); padding: var(--space-4) var(--space-5);
+    border: var(--hairline) dashed var(--badge-ar-border);
+    border-radius: var(--radius-soft);
+    background: var(--badge-ar-bg);
+    color: #6b4a08;
+    font-size: 12px; line-height: var(--lh-body);
+  }
+  .gatenote strong { color: var(--badge-ar-fg); }
+  .gatenote code { font-family: var(--font-d); background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 2px; }
+
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    border: 0; clip: rect(0 0 0 0); overflow: hidden;
+  }
+
+  /* reduced-motion: suppress the lane collapse + transitions */
+  @media (prefers-reduced-motion: reduce) {
+    .lane, .switch__knob, .archive-trigger { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============ COMPACT HEADER STRIP (mockup requirement) ============ -->
+  <header class="topbar">
+    <span class="topbar__brand">StreamManager // operator monitor</span>
+    <h1 class="topbar__title">Stale session cleanup</h1>
+    <span class="beta-pill"><span class="beta-pill__dot" aria-hidden="true"></span>BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    <span class="topbar__spacer"></span>
+    <!-- inline on/off toggle (wired, client-side only) so the gated nature is visible -->
+    <span class="flag">
+      <span class="flag__label" id="flag-lbl">stale-cleanup</span>
+      <label class="switch" title="Beta flag: stale-cleanup">
+        <input id="beta-toggle" type="checkbox" checked aria-labelledby="flag-lbl" />
+        <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        <span class="switch__text" id="flag-state" data-on="true">ON</span>
+      </label>
+    </span>
+  </header>
+
+  <!-- ============ STAGE: SessionRail (left) + explainer (right) ============ -->
+  <div class="stage">
+
+    <!-- ---- SessionRail mock (the clutter is felt here; trigger lives here) ---- -->
+    <nav class="rail" aria-label="Governed sessions">
+      <header class="rail__head">
+        <div class="rail__title-wrap">
+          <h2 class="rail__title">Sessions</h2>
+          <span class="rail__tally" title="2 live governed sessions; 3 stale lanes pending cleanup">
+            <span class="rail__tally-tag">ACTIVE</span>
+            <span class="rail__tally-num" id="active-num">2</span>
+          </span>
+        </div>
+      </header>
+
+      <div class="rail__lanes" role="list" id="rail-lanes">
+        <!-- 2 LIVE lanes (the ones that matter) -->
+        <div role="listitem">
+          <div class="lane lane--live">
+            <span class="lane__slug">delta-stream</span>
+            <span class="lane__tag lane__tag--live">live</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">2m ago</span>
+          </div>
+        </div>
+        <div role="listitem">
+          <div class="lane lane--live">
+            <span class="lane__slug">epsilon-runner</span>
+            <span class="lane__tag lane__tag--live">live</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">just now</span>
+          </div>
+        </div>
+        <!-- 3 STALE lanes (dead corpses crowding the rail) -->
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-a91f">
+            <span class="lane__slug">alpha-svc</span>
+            <span class="lane__tag">stale</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">ended 1d 4h ago</span>
+          </div>
+        </div>
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-7c20">
+            <span class="lane__slug">beta-pipe</span>
+            <span class="lane__tag">stale</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">ended 1d 9h ago</span>
+          </div>
+        </div>
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-de03">
+            <span class="lane__slug">gamma-batch</span>
+            <span class="lane__tag">stale</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">ended 1d 12h ago</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- rail footer: self-excluded readout + the ghost ARCHIVE STALE trigger -->
+      <footer class="rail__foot">
+        <span class="rail__self" title="StreamManager's own session (sess-SELF-ownid) is never governed">
+          <span class="rail__self-dot" aria-hidden="true"></span>
+          self excluded
+        </span>
+        <span class="rail__foot-spacer"></span>
+        <!-- only renders when flag ON AND >=1 stale lane exists -->
+        <button id="archive-trigger" type="button" class="archive-trigger"
+                aria-haspopup="dialog" aria-controls="cleanup-modal"
+                title="Preview and archive stale (ended) sessions">
+          Archive stale <span class="archive-trigger__count" id="trigger-count">3</span>
+        </button>
+      </footer>
+    </nav>
+
+    <!-- ---- explainer column ---- -->
+    <section class="explain" aria-label="How this beta feature works">
+      <h3>What you are looking at</h3>
+      <p>
+        Over a multi-week soak the rail accrues dead non-SM lanes -- ended
+        sessions, crashed PIDs, one-off probe runs -- that crowd the calm rail
+        and dilute the <code>ACTIVE</code> tally. The only cleanup today is a
+        hand-written SQL <code>DELETE</code> against gov.db: irreversible and
+        hostile to a glance-first operator.
+      </p>
+      <p>This beta reframes cleanup as <strong>archive a drawer you can reopen</strong>, not irreversible surgery:</p>
+      <ol>
+        <li>Flip <code>stale-cleanup</code> ON (default OFF, toggled in Settings &gt; BETA features).</li>
+        <li>A hairline <code>Archive stale</code> button appears in the rail footer -- only while stale lanes exist.</li>
+        <li>Click it -> a right-anchored PREVIEW modal shows exactly what will be archived, before any commit.</li>
+        <li>Drag the hours slider; the count re-previews live. Then click the one saturated <code>CONFIRM ARCHIVE</code>.</li>
+        <li>Lanes collapse out of the rail; each archived row keeps a <code>RESTORE</code> button -- an over-cut costs one click.</li>
+      </ol>
+
+      <h3 style="margin-top:var(--space-6)">Paired label + color badge scheme (ADR-20 M5)</h3>
+      <p style="margin-bottom:var(--space-3)">Every state is a text+color pair. Color is never the sole signal.</p>
+      <div class="legend">
+        <div class="legend__row">
+          <span class="badge badge--stale"><span class="badge__dot" aria-hidden="true"></span>Stale</span>
+          <span class="legend__txt">archivable -- ended past the window</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--protected"><span class="badge__dot" aria-hidden="true"></span>Protected -- open HITL</span>
+          <span class="legend__txt">excluded from the count; cannot be archived</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--archived"><span class="badge__dot" aria-hidden="true"></span>Archived</span>
+          <span class="legend__txt">soft-deleted; one RESTORE click to undo</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+          <span class="legend__txt">SM's own session; structurally excluded, echoed in the footer</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- the amber build-gated footnote (mockup requirement) -->
+  <div class="gatenote" role="note">
+    <strong>BUILD GATED.</strong> The UI approach above is approvable, but the
+    build is held pending two amendments: (1) a <strong>UI-DESIGN-SPEC.md</strong>
+    amendment (ADR-20 M10-M24 extension, or operator sign-off waiving the second
+    adversarial refute) covering the new <code>SessionCleanupModal.svelte</code> +
+    <code>cleanup.js</code> store + beta-flag integration surfaces; and (2)
+    <strong>workstream sequencing</strong> -- the beta-flag foundation (Task #5:
+    <code>GET/POST /api/beta/flags</code> + registry + BetaToggles panel) must
+    land BEFORE or as an inline prerequisite phase. ADR-18 floor is met
+    (3-frame presence preserved, escalation-only foreground, paired label+color
+    badges, absolute HITL gate via PROTECTED exclusion, domain-agnostic, axe
+    gate, self-exclude polarity on-screen). Approve the UI to unblock amendment
+    drafting.
+  </div>
+
+</div>
+
+<!-- ====================================================================
+     MODAL: SessionCleanupModal.svelte (preview-then-confirm).
+     Hidden until the trigger fires. role=dialog, aria-modal, focus trap,
+     Escape-to-close, focus restored to the rail trigger on close.
+==================================================================== -->
+<div class="scrim" id="scrim" hidden></div>
+<div class="modal" id="cleanup-modal" role="dialog" aria-modal="true"
+     aria-labelledby="cleanup-title" tabindex="-1" hidden>
+
+  <header class="modal__head">
+    <div class="modal__head-row">
+      <h2 class="modal__title" id="cleanup-title">Archive stale sessions</h2>
+      <button type="button" class="modal__close" id="modal-close" aria-label="Close cleanup preview">
+        <span aria-hidden="true">x</span>
+      </button>
+    </div>
+    <span class="modal__beta">BETA -- default OFF, toggled in Settings</span>
+  </header>
+
+  <div class="modal__body">
+
+    <!-- window control: labelled slider, tabular-nums readout -->
+    <div class="field">
+      <div class="field__head">
+        <label class="field__label" for="hours-range">Older than</label>
+        <span class="field__val"><span id="hours-val">24</span> h</span>
+      </div>
+      <input id="hours-range" class="range" type="range" min="1" max="168" step="1"
+             value="24" aria-valuetext="24 hours" />
+      <p class="field__desc">
+        Sessions whose <code style="color:var(--calm-accent)">ended_at</code> is older than this window are
+        eligible. Drag to re-preview live -- nothing is committed until you confirm.
+      </p>
+    </div>
+
+    <!-- PREVIEW SUMMARY: one bold paired tally line (M5: number never alone) -->
+    <div class="tally" aria-live="polite">
+      <span class="tally__verb" id="tally-verb">Archive</span>
+      <span class="tally__seg"><span class="tally__num" id="t-sessions">2</span><span class="tally__lbl">sessions</span></span>
+      <span class="tally__seg"><span class="tally__num" id="t-msgs">360</span><span class="tally__lbl">msgs</span></span>
+      <span class="tally__seg"><span class="tally__num" id="t-decisions">123</span><span class="tally__lbl">decisions</span></span>
+    </div>
+
+    <!-- per-session list -->
+    <div class="slist">
+      <span class="slist__head">Matching sessions (<span id="match-meta">3 shown -- 1 protected</span>)</span>
+      <div id="session-rows"><!-- populated by JS from the mock preview --></div>
+    </div>
+
+    <p class="receipt" id="receipt" hidden></p>
+  </div>
+
+  <!-- modal footer: self-exclude echo (polarity on-screen) + action bar -->
+  <footer class="modal__foot">
+    <span class="modal__self" title="StreamManager's own session is never eligible for cleanup">
+      <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+      <code>sess-SELF-ownid</code>
+    </span>
+    <div class="actionbar">
+      <span class="actionbar__spacer"></span>
+      <button type="button" class="btn-cancel" id="btn-cancel">Cancel</button>
+      <button type="button" class="btn-confirm" id="btn-confirm">CONFIRM ARCHIVE</button>
+    </div>
+  </footer>
+</div>
+
+<script>
+/* ====================================================================
+   Mock data -- the mockDataSpec preview response (gov.db unavailable).
+   Rows with open_hitl>0 OR id===excluded_self are eligible:false and are
+   NEVER counted in matching_count/archived_count.
+==================================================================== */
+var EXCLUDED_SELF = "sess-SELF-ownid";
+
+// ended_at offsets are expressed as "hours ago" so the slider can re-filter
+// honestly client-side (mirrors the debounced GET in the real store).
+var SESSIONS = [
+  { id:"sess-a91f", project_slug:"alpha-svc",   pid:48213, ended_hours_ago:28,  message_count:210, decision_count:71, open_hitl:0 },
+  { id:"sess-7c20", project_slug:"beta-pipe",   pid:48990, ended_hours_ago:33,  message_count:150, decision_count:52, open_hitl:0 },
+  { id:"sess-de03", project_slug:"gamma-batch", pid:null,  ended_hours_ago:36,  message_count:52,  decision_count:15, open_hitl:2 }
+];
+
+var archived = {};   // id -> true once confirmed (client-side soft-delete mock)
+
+function fmtNum(n){ return n.toLocaleString("en-US"); }
+function relWhen(h){
+  if (h < 24) return "ended " + h + "h ago";
+  var d = Math.floor(h/24), r = h % 24;
+  return "ended " + d + "d" + (r ? " " + r + "h" : "") + " ago";
+}
+
+/* eligibility: protected (open_hitl>0) OR self are NEVER eligible/counted.
+   Also requires ended past the slider window. */
+function classify(s, windowHours){
+  if (s.id === EXCLUDED_SELF) return { state:"self", eligible:false, reason:"SM own session -- never governed" };
+  if (s.open_hitl > 0) return { state:"protected", eligible:false,
+    reason:"has " + s.open_hitl + " open HITL row" + (s.open_hitl===1?"":"s") + " -- protected" };
+  if (s.ended_hours_ago < windowHours) return { state:"toonew", eligible:false, reason:"within the window -- not yet stale" };
+  return { state:"stale", eligible:true, reason:"" };
+}
+
+var BADGE = {
+  stale:     { cls:"badge--stale",     label:"Stale" },
+  protected: { cls:"badge--protected", label:"Protected -- open HITL" },
+  archived:  { cls:"badge--archived",  label:"Archived" },
+  self:      { cls:"badge--self",      label:"Self -- never governed" }
+};
+
+/* ---- render the per-session list + recompute the paired tally ---- */
+function renderPreview(){
+  var windowHours = Number(document.getElementById("hours-range").value);
+  var rowsEl = document.getElementById("session-rows");
+  rowsEl.innerHTML = "";
+
+  var nSess = 0, nMsg = 0, nDec = 0, nProtected = 0, shown = 0;
+
+  SESSIONS.forEach(function(s){
+    var c = classify(s, windowHours);
+    // a session within-window is simply not shown (mirrors the server filter)
+    if (c.state === "toonew") return;
+    shown++;
+
+    var isArchived = !!archived[s.id];
+    if (c.eligible && !isArchived) { nSess++; nMsg += s.message_count; nDec += s.decision_count; }
+    if (c.state === "protected") nProtected++;
+
+    var badgeKey = isArchived ? "archived" : c.state;
+    var b = BADGE[badgeKey];
+
+    var row = document.createElement("div");
+    row.className = "srow" + (c.state === "protected" ? " srow--protected" : "");
+
+    var main = document.createElement("div");
+    main.className = "srow__main";
+    var slug = document.createElement("span");
+    slug.className = "srow__slug"; slug.textContent = s.project_slug;
+    var when = document.createElement("span");
+    when.className = "srow__when";
+    when.textContent = relWhen(s.ended_hours_ago) + " // " + fmtNum(s.message_count) + " msgs, " + fmtNum(s.decision_count) + " decisions";
+    main.appendChild(slug); main.appendChild(when);
+    if (!c.eligible && c.reason){
+      var reason = document.createElement("span");
+      reason.className = "srow__reason"; reason.textContent = c.reason;
+      main.appendChild(reason);
+    }
+    row.appendChild(main);
+
+    var spacer = document.createElement("span");
+    spacer.className = "srow__spacer"; row.appendChild(spacer);
+
+    var badge = document.createElement("span");
+    badge.className = "badge " + b.cls;
+    var dot = document.createElement("span"); dot.className = "badge__dot"; dot.setAttribute("aria-hidden","true");
+    badge.appendChild(dot);
+    badge.appendChild(document.createTextNode(b.label));
+    row.appendChild(badge);
+
+    // archived rows carry a RESTORE button (paired text, never icon alone)
+    if (isArchived){
+      var rb = document.createElement("button");
+      rb.type = "button"; rb.className = "restore";
+      rb.textContent = "Restore";
+      rb.setAttribute("aria-label", "Restore session " + s.project_slug);
+      rb.addEventListener("click", function(){ restoreSession(s.id); });
+      row.appendChild(rb);
+    }
+
+    rowsEl.appendChild(row);
+  });
+
+  // paired tally line -- numbers always beside their literal label
+  document.getElementById("t-sessions").textContent = String(nSess);
+  document.getElementById("t-msgs").textContent = fmtNum(nMsg);
+  document.getElementById("t-decisions").textContent = fmtNum(nDec);
+  document.getElementById("match-meta").textContent =
+    shown + " shown -- " + nProtected + " protected";
+
+  // disable CONFIRM when nothing eligible remains (no auto-fire ever)
+  var confirmBtn = document.getElementById("btn-confirm");
+  confirmBtn.disabled = (nSess === 0);
+
+  // keep the rail trigger count + ACTIVE tally honest with the live rail
+  syncRail();
+}
+
+/* ---- the rail: reflect archive/restore + window into the lanes ---- */
+function syncRail(){
+  var windowHours = Number(document.getElementById("hours-range").value);
+  var staleVisible = 0;
+  SESSIONS.forEach(function(s){
+    var lane = document.querySelector('.lane[data-sid="' + s.id + '"]');
+    if (!lane) return;
+    var c = classify(s, windowHours);
+    var hidden = !!archived[s.id];
+    lane.parentElement.style.display = hidden ? "none" : "";
+    if (!hidden && c.eligible) staleVisible++;
+  });
+  var trigger = document.getElementById("archive-trigger");
+  document.getElementById("trigger-count").textContent = String(staleVisible);
+  // why-factor: the trigger hides itself when the rail is already clean
+  trigger.hidden = !betaOn() || staleVisible === 0;
+}
+
+/* ---- confirm = soft-delete the eligible rows (mock) ---- */
+function onConfirm(){
+  var windowHours = Number(document.getElementById("hours-range").value);
+  var ids = [];
+  SESSIONS.forEach(function(s){
+    var c = classify(s, windowHours);
+    if (c.eligible && !archived[s.id]){ archived[s.id] = true; ids.push(s.id); }
+  });
+  var receipt = document.getElementById("receipt");
+  receipt.hidden = ids.length === 0;
+  if (ids.length){
+    receipt.textContent = ids.length + " archived -- soft-deleted with cleanup_ts; RESTORE retained per row.";
+  }
+  document.getElementById("tally-verb").textContent = "Archived";
+  renderPreview();
+}
+
+function restoreSession(id){
+  delete archived[id];
+  var receipt = document.getElementById("receipt");
+  receipt.textContent = "Restored 1 -- cleanup_ts cleared; lane returns to the rail.";
+  receipt.hidden = false;
+  document.getElementById("tally-verb").textContent = "Archive";
+  renderPreview();
+}
+
+/* ====================================================================
+   Beta flag toggle (wired, client-side only) -- gated nature visible.
+==================================================================== */
+function betaOn(){ return document.getElementById("beta-toggle").checked; }
+
+document.getElementById("beta-toggle").addEventListener("change", function(){
+  document.getElementById("flag-state").textContent = this.checked ? "ON" : "OFF";
+  document.getElementById("flag-state").setAttribute("data-on", String(this.checked));
+  if (!this.checked) closeModal();
+  syncRail();
+});
+
+/* ====================================================================
+   Modal open/close + a11y (focus trap, Escape, focus restore).
+==================================================================== */
+var scrim = document.getElementById("scrim");
+var modal = document.getElementById("cleanup-modal");
+var trigger = document.getElementById("archive-trigger");
+var prevFocus = null;
+
+function focusables(){
+  return Array.prototype.slice.call(
+    modal.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')
+  ).filter(function(el){ return el.offsetParent !== null; });
+}
+
+function openModal(){
+  prevFocus = document.activeElement;
+  renderPreview();
+  document.getElementById("tally-verb").textContent = "Archive";
+  document.getElementById("receipt").hidden = true;
+  scrim.hidden = false; modal.hidden = false;
+  var f = focusables();
+  (f[0] || modal).focus();
+}
+
+function closeModal(){
+  if (modal.hidden) return;
+  scrim.hidden = true; modal.hidden = true;
+  if (prevFocus && prevFocus.focus) prevFocus.focus();
+  prevFocus = null;
+}
+
+trigger.addEventListener("click", openModal);
+document.getElementById("modal-close").addEventListener("click", closeModal);
+document.getElementById("btn-cancel").addEventListener("click", closeModal);
+scrim.addEventListener("click", closeModal);
+document.getElementById("btn-confirm").addEventListener("click", onConfirm);
+
+// slider: live re-preview as the operator drags (debounced like the real GET)
+var sliderTimer = null;
+document.getElementById("hours-range").addEventListener("input", function(){
+  var v = this.value;
+  document.getElementById("hours-val").textContent = v;
+  this.setAttribute("aria-valuetext", v + " hours");
+  clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(renderPreview, 120);
+});
+
+// keyboard: Escape closes + restores focus; Tab is trapped inside the modal
+document.addEventListener("keydown", function(e){
+  if (modal.hidden) return;
+  if (e.key === "Escape"){ e.preventDefault(); closeModal(); return; }
+  if (e.key === "Tab"){
+    var f = focusables();
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+  }
+});
+
+// first paint
+renderPreview();
+</script>
+</body>
+</html>

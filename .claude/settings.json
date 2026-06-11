@@ -12,11 +12,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python tools/hook_evaluate.py"
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/hook_evaluate.py\""
           },
           {
             "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File .claude/hooks/robin-bash-timeout.ps1"
+            "command": "powershell -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/robin-bash-timeout.ps1\""
           }
         ]
       }

@@ -1,0 +1,326 @@
+<!DOCTYPE html><html lang="en" data-theme="obsidian"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>BETA proposals -- batch-2 mockup gate (27)</title>
+<style>
+ :root{--ff:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;--mono:ui-monospace,Consolas,monospace;}
+ body{margin:0;background:#080a0c;color:#b8b098;font-family:var(--ff);padding:28px 24px 80px;}
+ h1{font-size:22px;letter-spacing:.06em;text-transform:uppercase;color:#e8e0cc;margin:0 0 4px;}
+ .lede{font-size:13px;color:#948870;max-width:84ch;line-height:1.6;margin:0 0 8px;}
+ .legend{font-size:12px;color:#948870;margin:10px 0 24px;display:flex;gap:18px;flex-wrap:wrap;}
+ .legend b{color:#e8e0cc;}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:22px;}
+ .card{background:#0c1118;border:1px solid #192030;border-radius:7px;overflow:hidden;display:flex;flex-direction:column;}
+ .card__h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #192030;}
+ .card__t{display:flex;align-items:center;gap:10px;min-width:0;}
+ .key{font-weight:700;color:#e8e0cc;font-size:14px;}
+ .vb{font-family:var(--mono);font-size:10px;letter-spacing:.06em;border:1px solid;border-radius:3px;padding:1px 6px;white-space:nowrap;}
+ .open{color:#f59e0b;font-size:12px;text-decoration:none;font-family:var(--mono);white-space:nowrap;}
+ .open:hover{text-decoration:underline;}
+ .sum{font-size:11.5px;color:#948870;line-height:1.5;margin:10px 14px 6px;}
+ .tri{font-size:11px;line-height:1.5;margin:0 14px 10px;padding:7px 9px;border-radius:4px;border:1px solid;}
+ .tri--soft{color:#fcd34d;background:rgba(217,119,6,.08);border-color:rgba(217,119,6,.3);}
+ .tri--ok{color:#86efac;background:rgba(22,163,74,.08);border-color:rgba(22,163,74,.3);}
+ .framewrap{position:relative;height:300px;border-top:1px solid #192030;overflow:hidden;background:#05080c;}
+ iframe{position:absolute;top:0;left:0;width:200%;height:600px;border:0;transform:scale(.5);transform-origin:top left;}
+</style></head><body>
+ <h1>BETA proposals -- batch-2 mockup gate (27 CONSTRAIN)</h1>
+ <p class="lede">Each card is a LIVE 50%-scaled preview of the KingMode mockup; "open full" to interact. Verdict = adversarial 2-refuter verdict. 8 PASS / 3 CONSTRAIN / 16 NEEDS-AMENDMENT -- but per the batch-1 lesson the amendments build CONSTRAINED-ADDITIVE (additive table + read endpoint, heavy/spawn/envelope parts deferred), so NONE needs a real ADR-18 FROZEN amendment.</p>
+ <div class="legend"><span><b>PASS</b> clean additive</span><span><b>CONSTRAIN</b> reshape folded</span><span><b>NEEDS-AMENDMENT</b> -> buildable constrained-additive</span></div>
+ <div class="grid">
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">ambient-soak-task</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./ambient-soak-task.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator lands on a dashboard with a dimmed 3-frame floor and an AppShell footer whose right &quot;polarity&quot; corner carries a calm, hairline AMBIENT badge (&quot;AMBIENT OK . 14m&quot;) -- the quietest, only persistent polarity instrument; clicking it (or it opens on load) reveals a read-only right-side drawer...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./ambient-soak-task.html" title="ambient-soak-task"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">async-hitl-bulk-dismiss</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./async-hitl-bulk-dismiss.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees the Frame A async HITL dock (24 backed-up OBSERVING rows) with a low-emphasis &quot;Bulk dismiss&quot; gear that appears only when the BETA flag is ON and the dock has a queue; flipping the inline ON/OFF toggle previews the default-OFF gating, and clicking the gear (or Alt+D) opens a focus-t...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./async-hitl-bulk-dismiss.html" title="async-hitl-bulk-dismiss"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">breach-cartography-constrained</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./breach-cartography-constrained.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees an escalated Frame A header with a gated &quot;Map this regression&quot; button that opens a transient, bespoke modal: a left incident gutter (regressed cells + coarse RingDelta delta), a right swimlane mapping the run-up decisions across time with paired label+color+shape verdict nodes arro...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./breach-cartography-constrained.html" title="breach-cartography-constrained"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">cleanup-stale-sessions</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./cleanup-stale-sessions.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">A hairline top banner with a STALE count chip and a Clean stale sessions action opens a right-anchored drawer: paired irreversible hard-delete confirm, a 5-state label+color badge list, an opt-in daily 02:00 UTC auto-cleanup checkbox, and a collapsible Audit log. Gated behind a wired BETA toggle, SM...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./cleanup-stale-sessions.html" title="cleanup-stale-sessions"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">confidence-heatmap-pane</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./confidence-heatmap-pane.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a faithful Frame B (Sub-Agents) facsimile with the BETA feature ON: above an AgentRoster of RoleBadge chips sits a still, calm Confidence Heat Map grid -- Y = agent roles sorted by current mean confidence DESC (frontend_architect top), X = 12 contiguous 5-min buckets oldest-left/ne...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./confidence-heatmap-pane.html" title="confidence-heatmap-pane"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">cross-session-pattern-audit-apis</span>
+        <span class="vb" style="color:#ca8a04;background:#fef9c3;border-color:#ca8a04">CONSTRAIN</span></div>
+      <a class="open" href="./cross-session-pattern-audit-apis.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a click-through KingMode preview: a header with the feature title, a &quot;BETA -- default OFF&quot; pill and a wired ON/OFF switch (OFF collapses the whole body to a calm zero-runtime note). With it ON, a SessionRail-style scope picker (the streamManager-self entry is disabled per G2 polari...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./cross-session-pattern-audit-apis.html" title="cross-session-pattern-audit-apis"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">escalation-timeline-causal-forensics</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./escalation-timeline-causal-forensics.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">A self-contained KingMode mockup showing the feature ON in a Frame C facsimile: at rest, a single paired amber &quot;2 escalations&quot; count badge sits in the Frame C header gutter (label+color, aria-live polite, never auto-expanding). Clicking the badge or gear slides open the Escalation Timeline -- a vert...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./escalation-timeline-causal-forensics.html" title="escalation-timeline-causal-forensics"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">operator-co-pilot-gesture-macros</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./operator-co-pilot-gesture-macros.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees an escalated HITL row with the #17 Co-Pilot palette mounted in the #18 chip's slot: a bold top APPROVE recommendation (92%, binding) plus a ranked ladder of TUNE / ESCALATE / SNOOZE, each carrying a literal verb, tabular percent, confidence word (high/moderate/low), and binding/adv...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./operator-co-pilot-gesture-macros.html" title="operator-co-pilot-gesture-macros"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">recorded-session-replay-forensics</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./recorded-session-replay-forensics.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a right-side BETA drawer (CoverageAnalyzer pattern) opened from a single &quot;Replay Forensics BETA&quot; header chip, with a working default-OFF gate toggle: an asymmetric film-strip frame rail (amber/red notches mark the 2 of 6 frames that diverge) beside an ORIGINAL | REPLAYED | DELTA tr...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./recorded-session-replay-forensics.html" title="recorded-session-replay-forensics"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-checkpoint-versioning</span>
+        <span class="vb" style="color:#ca8a04;background:#fef9c3;border-color:#ca8a04">CONSTRAIN</span></div>
+      <a class="open" href="./session-checkpoint-versioning.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a Frame A SessionRail with a bespoke &quot;ckpt N&quot; count affordance on each governed non-SM lane, and that affordance structurally ABSENT on the SM-self/streamManager lane (replaced by a &quot;no ckpt -- SM-self excluded&quot; note, G2 polarity). Clicking it opens a right-side focus-trapped role=...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-checkpoint-versioning.html" title="session-checkpoint-versioning"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-cleanup-dual-key-polarity</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./session-cleanup-dual-key-polarity.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a hairline batch-sweep banner pinned to the top of the Settings BETA section showing a large paired tally (&quot;2 exited sessions -- 1 self excluded&quot;), a per-reason breakdown (Process gone / Idle / Cwd gone) as M4 paired text+color badges, an expandable &quot;why each lane qualified&quot; list (...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-cleanup-dual-key-polarity.html" title="session-cleanup-dual-key-polarity"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-confidence-sparkline</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./session-confidence-sparkline.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a whisper-quiet companion rail mounted directly under the native SessionPicker scope control: three per-session confidence traces (healthy 0.91 steady in slate, drifting 0.71 falling in amber, breach 0.55 below floor in red), each carrying a literal state WORD + a &quot;conf 0.NN -- tre...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-confidence-sparkline.html" title="session-confidence-sparkline"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-delta-digest-monitor-frame</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./session-delta-digest-monitor-frame.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">A KingMode dark-obsidian preview of the left command column showing the new collapsible &quot;DELTA SINCE LAST SEEN&quot; panel: per-session rows (generic alpha-/beta-/gamma- slugs) sorted has-change-first with amber left-edges and paired text+count delta badges ([+4 dec], GUIDE 2 / INTERVENE 1 / BLOCK 1, 2 e...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-delta-digest-monitor-frame.html" title="session-delta-digest-monitor-frame"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-dna-heatmap-cross-pattern-topology</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./session-dna-heatmap-cross-pattern-topology.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a Frame-A composition fragment rendering a bespoke session-by-pattern &quot;DNA strand&quot; matrix where each cell pairs the literal confidence value (e.g. 0.78) with a band color + one-word band label (HIGH/MEDIUM/LEARNING), so a 26pp spreading-asymmetry (Dev 0.78 vs Reviewer 0.52) is one ...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-dna-heatmap-cross-pattern-topology.html" title="session-dna-heatmap-cross-pattern-topology"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-health-digest-api</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./session-health-digest-api.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees the existing SessionRail re-skinned: 6 generic governed lanes urgency-sorted so the sickest floats to the top, each wearing a paired 5-state label+color badge (BLOCKED red 2px / ATTENTION 2 amber / SLOW amber-dim / STALLED slate-cool / HEALTHY green), with a header worst-signal tal...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-health-digest-api.html" title="session-health-digest-api"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-housekeeping-api</span>
+        <span class="vb" style="color:#ca8a04;background:#fef9c3;border-color:#ca8a04">CONSTRAIN</span></div>
+      <a class="open" href="./session-housekeeping-api.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a slice of the left SessionRail (8 lanes, 3 live and buried among 5 ended) with the rail-footer cleanup cluster: #46's existing &quot;Archive stale&quot; beside the NEW #35 &quot;Sweep stale (3)&quot; hairline dashed button (which only appears when N&gt;=2). Clicking it opens a right-anchored selectable-...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-housekeeping-api.html" title="session-housekeeping-api"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-quick-filter-presets</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./session-quick-filter-presets.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees the existing header SessionPicker decorated with three click-through affordances over realistic domain-agnostic mock data (aurora-ingest / borealis-api / cobalt-batch / delta-worker, with borealis starred and aurora+cobalt carrying open actions): a left-aligned hairline chip rail (...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-quick-filter-presets.html" title="session-quick-filter-presets"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">session-story-panel-narrative-arc</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./session-story-panel-narrative-arc.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a calm KingMode Session Story card docked above the still-water Decision stream inside Frame A: an oversized session label, a single paired label+color TONE badge (CLEAN/LEARNING/TURBULENT/BLOCKED), and a 3-paragraph narrative whose linked phrases (real buttons, dotted underline) c...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./session-story-panel-narrative-arc.html" title="session-story-panel-narrative-arc"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">shadow-soak-lane-audit-refactored</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./shadow-soak-lane-audit-refactored.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">A dark KingMode dashboard footer with a quiet &quot;SHADOW&quot; chrome button (sibling of the existing &quot;SOAK&quot; button) carrying a micro paired glance badge &quot;AGREE 98% / 412&quot;; opening it reveals a Frame-D drawer with a loud paired agreement verdict header (AGREEING/DRIFTING/DIVERGED, text % first + color secon...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./shadow-soak-lane-audit-refactored.html" title="shadow-soak-lane-audit-refactored"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">soak-1-live-session-shadow-harness</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./soak-1-live-session-shadow-harness.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a single calm Frame C &quot;live session soak&quot; progress card -- a mono RUN LINE (elapsed/duration + envelope count), one thin stacked ALLOW-to-BLOCK bar with in-line count labels, a p50/p95 tail readout, and a paired POLARITY HOLDING / POLARITY LEAK verdict badge -- that ticks live (~1s...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./soak-1-live-session-shadow-harness.html" title="soak-1-live-session-shadow-harness"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">soak-2a-replay-forensics-mvp</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./soak-2a-replay-forensics-mvp.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a faux dashboard with a BETA on/off toggle (default-OFF annotation) and a quiet &quot;FORENSICS&quot; footer affordance; clicking it opens a right-anchored Frame-D drawer (role=dialog, focus-trapped, Esc-to-close) showing a two-pane forensics view -- a left frame-index rail where only the 2-...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./soak-2a-replay-forensics-mvp.html" title="soak-2a-replay-forensics-mvp"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">soak-coverage-matrix-excluded-sm</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./soak-coverage-matrix-excluded-sm.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a footer chip &quot;Coverage Matrix [BETA]&quot; that opens a right-column slide-out drawer (not a 4th frame) with a LOUD paired READY/GAP verdict badge, a tier-x-subsystem matrix grid where every cell shows a glyph plus the literal word COVERED/UNCOVERED (color never alone), the three live-...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./soak-coverage-matrix-excluded-sm.html" title="soak-coverage-matrix-excluded-sm"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">soak-session-metadata-tagging</span>
+        <span class="vb" style="color:#ca8a04;background:#fef9c3;border-color:#ca8a04">CONSTRAIN</span></div>
+      <a class="open" href="./soak-session-metadata-tagging.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees the live SessionRail with the BETA flag ON: soak-driver-launched lanes wear a paired violet &quot;SOAK / RL-EVAL&quot; or &quot;SOAK / SHIP-GATE&quot; chip and an asymmetric left-edge tint (the ar-timeout audit palette, never the amber escalation color), while untagged operator lanes stay calm slate w...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./soak-session-metadata-tagging.html" title="soak-session-metadata-tagging"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">sonification-escalation-layer</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./sonification-escalation-layer.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees the feature ON: a Settings sub-panel (the ONLY visible surface, since the real playback engine is an invisible composition-root component) listing all 6 escalation.js types split into a heavier FOREGROUND tier (PAUSE / NEG REGRESSION / STATIC RULE) above a quieter BADGE-IN-PLACE ti...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./sonification-escalation-layer.html" title="sonification-escalation-layer"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">spatial-session-sidebar</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./spatial-session-sidebar.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a collapsible right-edge spatial map where each governed NON-SM session is a bespoke chip positioned by recency, ringed in its governance-mode color with the literal mode WORD, carrying a 10-point latency sparkline, and linked by thickness-scaled &quot;x4&quot; edges to sessions sharing lear...</p>
+    <div class="tri tri--ok">clean additive -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./spatial-session-sidebar.html" title="spatial-session-sidebar"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">temporal-scrubber-governance-audit</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./temporal-scrubber-governance-audit.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a Frame A decision feed with a low-emphasis &quot;Replay window&quot; affordance that appears only when the BETA flag is toggled ON; clicking it opens a focus-trapped modal that mandates a polarity-locked non-SM session pick first (visible &quot;excluded 1 self&quot; tally), then a two-handle temporal...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./temporal-scrubber-governance-audit.html" title="temporal-scrubber-governance-audit"></iframe></div>
+  </article>
+
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">time-machine-governance-replay</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./time-machine-governance-replay.html" target="_blank" rel="noopener">open full -></a>
+    </header>
+    <p class="sum">The operator sees a gated &quot;Time Machine&quot; sub-panel mounted at the top of the Operator-settings drawer (above the dimmed existing Confidence-floor control), with a BETA pill, a &quot;default OFF, toggled in Settings &gt; BETA features&quot; note, and a working inline ON/OFF toggle that collapses the panel to a si...</p>
+    <div class="tri tri--soft">main-thread read: buildable CONSTRAINED-ADDITIVE (additive table + read endpoint; defer any spawn/envelope/replay-store-heavy part) -- no real FROZEN amendment, like batch-1 held-2.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./time-machine-governance-replay.html" title="time-machine-governance-replay"></iframe></div>
+  </article>
+ </div></body></html>

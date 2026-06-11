@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<!--
+  FOUNDATION MOCKUP -- BETA feature toggle panel (the on/off-at-the-UI-level surface).
+  Hand-authored by the main thread (not the workflow) so the operator can review the
+  CORE gating UX at the same mockup gate as the 15 feature mockups.
+
+  This previews lib/beta/registry.js + betaFlags store + BetaToggles.svelte mounted as a
+  new "BETA features" section in SettingsDrawer.svelte. Real obsidian/phosphor/paper tokens
+  from dashboard/ui-next/src/styles/theme.css. ASCII-only. Self-contained. No external assets.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA features -- toggle panel (foundation mockup)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    /* fixed paired-badge tokens (theme-invariant per M4) */
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+  }
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -10%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    display:flex; min-height:100%;
+    align-items:flex-start; justify-content:center;
+    padding: 40px 20px 80px;
+  }
+  .stage { width:100%; max-width: 860px; }
+
+  /* page chrome: explains the mockup, lets operator switch theme to see all 3 */
+  .legend { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:22px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    font-size:24px; color:var(--text-bright);
+  }
+  .legend p { margin:4px 0 0; font-size:13px; color:var(--text-dim); max-width:52ch; line-height:1.5; }
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+
+  /* the drawer panel facsimile */
+  .panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+    border-radius: 6px;
+    box-shadow: -18px 24px 60px -30px rgba(0,0,0,.7);
+    overflow:hidden;
+  }
+  .panel__head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px 22px; border-bottom:1px solid var(--border);
+  }
+  .panel__title {
+    margin:0; font-family:var(--font-h); font-size:18px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-bright);
+  }
+  .panel__sub { font-size:11px; color:var(--text-dim); margin-top:2px; }
+  /* BETA section banner pill */
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:var(--font-d); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--accent); border:1px solid var(--border-hi); border-radius:999px;
+    padding:4px 10px; background:var(--accent-dim);
+  }
+  .beta-pill .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent-glow); }
+
+  .panel__body { padding: 8px 22px 26px; }
+
+  .count-row {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:14px 0 10px; border-bottom:1px dashed var(--border);
+  }
+  .count-row .lede { font-size:13px; color:var(--text-dim); max-width:48ch; line-height:1.5; }
+  .count-tag {
+    font-family:var(--font-d); font-size:13px; font-variant-numeric:tabular-nums;
+    color:var(--accent); white-space:nowrap;
+  }
+
+  .group { margin-top:18px; }
+  .group__label {
+    font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-ui);
+    font-weight:700; margin:0 0 8px;
+  }
+
+  .feat {
+    display:flex; align-items:flex-start; justify-content:space-between; gap:14px;
+    padding:11px 0; border-top:1px solid var(--border);
+  }
+  .feat:first-child { border-top:none; }
+  .feat__main { min-width:0; }
+  .feat__name { font-size:14px; font-weight:600; color:var(--text-bright); letter-spacing:.01em; }
+  .feat__name .num { font-family:var(--font-d); font-size:11px; color:var(--text-dim); margin-left:7px; }
+  .feat__desc { font-size:12px; color:var(--text-dim); line-height:1.5; margin-top:3px; max-width:54ch; }
+  .feat__gate {
+    display:inline-block; margin-top:6px; font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border);
+    border-radius:3px; padding:1px 6px;
+  }
+
+  /* the switch -- real checkbox idiom from SettingsDrawer.sd-switch; PAIRED text label (M4) */
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; flex:0 0 auto; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border); transition:background .18s, border-color .18s; flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform .18s, background .18s;
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track { outline:2px solid var(--badge-ar-border); outline-offset:2px; }
+  .switch__text {
+    min-width:3.2ch; font-family:var(--font-d); font-size:12px; letter-spacing:.06em; font-weight:600;
+    color:var(--text-dim);
+  }
+  .switch__text[data-on="true"] { color:var(--accent); }
+
+  .footnote { margin-top:24px; font-size:11px; color:var(--text-dim); line-height:1.6; }
+  .footnote code { font-family:var(--font-d); color:var(--text-ui); }
+  .promote {
+    margin-top:14px; padding:12px 14px; border:1px solid var(--border); border-radius:5px;
+    background:var(--bg-row-alt); font-size:12px; color:var(--text-dim); line-height:1.55;
+  }
+  .promote strong { color:var(--text-bright); }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="legend">
+      <div>
+        <h1>BETA features -- toggle panel</h1>
+        <p>Foundation mockup. This is how the operator turns each proposal ON or OFF "at the UI level"
+           (directive). Lives as a new section inside Settings &gt; BETA features. Every feature is OFF by
+           default and renders nothing until toggled. Click toggles below; switch theme to preview all three.</p>
+      </div>
+      <div class="themes" role="group" aria-label="Theme preview">
+        <button class="on" data-theme-btn="obsidian" aria-pressed="true">Obsidian</button>
+        <button data-theme-btn="phosphor" aria-pressed="false">Phosphor</button>
+        <button data-theme-btn="paper" aria-pressed="false">Paper</button>
+      </div>
+    </div>
+
+    <div class="panel" role="region" aria-label="BETA features panel">
+      <div class="panel__head">
+        <div>
+          <h2 class="panel__title">BETA features</h2>
+          <div class="panel__sub">Optional. Off by default. Promotable to permanent.</div>
+        </div>
+        <span class="beta-pill"><span class="dot" aria-hidden="true"></span> BETA</span>
+      </div>
+
+      <div class="panel__body">
+        <div class="count-row">
+          <span class="lede">Toggling a feature ON mounts its pane/widget live; OFF removes it with zero
+            runtime cost (no pollers, no SSE handlers). Safety governance is never affected by a BETA flag.</span>
+          <span class="count-tag" id="countTag">0 of 15 ON</span>
+        </div>
+
+        <!-- groups mirror the deferral-ledger overlap clusters -->
+        <div class="group" data-group>
+          <p class="group__label">Monitor &amp; glance-readability</p>
+          <div data-feats="monitor"></div>
+        </div>
+        <div class="group" data-group>
+          <p class="group__label">HITL &amp; operator co-pilot</p>
+          <div data-feats="hitl"></div>
+        </div>
+        <div class="group" data-group>
+          <p class="group__label">Soak &amp; non-SM session validation</p>
+          <div data-feats="soak"></div>
+        </div>
+        <div class="group" data-group>
+          <p class="group__label">Session management</p>
+          <div data-feats="session"></div>
+        </div>
+
+        <div class="promote">
+          <strong>Promotion path.</strong> A BETA feature that proves its worth can later be flipped to
+          default-ON, then have its flag removed entirely (always-on) -- a deliberate per-feature decision in a
+          future cycle. Until then it stays here, opt-in, reversible.
+        </div>
+
+        <p class="footnote">
+          Backed by <code>GET /api/beta/flags</code> + <code>POST /api/beta/flags/{key}</code> (additive,
+          read/write a new <code>beta_flags</code> table) and the <code>betaFlags</code> store. Unknown or unset
+          keys default OFF; a backend error degrades to all-OFF (never silently flips a flag on). Paired
+          label+color on every state (the ON/OFF text is the signal, color reinforces -- never color alone).
+        </p>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // registry facsimile -- mirrors lib/beta/registry.js (key -> label/desc/group, defaultEnabled:false)
+  var REGISTRY = [
+    { key:'away-mode', num:4, group:'monitor', label:'Away / Calm Mode + Activity Summary', desc:'Step away; SSE buffers quietly; on return a one-glance summary of escalations, new agents, and queued HITL. Real alarms still break through.' },
+    { key:'escalation-heatmap', num:14, group:'monitor', label:'Escalation Timeline heatmap', desc:'Glance-readable density heatmap of governance feedback over time -- spot the hot windows without scrolling the log.' },
+    { key:'velocity-heatmap', num:19, group:'monitor', label:'Pattern Velocity heatmap', desc:'Ambient session-health signal from L0--L4 learning dynamics; surfaces which sessions are converging vs churning.' },
+    { key:'what-changed', num:49, group:'monitor', label:'What Changed digest', desc:'On page-focus, a synthesis overlay of everything that moved since you last looked -- decisions, escalations, new sessions.' },
+    { key:'coverage-analyzer', num:10, group:'monitor', label:'Coverage Analyzer widget', desc:'Frame D sub-section showing governance coverage across sessions/agents -- where is the monitor blind?' },
+
+    { key:'hitl-bulk-dismiss', num:15, group:'hitl', label:'HITL bulk-dismiss triage', desc:'Keyboard-preset triage modal to clear a backed-up async HITL queue in seconds instead of row-by-row.' },
+    { key:'confidence-chip', num:18, group:'hitl', label:'Operator Co-Pilot confidence chip', desc:'An advisory chip proposing the next HITL action with a confidence you can one-tap accept. Never auto-acts.' },
+    { key:'decision-oracle', num:12, group:'hitl', label:'Decision Oracle pedigree', desc:'Inline pattern pedigree + ancestral replay on any decision -- where did this verdict come from?' },
+
+    { key:'soak-panel', num:16, group:'soak', label:'Live Session Soak control panel', desc:'Frame D panel to pick a live NON-SM Claude session as a soak target (SM-self + firewalled cwd refused) and watch progress live.' },
+    { key:'health-digest', num:32, group:'soak', label:'Session health digest endpoint', desc:'Server-side glance digest per session (confidence, throughput, escalations) for fast multi-session triage.' },
+    { key:'health-sparklines', num:34, group:'soak', label:'Session health sparklines', desc:'Confidence + throughput sparklines in each session lane header -- trend at a glance, paired with a text delta.' },
+
+    { key:'session-pinning', num:25, group:'session', label:'Session-per-agent pinning', desc:'Pin a session/agent to a Frame B swim-lane so it stays put while others churn. Visual pin affordance.' },
+    { key:'quick-filters', num:22, group:'session', label:'Quick-Filter presets', desc:'Named one-click settings shortcuts (FR-UI-9) -- jump between saved monitor configurations + hotkeys.' },
+    { key:'event-cursor', num:31, group:'session', label:'Durable session event cursor', desc:'Browser resumes the event stream exactly where it left off across refreshes -- no lost context on reload.' },
+    { key:'stale-cleanup', num:46, group:'session', label:'Stale session cleanup', desc:'Operator-driven soft-delete + restore of sessions gone quiet (process exited / cwd vanished). SM-self always excluded.' }
+  ];
+  // NEEDS-AMENDMENT illustration: features likely to need an ADR-18 amendment (new envelope / table).
+  var GATED = { 'event-cursor':1, 'soak-panel':1, 'health-digest':1 };
+
+  var state = {};
+  REGISTRY.forEach(function(f){ state[f.key] = false; });
+
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  function render(){
+    ['monitor','hitl','soak','session'].forEach(function(g){
+      var host = document.querySelector('[data-feats="'+g+'"]');
+      host.innerHTML = REGISTRY.filter(function(f){ return f.group===g; }).map(function(f){
+        var on = state[f.key];
+        var gate = GATED[f.key] ? '<span class="feat__gate">build gated on ADR-18 amendment</span>' : '';
+        return '<div class="feat">'
+          + '<div class="feat__main">'
+          +   '<div class="feat__name">'+esc(f.label)+'<span class="num">#'+f.num+'</span></div>'
+          +   '<div class="feat__desc">'+esc(f.desc)+'</div>'+gate
+          + '</div>'
+          + '<label class="switch">'
+          +   '<input type="checkbox" data-key="'+f.key+'" '+(on?'checked':'')+' aria-label="'+esc(f.label)+' (currently '+(on?'ON':'OFF')+')">'
+          +   '<span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>'
+          +   '<span class="switch__text" data-on="'+(on?'true':'false')+'">'+(on?'ON':'OFF')+'</span>'
+          + '</label>'
+          + '</div>';
+      }).join('');
+    });
+    var n = Object.keys(state).filter(function(k){ return state[k]; }).length;
+    document.getElementById('countTag').textContent = n + ' of ' + REGISTRY.length + ' ON';
+  }
+
+  document.addEventListener('change', function(e){
+    var key = e.target && e.target.getAttribute && e.target.getAttribute('data-key');
+    if (!key) return;
+    state[key] = e.target.checked;   // optimistic; real impl POSTs /api/beta/flags/{key}
+    render();
+  });
+
+  document.querySelectorAll('[data-theme-btn]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.documentElement.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function(x){
+        var on = x===b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on?'true':'false');
+      });
+    });
+  });
+
+  render();
+</script>
+</body>
+</html>

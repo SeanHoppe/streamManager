@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "soak-1-live-session-shadow-harness"
+  (#40: Live non-SM session soak dashboard harness -- the LIVE-PROGRESS +
+  SHIP-GATE-HANDOFF half that complements the already-BUILT static #16
+  SoakPanel drawer). Self-contained, hand-reviewable. NO external assets /
+  CDNs / fonts -- system stack only. ASCII-only (no smart quotes, no
+  em-dashes -- written as "--", no box-drawing characters).
+
+  PURPOSE (directive #2): let the operator confirm the UI approach BEFORE any
+  code is written. The build is NEEDS-AMENDMENT. The brief proposes a NEW bus
+  envelope kind `soak_ready_for_ship_gate`, but ADR-18 Rule 1 classifies bus
+  envelope SCHEMAS as FROZEN (metadata-only extensions permitted). Introducing
+  a NEW envelope kind (not extending an existing one) requires an ADR-18
+  amendment before shipping. A small amber "build gated on ADR-18 amendment"
+  footnote in-card states this so the operator knows the UI is APPROVABLE but
+  the build is GATED until the amendment lands.
+
+  WHERE IT LIVES: a single calm PROGRESS CARD inside Frame C (Background Jobs),
+  mounted ABOVE LifecyclePanel / AsyncHitlQueue. It is OBSERVATIONAL --
+  contributes ZERO to Frame C's action count (M3) and NEVER auto-foregrounds
+  (M2). The completion DECISION deliberately routes to the EXISTING Frame A
+  HITL pending seam (M2 escalation-only-foreground) -- the card itself owns no
+  decision control and shows a read-only "awaiting Frame A decision" note.
+
+  TOKEN REUSE: real obsidian / phosphor / paper tokens lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css. The POLARITY HOLDING / POLARITY LEAK
+  verdict badge + the IN PROGRESS / COMPLETE / COMPLETE FAIL run-state pairs
+  reuse the #16 SoakPanel token vocabulary EXACTLY (--badge-decided-* pass,
+  --badge-blocked-* leak, --badge-ar-* in-progress, --badge-obs-* resting) so
+  the two surfaces read as ONE coherent soak instrument. Paired M4 label+color
+  badges everywhere -- the WORD survives grayscale and a screen reader; color
+  is NEVER the only signal.
+
+  ADR-18 MUST floor honoured:
+    - M1: NOT a fourth frame. The card lives INSIDE Frame C; the three frames
+      {A,B,C} are untouched.
+    - M2: the card is OBSERVATIONAL -- it never pulses, never steals focus,
+      never auto-foregrounds. On completion the operator's VERDICT surfaces as
+      an EXISTING Frame A HITL pending row -- the only foreground path.
+    - M3: the card contributes ZERO to Frame C's action count (a live soak is
+      observation, not a queued action). The Frame C count tally excludes it.
+    - M4: every state renders its LITERAL word -- POLARITY HOLDING / POLARITY
+      LEAK, IN PROGRESS / COMPLETE / COMPLETE FAIL, each band count -- beside
+      any color. The stacked-bar segment labels are REAL text, not title-only.
+    - M16: target session_id / project_slug render FROM DATA (domain-agnostic
+      slugs webapp-frontend / infra-pipeline) -- never monitored-project
+      vocabulary.
+    - M17: the card is presentation; the HITL hand-off row inherits the
+      existing RankedOptionList keyboard contract; aria-live announces
+      completion; the stacked-bar labels are real text. Reduced-motion safe.
+    - M18: presentation-only; polls GET /api/soak/status/{soak_id} ~1s ONLY
+      while a run is active AND the flag is ON. No poller when the flag is OFF;
+      no poller when there is no active run. Never opens the verdict hot path.
+
+  G1 firewall: no certPortal path is read. The mock fixture includes a
+  streamManager-slug candidate AND a certPortal candidate in the SOURCE pool,
+  but the harness NEVER targets them (self / firewall exclusion stays
+  exercised and is surfaced VISIBLE as "excluded: 1 self / 1 firewalled").
+
+  G2 polarity: the soak targets NON-SM sessions only (project_slug NOT IN
+  {streamManager} AND session_id != SM_OWN_SESSION_ID). The whole POINT of the
+  POLARITY HOLDING / POLARITY LEAK verdict is to PROVE that gate is live; a
+  LEAK reading means a self/SM row slipped past the WHERE-clause.
+
+  When live data is unavailable the card falls back to realistic
+  domain-agnostic MOCK fixtures (mockDataSpec), surfaced as a literal
+  "SAMPLE DATA" text label (usedMockData=true).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- client-side defense-in-depth self-exclude tags (G2): SM's own identity -->
+<meta name="sm-own-session-id" content="sm-self-0000-bridge">
+<meta name="sm-own-project-slugs" content="streamManager">
+<title>Live Session Soak Shadow Harness -- live progress + ship-gate HITL (BETA mockup)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* five governance-action colors (shared default; the stacked bar reuses
+       these EXACTLY -- ALWAYS paired with a count label, M4). */
+    --c-allow:#22c55e; --c-suggest:#84cc16; --c-guide:#eab308; --c-intervene:#f97316; --c-block:#ef4444;
+
+    /* fixed paired-badge tokens (theme-invariant per M4, from theme.css :root).
+       FG values are the AA-hardened ink values the live Badge.svelte uses. */
+    --badge-ar-fg:#b45309; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+    --badge-decided-fg:#15803d; --badge-decided-bg:#dcfce7; --badge-decided-border:#86efac;
+    --badge-blocked-fg:#b91c1c; --badge-blocked-bg:#fee2e2; --badge-blocked-border:#dc2626;
+    --badge-warn-fg:#9a3412; --badge-warn-bg:#ffedd5; --badge-warn-border:#ea580c;
+
+    --space-2:4px; --space-3:6px; --space-4:10px; --space-5:14px; --space-6:22px; --space-7:36px;
+    --radius-sharp:2px; --radius-soft:4px;
+    --focus-ring-color:#d97706;
+    --t-calm: 180ms ease;
+  }
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+    /* phosphor action palette re-tuned for green-on-black legibility */
+    --c-allow:#39ff14; --c-suggest:#7fff00; --c-guide:#ccff00; --c-intervene:#ffaa00; --c-block:#ff3333;
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+    /* paper action palette darkened for AA on a light surface */
+    --c-allow:#16a34a; --c-suggest:#65a30d; --c-guide:#ca8a04; --c-intervene:#ea580c; --c-block:#dc2626;
+  }
+
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 82% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    min-height:100%;
+    padding: 36px 24px 0;
+  }
+  .stage { width:100%; max-width: 1180px; margin:0 auto; padding-bottom:120px; }
+
+  /* ---- page chrome (mockup-only legend + theme switcher) ------------------ */
+  .legend { display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    font-size:26px; color:var(--text-bright);
+  }
+  .legend p { margin:5px 0 0; font-size:13px; color:var(--text-dim); max-width:72ch; line-height:1.55; }
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; flex:0 0 auto; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+  [data-theme="paper"] .themes button.on { color:#fdf8f2; }
+  .themes button:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:-2px; }
+
+  /* ---- the dashboard topbar (mock chrome -- header strip + required pill) -- */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between; gap:14px;
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    padding:12px 18px; margin-bottom:14px;
+  }
+  .topbar__left { display:flex; align-items:center; gap:12px; min-width:0; flex-wrap:wrap; }
+  .brand { font-family:var(--font-h); letter-spacing:.14em; text-transform:uppercase;
+           color:var(--text-bright); font-size:16px; font-weight:700; }
+  .brand small { color:var(--text-dim); font-weight:500; letter-spacing:.06em; font-size:11px; }
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg);
+    border:1px dashed var(--badge-warn-border); border-radius:999px; padding:4px 10px;
+  }
+  .topbar__right { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  /* the header-level inline on/off toggle (required: shows the gated nature) */
+  .gatetoggle { display:inline-flex; align-items:center; gap:9px; }
+  .gatetoggle__label { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-dim); }
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border);
+    transition:background var(--t-calm), border-color var(--t-calm); flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform var(--t-calm), background var(--t-calm);
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .switch__text { min-width:3ch; font-family:var(--font-d); font-size:13px; letter-spacing:.06em; color:var(--text-dim); }
+  .switch__text[data-on="true"] { color:var(--accent); }
+  .chrome-btn {
+    appearance:none; background:transparent; cursor:pointer;
+    border:1px solid var(--border); border-radius:var(--radius-sharp);
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.1em; text-transform:uppercase; padding:7px 12px; line-height:1;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .chrome-btn:hover { color:var(--accent); border-color:var(--border-hi); }
+  .chrome-btn:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+
+  /* ====================================================================== */
+  /* the three-frame floor (M1: 3 frames are inviolable). Frame A + Frame C   */
+  /* are LIVE here (they carry our two surfaces); Frame B is dimmed scaffold. */
+  /* ====================================================================== */
+  .floor { display:grid; grid-template-columns:1fr 1fr 1.15fr; gap:12px; align-items:start; }
+  .frame {
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    min-height:240px; padding:14px; display:flex; flex-direction:column; gap:10px;
+  }
+  .frame.dim { opacity:.5; }
+  .frame__head { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+  .frame__title { margin:0; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim); font-weight:700; }
+  /* the Frame C action-count tally -- the card must NOT add to it (M3) */
+  .frame__count {
+    font-family:var(--font-d); font-size:10px; letter-spacing:.06em; color:var(--text-dim);
+    border:1px solid var(--border); border-radius:999px; padding:2px 8px; font-variant-numeric:tabular-nums;
+  }
+  .frame__count b { color:var(--text-bright); font-weight:600; }
+  .skel { height:13px; background:var(--bg-row-alt); border-radius:3px; margin:6px 0; }
+  .skel.s2 { width:78%; } .skel.s3 { width:64%; } .skel.s4 { width:88%; }
+  .frame__stub {
+    border:1px dashed var(--border); border-radius:var(--radius-soft); padding:10px 12px;
+    font-size:11px; color:var(--text-dim); line-height:1.5;
+  }
+  .frame__stub b { color:var(--text-ui); font-weight:600; }
+
+  /* ===================================================================== */
+  /* FRAME A -- the EXISTING HITL pending seam the completion routes into.  */
+  /* A real HITL pending row mirroring HitlPendingRow.svelte (M6 contract). */
+  /* ===================================================================== */
+  .hitl-empty {
+    border:1px dashed var(--border); border-radius:var(--radius-soft); padding:16px;
+    text-align:center; font-size:12px; color:var(--text-dim); line-height:1.55;
+  }
+  .hitl-empty b { color:var(--text-ui); }
+  .hpr {
+    display:flex; flex-direction:column; gap:var(--space-3);
+    padding:var(--space-4) var(--space-5);
+    background:var(--bg-row); border:1px solid var(--border);
+    /* asymmetric amber left rail: the one place the monitor leans forward */
+    border-left:3px solid var(--badge-ar-border); border-radius:var(--radius-soft);
+  }
+  .hpr[hidden] { display:none; }
+  .hpr__head { display:flex; align-items:center; gap:var(--space-4); flex-wrap:wrap; }
+  /* the paired ACTION REQUIRED badge (M4) -- aria-label = trigger reason */
+  .ar-badge {
+    display:inline-flex; align-items:center; gap:7px;
+    font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--badge-ar-fg); background:var(--badge-ar-bg);
+    border:2px solid var(--badge-ar-border); border-radius:var(--radius-sharp); padding:4px 9px; line-height:1;
+  }
+  .ar-badge .dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .hpr__attr { display:inline-flex; align-items:baseline; gap:var(--space-2); min-width:0; }
+  .hpr__attr-tag { font-size:9px; text-transform:uppercase; letter-spacing:.12em; color:var(--text-dim); }
+  .hpr__attr-val { font-family:var(--font-d); font-size:11px; color:var(--text-ui);
+                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22ch; }
+  .hpr__reason { margin:0; font-size:13px; line-height:1.5; color:var(--text); overflow-wrap:anywhere; }
+  .hpr__reason b { color:var(--text-bright); }
+  .hpr__summary {
+    font-family:var(--font-d); font-size:11px; color:var(--text-dim); line-height:1.55;
+    background:var(--bg-row-alt); border:1px solid var(--border); border-radius:var(--radius-sharp);
+    padding:8px 10px; font-variant-numeric:tabular-nums;
+  }
+  /* M9 countdown bar (visual only here) */
+  .hpr__countdown { width:100%; height:5px; border-radius:999px; background:var(--bg-row-alt);
+                    overflow:hidden; border:1px solid var(--border); }
+  .hpr__countbar { height:100%; width:72%; background:var(--badge-ar-border); }
+  .hpr__countmeta { font-family:var(--font-d); font-size:10px; color:var(--text-dim); }
+  .hpr__actions { display:flex; flex-wrap:wrap; gap:var(--space-3); margin-top:var(--space-1, 2px); }
+  .hpr__btn {
+    appearance:none; font-family:var(--ff-system); font-size:13px; font-weight:600; line-height:1;
+    padding:7px 14px; border-radius:var(--radius-sharp); cursor:pointer;
+    transition: background var(--t-calm), border-color var(--t-calm), color var(--t-calm);
+  }
+  .hpr__btn--approve { background:var(--badge-ar-border); color:#fffbeb; border:1px solid #b45309; }
+  .hpr__btn--approve:hover { background:#b45309; }
+  .hpr__btn--override { background:transparent; color:var(--text); border:1px solid var(--border); }
+  .hpr__btn--override:hover { border-color:var(--accent); color:var(--text-bright); }
+  .hpr__btn--ghost { background:transparent; color:var(--text-dim); border:1px solid transparent; }
+  .hpr__btn--ghost:hover { color:var(--text); border-color:var(--border); }
+  .hpr__btn:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  /* resolved confirmation (after the operator clicks) */
+  .hpr__resolved {
+    display:none; align-items:center; gap:8px; font-size:12px; color:var(--badge-decided-fg);
+    font-weight:600; letter-spacing:.02em;
+  }
+  .hpr__resolved .dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+
+  /* ===================================================================== */
+  /* FRAME C -- the live SOAK SHADOW HARNESS progress card lives here.      */
+  /* ===================================================================== */
+  /* OFF placeholder (no run, no poller) when the beta flag is OFF. */
+  .offstate {
+    border:1px dashed var(--border); border-radius:var(--radius-soft);
+    padding:20px; text-align:center; color:var(--text-dim); font-size:12px; line-height:1.6;
+  }
+  .offstate b { color:var(--text-bright); }
+
+  /* THE CARD: a quiet horizontal heartbeat, not a widget. Hairline border,
+     a thin accent top-edge while running, calm at rest. */
+  .soakcard {
+    border:1px solid var(--border); border-radius:var(--radius-soft);
+    background:var(--bg-row-alt); padding:13px 15px;
+    display:flex; flex-direction:column; gap:11px;
+    border-top:2px solid var(--badge-ar-border);
+  }
+  .soakcard.complete { border-top-color:var(--badge-decided-border); }
+  .soakcard.leak { border-top-color:var(--badge-blocked-border); }
+  .soakcard[hidden] { display:none; }
+
+  /* card header: title + BETA caption + SAMPLE/LIVE tag */
+  .soakcard__head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .soakcard__titlewrap { min-width:0; }
+  .soakcard__title { margin:0; font-size:13px; font-weight:700; letter-spacing:.02em; color:var(--text-bright); }
+  .soakcard__beta {
+    display:block; margin-top:3px; font-family:var(--font-d); font-size:10px; letter-spacing:.03em;
+    color:var(--text-dim);
+  }
+  .soakcard__beta .mock { color:var(--badge-ar-fg); font-weight:700; }
+  .soakcard__beta .liveT { color:var(--badge-decided-fg); font-weight:700; }
+  /* the M3 observation tag -- states the card adds NOTHING to the action count */
+  .obs-tag {
+    flex:0 0 auto; display:inline-flex; align-items:center; gap:6px;
+    font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+    border-radius:999px; padding:3px 9px; line-height:1;
+  }
+  .obs-tag .dot { width:5px; height:5px; border-radius:50%; background:currentColor; }
+
+  /* (1) the RUN LINE -- mono, tabular-nums: elapsed / duration + envelope count */
+  .runline {
+    display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;
+    font-family:var(--font-d); font-size:13px; color:var(--text-bright);
+    font-variant-numeric:tabular-nums; letter-spacing:.01em;
+  }
+  .runline__id { color:var(--text-dim); }
+  .runline__clock b { color:var(--accent); font-weight:600; }
+  .runline__env { color:var(--text-dim); }
+  .runline__env b { color:var(--text-bright); font-weight:600; }
+
+  /* (2) ONE thin (10px) stacked bar ALLOW -> BLOCK, EVERY segment labelled
+        in-line (count labels, not color-only -- M4 inviolable). */
+  .stack-wrap { display:flex; flex-direction:column; gap:6px; }
+  .stack {
+    display:flex; width:100%; height:10px; border-radius:999px; overflow:hidden;
+    border:1px solid var(--border); background:var(--bg-row);
+  }
+  .stack__seg { height:100%; min-width:2px; }
+  .stack__seg.allow     { background:var(--c-allow); }
+  .stack__seg.suggest   { background:var(--c-suggest); }
+  .stack__seg.guide     { background:var(--c-guide); }
+  .stack__seg.intervene { background:var(--c-intervene); }
+  .stack__seg.block     { background:var(--c-block); }
+  /* the in-line COUNT LABELS legend (the real M4 signal -- text, not color) */
+  .stack-legend { display:flex; flex-wrap:wrap; gap:6px 10px; font-family:var(--font-d); font-size:10px; }
+  .leg {
+    display:inline-flex; align-items:center; gap:6px; color:var(--text-dim);
+    font-variant-numeric:tabular-nums; letter-spacing:.02em;
+  }
+  .leg__sw { width:9px; height:9px; border-radius:2px; flex:0 0 auto; border:1px solid rgba(0,0,0,.25); }
+  .leg__sw.allow{background:var(--c-allow);} .leg__sw.suggest{background:var(--c-suggest);}
+  .leg__sw.guide{background:var(--c-guide);} .leg__sw.intervene{background:var(--c-intervene);}
+  .leg__sw.block{background:var(--c-block);}
+  .leg__name { text-transform:uppercase; letter-spacing:.06em; }
+  .leg__n { color:var(--text-bright); font-weight:600; }
+
+  /* (3) the verdict + tail-latency row: PAIRED polarity badge + run state +
+        compact p50/p95 readout */
+  .metrow { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  /* the LOUD paired polarity verdict badge (reuses #16 vocabulary EXACTLY) */
+  .vbadge {
+    display:inline-flex; align-items:center; gap:8px;
+    font-family:var(--ff-system); font-size:12px; font-weight:800; letter-spacing:.06em;
+    text-transform:uppercase; padding:6px 12px; border-radius:var(--radius-sharp); line-height:1;
+  }
+  .vbadge .dot { width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .vbadge.hold { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border:2px solid var(--badge-decided-border); }
+  .vbadge.leak { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border:2px solid var(--badge-blocked-border); }
+  /* the run-state pair badge (IN PROGRESS / COMPLETE / COMPLETE FAIL) */
+  .sbadge {
+    display:inline-flex; align-items:center; gap:7px;
+    font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+    padding:4px 10px; border-radius:var(--radius-sharp); line-height:1;
+  }
+  .sbadge .dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .sbadge.inprogress { color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border); }
+  .sbadge.complete   { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border:1px solid var(--badge-decided-border); }
+  .sbadge.completefail { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border:2px solid var(--badge-blocked-border); }
+  /* compact tail-latency readout (mono, tabular-nums) */
+  .tail {
+    margin-left:auto; font-family:var(--font-d); font-size:12px; color:var(--text-dim);
+    font-variant-numeric:tabular-nums; letter-spacing:.02em; white-space:nowrap;
+  }
+  .tail b { color:var(--text-bright); font-weight:600; }
+
+  /* (4) the read-only hand-off note while complete -- "awaiting Frame A" */
+  .handoff {
+    display:none; gap:9px; align-items:flex-start;
+    border:1px solid var(--border-hi); border-radius:var(--radius-soft);
+    background:var(--bg-row); color:var(--text-dim); padding:10px 13px; font-size:11px; line-height:1.55;
+  }
+  .handoff.show { display:flex; }
+  .handoff.resolved { border-color:var(--badge-decided-border); }
+  .handoff .hlabel {
+    flex:0 0 auto; font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--text-ui); border:1px solid var(--border); border-radius:999px; padding:2px 8px; margin-top:1px;
+  }
+  .handoff b { color:var(--text-bright); }
+
+  /* the visible self/firewall exclusion footer (G1/G2 -- a feature, not a
+     silent filter). Each tag pairs a count + literal label. */
+  .excl {
+    font-family:var(--font-d); font-size:10px; color:var(--text-dim);
+    display:flex; align-items:center; gap:7px; flex-wrap:wrap;
+    border-top:1px dashed var(--border); padding-top:9px; font-variant-numeric:tabular-nums;
+  }
+  .excl__lead { letter-spacing:.04em; }
+  .excl__tag {
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+    border-radius:999px; padding:2px 8px; font-size:10px; letter-spacing:.03em; font-weight:600;
+  }
+
+  /* the required amber "build gated on ADR-18 amendment" footnote */
+  .gatenote {
+    margin-top:2px; display:flex; gap:9px; align-items:flex-start;
+    border:1px dashed var(--badge-warn-border); border-radius:var(--radius-soft);
+    background:var(--badge-warn-bg); color:#7c2d12; padding:11px 13px; font-size:11px; line-height:1.5;
+  }
+  .gatenote .glabel {
+    flex:0 0 auto; font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--badge-warn-fg); border:1px solid var(--badge-warn-border); border-radius:999px;
+    padding:2px 8px; margin-top:1px;
+  }
+  .gatenote code { font-family:var(--font-d); }
+
+  /* mockup-only walkthrough controls (under the card) */
+  .walk { margin-top:6px; border-top:1px dashed var(--border); padding-top:12px; }
+  .walk__label { font-size:11px; font-weight:600; letter-spacing:.02em; color:var(--text-bright);
+                 display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:8px; }
+  .walk__label .hint { font-size:10px; font-weight:400; color:var(--text-dim); }
+
+  /* visually-hidden live region for screen readers (M17) */
+  .sr-only {
+    position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0;
+    clip:rect(0 0 0 0); overflow:hidden; white-space:nowrap;
+  }
+
+  @media (max-width: 920px) {
+    .floor { grid-template-columns:1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chrome-btn, .switch__track, .switch__knob, .hpr__btn { transition:none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ============ mockup-only legend + theme switcher ===================== -->
+  <div class="legend">
+    <div>
+      <h1>Live Session Soak Shadow Harness</h1>
+      <p>
+        KingMode mockup (#40). The LIVE-PROGRESS + SHIP-GATE-HANDOFF half of the soak surface -- a
+        single calm PROGRESS CARD inside Frame C (Background Jobs), the thin complement to the
+        already-BUILT static #16 SoakPanel drawer. It OBSERVES (contributes ZERO to Frame C's action
+        count, M3; never foregrounds, M2). One glance tells the operator the soak is healthy and the
+        POLARITY gate is HOLDING; at completion the verdict surfaces as ONE row in the EXISTING Frame
+        A HITL seam -- the only decision control. GLANCE + CLICK replaces SCROLL + PARSE + RECONSTRUCT.
+        Switch themes to preview all three token sets.
+      </p>
+    </div>
+    <div class="themes" role="group" aria-label="Preview theme">
+      <button class="on" data-theme-btn="obsidian">Obsidian</button>
+      <button data-theme-btn="phosphor">Phosphor</button>
+      <button data-theme-btn="paper">Paper</button>
+    </div>
+  </div>
+
+  <!-- ============ the dashboard topbar (header strip + required BETA pill +
+       inline on/off toggle so the gated nature is visible on screen) ======= -->
+  <div class="topbar">
+    <div class="topbar__left">
+      <span class="brand">STREAM&nbsp;MANAGER <small>operator monitor</small></span>
+      <span class="beta-pill" title="This feature is default OFF and toggled in Settings &gt; BETA features">
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+    </div>
+    <div class="topbar__right">
+      <div class="gatetoggle">
+        <span class="gatetoggle__label">soak-shadow-harness</span>
+        <label class="switch">
+          <input type="checkbox" id="betaToggle" checked aria-label="Soak Shadow Harness beta flag (default OFF)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="betaText" data-on="true">ON</span>
+        </label>
+      </div>
+      <button class="chrome-btn" aria-label="Operator settings">Settings</button>
+    </div>
+  </div>
+
+  <!-- ============ the three-frame floor (M1: 3 frames inviolable) ========= -->
+  <div class="floor">
+
+    <!-- ---- FRAME A -- Sessions + the EXISTING HITL pending seam ---------- -->
+    <section class="frame" aria-label="Frame A -- Sessions and HITL">
+      <div class="frame__head">
+        <h3 class="frame__title">Frame A -- Sessions / HITL</h3>
+        <span class="frame__count">actions <b id="frameACount">0</b></span>
+      </div>
+      <div class="skel s2"></div><div class="skel s3"></div>
+
+      <!-- the HITL hand-off destination. EMPTY while the soak runs; the
+           completion VERDICT lands here as ONE pending row (M2). -->
+      <div class="hitl-empty" id="hitlEmpty">
+        <b>HITL queue is quiet.</b><br>
+        The soak's completion decision will surface HERE as one pending row
+        -- this is the only decision control (M2 escalation-only-foreground).
+      </div>
+
+      <!-- the real HITL pending row (hidden until the soak completes) -->
+      <article class="hpr" id="hitlRow" hidden aria-labelledby="hitlReason">
+        <header class="hpr__head">
+          <span class="ar-badge" role="status"
+                aria-label="Action required -- soak completion pending review">
+            <span class="dot" aria-hidden="true"></span>ACTION REQUIRED
+          </span>
+          <span class="hpr__attr">
+            <span class="hpr__attr-tag" aria-hidden="true">target</span>
+            <span class="hpr__attr-val" id="hitlTarget">webapp-frontend / sess-4b9e</span>
+          </span>
+        </header>
+        <p class="hpr__reason" id="hitlReason">
+          <b>Soak complete -- ship-gate decision pending.</b>
+          trigger_reason = <code>soak_completion_pending_review</code>
+        </p>
+        <p class="hpr__summary" id="hitlSummary">
+          soak-live-4b9e -- 5:00 elapsed -- 68 envelopes -- POLARITY HOLDING (0 leaks)
+          -- tail p50 142ms / p95 388ms -- vs synthetic p95 410ms. Approve to close the
+          empirical ship-gate (#112).
+        </p>
+        <div class="hpr__countdown" aria-hidden="true"><span class="hpr__countbar"></span></div>
+        <span class="hpr__countmeta">HITL countdown -- 43s remaining (M9)</span>
+        <div class="hpr__actions" role="group" aria-label="HITL decision -- soak ship-gate">
+          <button class="hpr__btn hpr__btn--approve" id="hitlApprove"
+                  aria-label="Approve: close the empirical soak ship-gate">Approve gate</button>
+          <button class="hpr__btn hpr__btn--override"
+                  aria-label="Override: pick an alternative disposition">Override</button>
+          <button class="hpr__btn hpr__btn--ghost"
+                  aria-label="Dismiss: leave the ship-gate open">Dismiss</button>
+        </div>
+        <div class="hpr__resolved" id="hitlResolved" role="status">
+          <span class="dot" aria-hidden="true"></span>
+          GATE APPROVED -- empirical ship-gate closed. Row optimistically resolved.
+        </div>
+      </article>
+    </section>
+
+    <!-- ---- FRAME B -- Sub-Agents (dimmed scaffold, untouched) ------------ -->
+    <section class="frame dim" aria-label="Frame B -- Sub-Agents (scaffold)" aria-hidden="true">
+      <div class="frame__head">
+        <h3 class="frame__title">Frame B -- Sub-Agents</h3>
+        <span class="frame__count">actions <b>0</b></span>
+      </div>
+      <div class="skel"></div><div class="skel s3"></div><div class="skel s2"></div><div class="skel s4"></div>
+      <div class="frame__stub"><b>Untouched.</b> This feature adds no surface to Frame B.</div>
+    </section>
+
+    <!-- ---- FRAME C -- Background Jobs: the SOAK SHADOW HARNESS card ------- -->
+    <section class="frame" aria-label="Frame C -- Background Jobs">
+      <div class="frame__head">
+        <h3 class="frame__title">Frame C -- Background Jobs</h3>
+        <!-- M3: this tally EXCLUDES the observation card. It stays at the
+             count of REAL queued actions (lifecycle jobs etc.), here 2. -->
+        <span class="frame__count" title="Action count EXCLUDES the observational soak card (M3)">
+          actions <b id="frameCCount">2</b>
+        </span>
+      </div>
+
+      <!-- aria-live region: announces completion + verdict (M17) -->
+      <div class="sr-only" id="live" aria-live="polite"></div>
+
+      <!-- OFF placeholder (no poller / no run while the flag is OFF) -------- -->
+      <div class="offstate" id="offState" hidden>
+        <b>Soak Shadow Harness is OFF.</b><br>
+        No poller is registered while the flag is off. With no active run there is
+        no poller even when ON. Turn it ON (topbar, or Settings &gt; BETA features).
+      </div>
+
+      <!-- the LIVE harness body (shown when the flag is ON) ---------------- -->
+      <div id="liveBody">
+
+        <!-- THE CARD -- a quiet horizontal heartbeat -->
+        <div class="soakcard" id="soakCard">
+          <div class="soakcard__head">
+            <div class="soakcard__titlewrap">
+              <h4 class="soakcard__title">Live session soak -- shadow harness</h4>
+              <span class="soakcard__beta">
+                BETA -- default OFF, toggled in Settings &gt; BETA features
+                <span id="dataTag" class="mock"> -- SAMPLE DATA</span>
+              </span>
+            </div>
+            <!-- M3 observation tag: states the card adds nothing to the count -->
+            <span class="obs-tag" title="Observational -- contributes ZERO to Frame C's action count (M3)">
+              <span class="dot" aria-hidden="true"></span>OBSERVING -- 0 ACTIONS
+            </span>
+          </div>
+
+          <!-- (1) the RUN LINE: elapsed / duration + envelope count --------- -->
+          <div class="runline">
+            <span class="runline__id" id="runId">soak-live-4b9e</span>
+            <span class="runline__clock"><b id="elapsed">3:02</b> / <span id="duration">5:00</span></span>
+            <span class="runline__env"><b id="envCount">41</b> envelopes</span>
+          </div>
+
+          <!-- (2) ONE thin stacked bar ALLOW -> BLOCK, every segment count-labelled -->
+          <div class="stack-wrap">
+            <div class="stack" id="stack" role="img"
+                 aria-label="Decision band tally: see counts below the bar">
+              <span class="stack__seg allow"     id="segAllow"></span>
+              <span class="stack__seg suggest"   id="segSuggest"></span>
+              <span class="stack__seg guide"     id="segGuide"></span>
+              <span class="stack__seg intervene" id="segIntervene"></span>
+              <span class="stack__seg block"     id="segBlock"></span>
+            </div>
+            <!-- the in-line COUNT LABELS -- the REAL M4 signal (text, not color) -->
+            <div class="stack-legend" id="legend">
+              <span class="leg"><span class="leg__sw allow" aria-hidden="true"></span><span class="leg__name">allow</span> <span class="leg__n" id="nAllow">22</span></span>
+              <span class="leg"><span class="leg__sw suggest" aria-hidden="true"></span><span class="leg__name">suggest</span> <span class="leg__n" id="nSuggest">9</span></span>
+              <span class="leg"><span class="leg__sw guide" aria-hidden="true"></span><span class="leg__name">guide</span> <span class="leg__n" id="nGuide">6</span></span>
+              <span class="leg"><span class="leg__sw intervene" aria-hidden="true"></span><span class="leg__name">intervene</span> <span class="leg__n" id="nIntervene">3</span></span>
+              <span class="leg"><span class="leg__sw block" aria-hidden="true"></span><span class="leg__name">block</span> <span class="leg__n" id="nBlock">1</span></span>
+            </div>
+          </div>
+
+          <!-- (3) verdict + run-state + tail-latency readout --------------- -->
+          <div class="metrow">
+            <!-- the LOUD paired polarity verdict badge (reuses #16 vocabulary) -->
+            <span class="vbadge hold" id="polarityBadge" role="status">
+              <span class="dot" aria-hidden="true"></span><span id="polarityText">POLARITY HOLDING</span>
+            </span>
+            <!-- the run-state pair badge -->
+            <span class="sbadge inprogress" id="stateBadge" role="status">
+              <span class="dot" aria-hidden="true"></span><span id="stateText">IN PROGRESS</span>
+            </span>
+            <!-- compact tail-latency readout -->
+            <span class="tail">p50 <b id="p50">142ms</b> / p95 <b id="p95">388ms</b></span>
+          </div>
+
+          <!-- (4) the read-only hand-off note (shown only when complete) ---- -->
+          <div class="handoff" id="handoff" role="note">
+            <span class="hlabel">awaiting</span>
+            <span id="handoffText">
+              Soak COMPLETE. The card is read-only -- the verdict is now <b>awaiting the Frame A
+              decision</b>. Approve / Override / Dismiss in the HITL row to the left to close the
+              empirical ship-gate (#112). This card owns no decision control (M2).
+            </span>
+          </div>
+
+          <!-- visible self/firewall exclusion footer (G1/G2) -------------- -->
+          <div class="excl" aria-label="Candidates excluded by the polarity gate and firewall">
+            <span class="excl__lead">source pool excluded:</span>
+            <span class="excl__tag" id="exclSelf">1 self</span>
+            <span class="excl__tag" id="exclFw">1 firewalled</span>
+            <span class="excl__tag">target NON-SM (from data)</span>
+          </div>
+        </div>
+
+        <!-- the required amber build-gate footnote ----------------------- -->
+        <div class="gatenote" role="note">
+          <span class="glabel">Gated</span>
+          <span>
+            <b>Build gated on an ADR-18 amendment.</b> This UI is approvable now, but the build is
+            BLOCKED until an ADR-18 amendment resolves the FROZEN-envelope touch. The brief mints a
+            NEW envelope kind <code>soak_ready_for_ship_gate</code>; ADR-18 Rule 1 permits metadata-only
+            extensions to FROZEN schemas, not a new kind. Three viable paths: PATH-A (recommended) mint
+            it FROZEN with same-PR cassette_record.py + soak_driver.py coverage (2026-05-12
+            governance_decision precedent); PATH-B reuse governance_decision with
+            trigger_reason='soak_completion_pending_review'; PATH-C dashboard injects hitl_pending
+            directly on soak completion (no new envelope). All paths keep the M1-M18 UI compliance shown here.
+          </span>
+        </div>
+
+        <!-- mockup-only walkthrough -------------------------------------- -->
+        <div class="walk">
+          <div class="walk__label">
+            Mockup walkthrough <span class="hint">demo only -- not part of the feature</span>
+          </div>
+          <div class="themes" role="group" aria-label="Walk the soak harness states">
+            <button data-demo="play">Auto-tick to complete</button>
+            <button data-demo="running">Reset -- running (3:02)</button>
+            <button data-demo="complete">Jump -- COMPLETE / HOLDING</button>
+            <button data-demo="leak">Jump -- COMPLETE FAIL / LEAK</button>
+          </div>
+        </div>
+
+      </div><!-- /liveBody -->
+    </section>
+  </div><!-- /floor -->
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ====== mockDataSpec (verbatim shapes from the vetted brief) ============
+  // (1) live status snapshot -- the running state the card polls ~1s.
+  var SNAP = {
+    soak_id: "soak-live-4b9e",
+    target_session_id: "sess-4b9e2a",
+    project_slug: "webapp-frontend",     // domain-agnostic, FROM DATA (M16)
+    status: "running",
+    elapsed_secs: 182,                   // 3:02
+    duration_secs: 300,                  // 5:00
+    envelope_count: 41,
+    decisions: { ALLOW: 22, SUGGEST: 9, GUIDE: 6, INTERVENE: 3, BLOCK: 1 },
+    tail_latency_ms: { p50: 142, p95: 388 },
+    polarity: { pass: true, leak_count: 0 },
+    excluded_self: 1,        // streamManager-slug candidate in the source pool
+    excluded_firewalled: 1,  // a certPortal candidate -- NEVER targeted (G1)
+    mock: true
+  };
+  // (2) completed run comparative -- the COMPLETE / HOLDING terminal state.
+  var DONE_PASS = {
+    soak_id: "soak-live-4b9e", status: "complete",
+    target_session_id: "sess-4b9e2a", project_slug: "webapp-frontend",
+    elapsed_secs: 300, duration_secs: 300, envelope_count: 68,
+    decisions: { ALLOW: 38, SUGGEST: 14, GUIDE: 10, INTERVENE: 5, BLOCK: 1 },
+    tail_latency_ms: { p50: 142, p95: 388 },
+    polarity_pass: 1, leak_count: 0,
+    synthetic_benchmark: { overall_p95: 410 }, mock: true
+  };
+  // (4) polarity-leak negative case -- COMPLETE FAIL / LEAK terminal state.
+  var DONE_LEAK = {
+    soak_id: "soak-live-9c1d", status: "complete",
+    target_session_id: "sess-9c1d77", project_slug: "infra-pipeline",
+    elapsed_secs: 300, duration_secs: 300, envelope_count: 54,
+    decisions: { ALLOW: 30, SUGGEST: 11, GUIDE: 7, INTERVENE: 4, BLOCK: 2 },
+    tail_latency_ms: { p50: 168, p95: 502 },
+    polarity_pass: 0, leak_count: 1,
+    synthetic_benchmark: { overall_p95: 410 }, mock: true
+  };
+
+  var BAND_ORDER = ["ALLOW","SUGGEST","GUIDE","INTERVENE","BLOCK"];
+  var BAND_CLS = { ALLOW:"allow", SUGGEST:"suggest", GUIDE:"guide", INTERVENE:"intervene", BLOCK:"block" };
+
+  // ====== element refs =====================================================
+  var root = document.documentElement;
+  var card = document.getElementById("soakCard");
+  var live = document.getElementById("live");
+  var dataTag = document.getElementById("dataTag");
+
+  var elRunId = document.getElementById("runId");
+  var elElapsed = document.getElementById("elapsed");
+  var elDuration = document.getElementById("duration");
+  var elEnv = document.getElementById("envCount");
+
+  var seg = {
+    ALLOW: document.getElementById("segAllow"), SUGGEST: document.getElementById("segSuggest"),
+    GUIDE: document.getElementById("segGuide"), INTERVENE: document.getElementById("segIntervene"),
+    BLOCK: document.getElementById("segBlock")
+  };
+  var nEl = {
+    ALLOW: document.getElementById("nAllow"), SUGGEST: document.getElementById("nSuggest"),
+    GUIDE: document.getElementById("nGuide"), INTERVENE: document.getElementById("nIntervene"),
+    BLOCK: document.getElementById("nBlock")
+  };
+
+  var polarityBadge = document.getElementById("polarityBadge");
+  var polarityText = document.getElementById("polarityText");
+  var stateBadge = document.getElementById("stateBadge");
+  var stateText = document.getElementById("stateText");
+  var elP50 = document.getElementById("p50");
+  var elP95 = document.getElementById("p95");
+
+  var handoff = document.getElementById("handoff");
+  var exclSelf = document.getElementById("exclSelf");
+  var exclFw = document.getElementById("exclFw");
+
+  var hitlEmpty = document.getElementById("hitlEmpty");
+  var hitlRow = document.getElementById("hitlRow");
+  var hitlTarget = document.getElementById("hitlTarget");
+  var hitlSummary = document.getElementById("hitlSummary");
+  var hitlResolved = document.getElementById("hitlResolved");
+  var hitlApprove = document.getElementById("hitlApprove");
+  var frameACount = document.getElementById("frameACount");
+
+  // ====== helpers ==========================================================
+  function clock(secs){
+    var m = Math.floor(secs / 60), s = secs % 60;
+    return m + ":" + (s < 10 ? "0" + s : s);
+  }
+  function sum(dec){ var t = 0; BAND_ORDER.forEach(function(k){ t += (dec[k] || 0); }); return t; }
+
+  // ====== theme switcher (mockup chrome) ===================================
+  document.querySelectorAll('[data-theme-btn]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function (x){ x.classList.remove('on'); });
+      b.classList.add('on');
+    });
+  });
+
+  // ====== beta flag toggle: ON shows the card, OFF the placeholder =========
+  var betaToggle = document.getElementById("betaToggle");
+  var betaText = document.getElementById("betaText");
+  var offState = document.getElementById("offState");
+  var liveBody = document.getElementById("liveBody");
+  function applyBeta(){
+    var on = betaToggle.checked;
+    betaText.textContent = on ? "ON" : "OFF";
+    betaText.setAttribute("data-on", String(on));
+    offState.hidden = on;
+    liveBody.hidden = !on;
+    if (!on) stopTick(); // OFF tears down the poller (no poller while OFF)
+  }
+  betaToggle.addEventListener("change", applyBeta);
+
+  // ====== render a SNAPSHOT into the card (running or terminal) ============
+  function renderSnap(snap, complete, passVerdict){
+    var dec = snap.decisions;
+    var total = sum(dec) || 1;
+
+    // run line
+    elRunId.textContent = snap.soak_id;
+    elElapsed.textContent = clock(snap.elapsed_secs);
+    elDuration.textContent = clock(snap.duration_secs);
+    elEnv.textContent = snap.envelope_count;
+
+    // stacked bar widths + count labels (M4: count is the real signal)
+    BAND_ORDER.forEach(function(k){
+      var n = dec[k] || 0;
+      seg[k].style.width = ((n / total) * 100).toFixed(2) + "%";
+      nEl[k].textContent = n;
+    });
+
+    // tail latency
+    elP50.textContent = snap.tail_latency_ms.p50 + "ms";
+    elP95.textContent = snap.tail_latency_ms.p95 + "ms";
+
+    // target attribution rendered FROM DATA (M16)
+    hitlTarget.textContent = snap.project_slug + " / " + snap.target_session_id;
+
+    // exclusion footer (G1/G2 -- visible, not silent)
+    exclSelf.textContent = (snap.excluded_self != null ? snap.excluded_self : 1) + " self";
+    exclFw.textContent = (snap.excluded_firewalled != null ? snap.excluded_firewalled : 1) + " firewalled";
+
+    // ---- polarity verdict badge (paired label+color, reuses #16 vocab) ----
+    if (passVerdict) {
+      polarityBadge.className = "vbadge hold";
+      polarityText.textContent = "POLARITY HOLDING";
+    } else {
+      polarityBadge.className = "vbadge leak";
+      var leaks = snap.leak_count != null ? snap.leak_count : 1;
+      polarityText.textContent = "POLARITY LEAK -- " + leaks;
+    }
+
+    // ---- run-state pair badge + card edge ----
+    card.classList.remove("complete", "leak");
+    if (!complete) {
+      stateBadge.className = "sbadge inprogress";
+      stateText.textContent = "IN PROGRESS";
+      handoff.classList.remove("show");
+    } else if (passVerdict) {
+      stateBadge.className = "sbadge complete";
+      stateText.textContent = "COMPLETE";
+      card.classList.add("complete");
+      handoff.classList.add("show");
+    } else {
+      stateBadge.className = "sbadge completefail";
+      stateText.textContent = "COMPLETE FAIL";
+      card.classList.add("leak");
+      handoff.classList.add("show");
+    }
+  }
+
+  // ====== completion -> surface ONE Frame A HITL pending row (M2) ==========
+  function surfaceHitl(snap, passVerdict){
+    var p95 = snap.tail_latency_ms.p95;
+    var bench = snap.synthetic_benchmark ? snap.synthetic_benchmark.overall_p95 : null;
+    var leaks = snap.leak_count != null ? snap.leak_count : (passVerdict ? 0 : 1);
+    var verdict = passVerdict ? ("POLARITY HOLDING (" + leaks + " leaks)")
+                              : ("POLARITY LEAK (" + leaks + " leak)");
+    hitlSummary.textContent =
+      snap.soak_id + " -- " + clock(snap.duration_secs) + " elapsed -- "
+      + snap.envelope_count + " envelopes -- " + verdict
+      + " -- tail p50 " + snap.tail_latency_ms.p50 + "ms / p95 " + p95 + "ms"
+      + (bench ? " -- vs synthetic p95 " + bench + "ms" : "")
+      + (passVerdict ? " -- Approve to close the empirical ship-gate (#112)."
+                     : " -- LEAK: a self/SM session slipped past the WHERE-clause. Do NOT approve.");
+    hitlResolved.style.display = "none";
+    hitlRow.querySelector(".hpr__actions").style.display = "flex";
+    hitlEmpty.hidden = true;
+    hitlRow.hidden = false;
+    // Frame A action count ticks to 1 (the one real decision); Frame C stays put (M3).
+    frameACount.textContent = "1";
+    live.textContent = "Soak complete -- " + verdict
+      + ". One decision row surfaced in Frame A HITL. The card is now read-only.";
+  }
+
+  // operator clicks APPROVE -> optimistic resolve (M10)
+  hitlApprove.addEventListener("click", function(){
+    hitlRow.querySelector(".hpr__actions").style.display = "none";
+    hitlResolved.style.display = "flex";
+    handoff.classList.add("resolved");
+    document.getElementById("handoffText").innerHTML =
+      "Ship-gate <b>APPROVED</b> in Frame A. The empirical soak gate (#112) is closed. "
+      + "The card stays read-only -- it never owned the decision.";
+    frameACount.textContent = "0";
+    live.textContent = "Operator approved the soak ship-gate. Empirical gate closed.";
+  });
+
+  // ====== live ~1s poll SIMULATION (only while ON + a run is active) =======
+  var timer = null;
+  function stopTick(){ if (timer){ clearInterval(timer); timer = null; } }
+  function startTick(){
+    stopTick();
+    // re-seed to the running snapshot at 3:02
+    var cur = JSON.parse(JSON.stringify(SNAP));
+    renderSnap(cur, false, true);
+    dataTag.className = "mock"; dataTag.textContent = " -- SAMPLE DATA";
+    live.textContent = "Soak running -- polling status every ~1s.";
+    timer = setInterval(function(){
+      if (cur.elapsed_secs >= cur.duration_secs){
+        stopTick();
+        renderSnap(DONE_PASS, true, true);
+        surfaceHitl(DONE_PASS, true);
+        return;
+      }
+      // advance ~6s/tick so the demo completes in a few seconds; accrue bands.
+      cur.elapsed_secs = Math.min(cur.duration_secs, cur.elapsed_secs + 6);
+      cur.envelope_count += 1;
+      var roll = Math.random();
+      var band = roll < 0.55 ? "ALLOW" : roll < 0.74 ? "SUGGEST" : roll < 0.88 ? "GUIDE"
+               : roll < 0.97 ? "INTERVENE" : "BLOCK";
+      cur.decisions[band] += 1;
+      // tail latency jitters within a calm band
+      cur.tail_latency_ms.p50 = 138 + Math.floor(Math.random() * 12);
+      cur.tail_latency_ms.p95 = 380 + Math.floor(Math.random() * 24);
+      renderSnap(cur, false, true);
+    }, 900);
+  }
+
+  // ====== walkthrough buttons ==============================================
+  document.querySelectorAll('[data-demo]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var d = b.getAttribute('data-demo');
+      // every walkthrough resets the HITL surface first
+      hitlRow.hidden = true; hitlEmpty.hidden = false;
+      hitlResolved.style.display = "none";
+      hitlRow.querySelector(".hpr__actions").style.display = "flex";
+      handoff.classList.remove("resolved");
+      document.getElementById("handoffText").innerHTML =
+        "Soak COMPLETE. The card is read-only -- the verdict is now <b>awaiting the Frame A "
+        + "decision</b>. Approve / Override / Dismiss in the HITL row to the left to close the "
+        + "empirical ship-gate (#112). This card owns no decision control (M2).";
+      frameACount.textContent = "0";
+
+      if (d === "play") { startTick(); }
+      else if (d === "running") { stopTick(); renderSnap(SNAP, false, true); live.textContent = "Reset to running at 3:02."; }
+      else if (d === "complete") { stopTick(); renderSnap(DONE_PASS, true, true); surfaceHitl(DONE_PASS, true); }
+      else if (d === "leak") { stopTick(); renderSnap(DONE_LEAK, true, false); surfaceHitl(DONE_LEAK, false); }
+    });
+  });
+
+  // ====== boot: flag ON, render the running snapshot ======================
+  applyBeta();
+  renderSnap(SNAP, false, true);
+})();
+</script>
+</body>
+</html>

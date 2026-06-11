@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "soak-panel" (#16: Frame D: Live Session Soak
+  Control Panel with Polarity Audit). Self-contained, hand-reviewable. NO external
+  assets / CDNs / fonts -- system stack only. ASCII-only (no smart quotes, no
+  em-dashes -- written as "--", no box-drawing).
+
+  PURPOSE (directive #2): let the operator confirm the UI approach BEFORE any code
+  is written. The build is GATED behind an ADR-18 amendment (mints the two new
+  FROZEN bus envelopes soak_ready_for_ship_gate + soak_polarity_audit) -- a small
+  amber footnote in-panel states this so the operator knows the UI is APPROVABLE
+  but the build is BLOCKED until the amendment lands.
+
+  Real obsidian / phosphor / paper tokens lifted from
+  dashboard/ui-next/src/styles/theme.css. Drawer idiom mirrors
+  SettingsDrawer.svelte (role=dialog, aria-modal, Escape-close, focus-trap,
+  focus-restore). Paired M4 label+color badges everywhere (color is NEVER the
+  only signal). Mock data drawn from the brief's mockDataSpec.
+
+  G1 firewall + G2 polarity: the selector is ranked, SELF-EXCLUDED, and
+  firewall-rejecting; the rejected counts (self / streamManager / firewalled) are
+  rendered VISIBLE in a footer so self-exclusion is a feature, not a silent
+  filter. Domain-agnostic: project_slug is rendered FROM DATA, never hard-coded.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- client-side defense-in-depth self-exclude tags (G2): SM's own identity -->
+<meta name="sm-own-session-id" content="sm-self-0000-bridge">
+<meta name="sm-own-project-slugs" content="streamManager">
+<title>Frame D -- Live Session Soak + Polarity Audit (BETA mockup)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired-badge tokens (theme-invariant per M4, from theme.css :root) */
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+    --badge-decided-fg:#16a34a; --badge-decided-bg:#dcfce7; --badge-decided-border:#86efac;
+    --badge-blocked-fg:#dc2626; --badge-blocked-bg:#fee2e2; --badge-blocked-border:#dc2626;
+    --badge-warn-fg:#ea580c; --badge-warn-bg:#ffedd5; --badge-warn-border:#ea580c;
+
+    --space-2:4px; --space-3:6px; --space-4:10px; --space-5:14px; --space-6:22px; --space-7:36px;
+    --radius-sharp:2px; --radius-soft:4px;
+    --focus-ring-color:#d97706;
+    --t-calm: 180ms ease;
+  }
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 82% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    min-height:100%;
+    padding: 36px 24px 80px;
+  }
+  .stage { width:100%; max-width: 980px; margin:0 auto; }
+
+  /* ---- page chrome (mockup-only legend + theme switcher) ------------------ */
+  .legend { display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    font-size:26px; color:var(--text-bright);
+  }
+  .legend p { margin:5px 0 0; font-size:13px; color:var(--text-dim); max-width:60ch; line-height:1.55; }
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; flex:0 0 auto; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+
+  /* ---- the dashboard header strip the SOAK affordance lives in ------------ */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between; gap:14px;
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    padding:12px 18px; margin-bottom:18px;
+  }
+  .topbar__left { display:flex; align-items:center; gap:12px; min-width:0; }
+  .brand { font-family:var(--font-h); letter-spacing:.14em; text-transform:uppercase;
+           color:var(--text-bright); font-size:16px; font-weight:700; }
+  .brand small { color:var(--text-dim); font-weight:500; letter-spacing:.06em; font-size:11px; }
+  .topbar__right { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  /* a quiet hairline chrome button -- NOT a loud always-on Frame D column */
+  .chrome-btn {
+    appearance:none; background:transparent; cursor:pointer;
+    border:1px solid var(--border); border-radius:var(--radius-sharp);
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.1em; text-transform:uppercase; padding:7px 12px; line-height:1;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .chrome-btn:hover { color:var(--accent); border-color:var(--border-hi); }
+  .chrome-btn[aria-disabled="true"] { opacity:.45; cursor:not-allowed; }
+  .chrome-btn .dotlive { display:inline-block; width:6px; height:6px; border-radius:50%;
+                         background:var(--accent); margin-right:6px; vertical-align:middle; }
+  .chrome-btn[aria-disabled="true"] .dotlive { background:var(--text-ui); }
+
+  /* a fake three-frame floor behind the drawer, to show Frame D as an overlay */
+  .floor {
+    display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;
+    opacity:.5; pointer-events:none;
+  }
+  .floor .col {
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    min-height:220px; padding:14px;
+  }
+  .floor .col h3 { margin:0 0 8px; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+                   color:var(--text-dim); font-weight:700; }
+  .floor .skel { height:14px; background:var(--bg-row-alt); border-radius:3px; margin:7px 0; }
+  .floor .skel.s2 { width:78%; } .floor .skel.s3 { width:64%; } .floor .skel.s4 { width:88%; }
+
+  /* ---- the Frame D drawer (mirrors SettingsDrawer .sd-panel) -------------- */
+  .scrim {
+    position:fixed; inset:0; background:rgba(8,10,12,.55); backdrop-filter:blur(1px);
+    z-index:80;
+  }
+  .panel {
+    position:fixed; top:0; right:0; bottom:0; width:min(480px,94vw); z-index:81;
+    display:flex; flex-direction:column;
+    background:var(--bg-card);
+    border-left:1px solid var(--border-hi);
+    box-shadow:-18px 0 48px -24px rgba(0,0,0,.7);
+    color:var(--text); font-family:var(--ff-system);
+    overflow:hidden;
+  }
+  .panel[hidden] { display:none; }
+
+  .panel__head {
+    flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between;
+    gap:12px; padding:var(--space-5) var(--space-6) var(--space-4);
+    border-bottom:1px solid var(--border);
+  }
+  .panel__titlewrap { min-width:0; }
+  .panel__title {
+    margin:0; font-family:var(--font-h); font-size:18px; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--text-bright);
+  }
+  .panel__sub { margin:3px 0 0; font-size:11px; letter-spacing:.04em; color:var(--text-dim); }
+  /* BETA pill -- shows the gated nature on-screen (required) */
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:6px; margin-top:8px;
+    font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg);
+    border:1px dashed var(--badge-warn-border); border-radius:999px; padding:3px 9px;
+  }
+  .panel__close {
+    appearance:none; background:transparent; border:1px solid var(--border);
+    border-radius:var(--radius-sharp); color:var(--text-ui);
+    width:28px; height:28px; line-height:1; font-size:14px; cursor:pointer; flex:0 0 auto;
+    display:inline-flex; align-items:center; justify-content:center;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .panel__close:hover { color:var(--accent); border-color:var(--border-hi); }
+
+  /* inline on/off toggle in the head, so the operator SEES the gating */
+  .gaterow {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px var(--space-6); border-bottom:1px solid var(--border);
+    background:var(--bg-row-alt);
+  }
+  .gaterow__label { font-size:11px; letter-spacing:.04em; color:var(--text-dim); }
+  .gaterow__label b { color:var(--text-bright); font-weight:600; }
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border);
+    transition:background var(--t-calm), border-color var(--t-calm); flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform var(--t-calm), background var(--t-calm);
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track {
+    outline:2px solid var(--focus-ring-color); outline-offset:2px;
+  }
+  .switch__text {
+    min-width:3ch; font-family:var(--font-d); font-size:13px; letter-spacing:.06em;
+    color:var(--text-dim);
+  }
+  .switch__text[data-on="true"] { color:var(--accent); }
+
+  .panel__body {
+    flex:1 1 auto; overflow-y:auto;
+    padding:var(--space-5) var(--space-6) var(--space-7);
+    display:flex; flex-direction:column; gap:var(--space-6);
+  }
+
+  /* OFF state -- when the beta flag is off the panel registers nothing + renders
+     a quiet placeholder (no pollers, no SSE). */
+  .offstate {
+    border:1px dashed var(--border); border-radius:var(--radius-soft);
+    padding:22px; text-align:center; color:var(--text-dim); font-size:13px; line-height:1.6;
+  }
+  .offstate b { color:var(--text-bright); }
+
+  /* ---- (1) the LOUD glanceable verdict header (M4 paired badge) ----------- */
+  .verdict {
+    border:1px solid var(--border); border-radius:var(--radius-soft);
+    padding:16px 18px; background:var(--bg-row-alt);
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .verdict__caption { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-dim); }
+  .vbadge {
+    display:inline-flex; align-items:center; gap:9px; align-self:flex-start;
+    font-family:var(--ff-system); font-size:14px; font-weight:800; letter-spacing:.06em;
+    text-transform:uppercase; padding:8px 14px; border-radius:var(--radius-sharp); line-height:1;
+  }
+  .vbadge .dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .vbadge.pass { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border:2px solid var(--badge-decided-border); }
+  .vbadge.fail { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border:2px solid var(--badge-blocked-border); }
+  .vbadge.none { color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border); font-weight:700; }
+  .verdict__meta { font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+                   font-variant-numeric:tabular-nums; }
+
+  .section__label {
+    font-size:13px; font-weight:600; letter-spacing:.02em; color:var(--text-bright);
+    display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  }
+  .section__label .hint { font-size:11px; font-weight:400; color:var(--text-dim); letter-spacing:.02em; }
+  .section__desc { margin:4px 0 0; font-size:11px; line-height:1.5; color:var(--text-dim); max-width:52ch; }
+
+  /* ---- (2) ranked self-excluded session selector ------------------------- */
+  .selector { display:flex; flex-direction:column; gap:7px; margin-top:8px; }
+  .srow {
+    appearance:none; text-align:left; cursor:pointer; width:100%;
+    display:grid; grid-template-columns:1fr auto; gap:2px 12px;
+    background:var(--bg-row); border:1px solid var(--border); border-left:3px solid transparent;
+    border-radius:var(--radius-sharp); padding:9px 12px;
+    color:var(--text); font-family:var(--ff-system);
+    transition:border-color var(--t-calm), background var(--t-calm);
+  }
+  .srow:hover { background:var(--bg-row-hover); }
+  .srow:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .srow[aria-pressed="true"] { border-color:var(--border-hi); background:var(--bg-row-hover); }
+  /* the busiest+most-recent (pre-elevated) row carries a left accent hairline */
+  .srow.top { border-left-color:var(--accent); }
+  .srow__slug { font-size:13px; font-weight:600; color:var(--text-bright); letter-spacing:.01em; }
+  .srow__id { font-family:var(--font-d); font-size:11px; color:var(--text-dim); }
+  .srow__busy {
+    font-family:var(--font-d); font-size:13px; font-variant-numeric:tabular-nums;
+    color:var(--accent); text-align:right; align-self:center;
+  }
+  .srow__busy small { display:block; font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+                      color:var(--text-dim); font-weight:600; }
+  .srow__recency { font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+                   text-align:right; font-variant-numeric:tabular-nums; }
+  .srow .toptag {
+    display:inline-block; margin-left:7px; font-size:9px; font-weight:700; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--accent); border:1px solid var(--border-hi);
+    border-radius:999px; padding:1px 6px; vertical-align:middle;
+  }
+  /* visible self-exclude / firewall rejection footer (G1/G2 -- a feature, not a silent filter) */
+  .excluded {
+    margin-top:9px; font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+    display:flex; align-items:center; gap:7px; flex-wrap:wrap;
+    border-top:1px dashed var(--border); padding-top:9px;
+  }
+  .excluded .tag {
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+    border-radius:999px; padding:2px 8px; font-size:10px; letter-spacing:.04em; font-weight:600;
+  }
+
+  /* ---- (3) the single deliberate primary action -------------------------- */
+  .actions { display:flex; align-items:center; gap:12px; }
+  .soak-btn {
+    appearance:none; cursor:pointer;
+    background:var(--accent); color:#1a1206;
+    border:1px solid var(--accent); border-radius:5px;
+    font-family:var(--ff-system); font-size:14px; font-weight:750; letter-spacing:.04em;
+    padding:11px 20px; line-height:1;
+    transition:filter var(--t-calm), opacity var(--t-calm);
+  }
+  [data-theme="phosphor"] .soak-btn { color:#010602; }
+  [data-theme="paper"] .soak-btn { color:#fffefb; }
+  .soak-btn:hover { filter:brightness(1.08); }
+  .soak-btn:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .soak-btn[disabled] { opacity:.4; cursor:not-allowed; filter:none; }
+  .actions__note { font-size:11px; color:var(--text-dim); line-height:1.4; }
+
+  /* ---- (4) live progress readout ----------------------------------------- */
+  .progress { display:flex; flex-direction:column; gap:10px; }
+  .progress__head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .statebadge {
+    display:inline-flex; align-items:center; gap:7px;
+    font-size:12px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+    padding:4px 10px; border-radius:var(--radius-sharp); line-height:1;
+  }
+  .statebadge .dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .statebadge.inprogress { color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border); }
+  .statebadge.complete { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border:1px solid var(--badge-decided-border); }
+  .statebadge.failed { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border:2px solid var(--badge-blocked-border); }
+  .progress__elapsed { font-family:var(--font-d); font-size:12px; color:var(--text-dim);
+                       font-variant-numeric:tabular-nums; }
+  .bar {
+    position:relative; height:6px; background:var(--bg-row-alt);
+    border:1px solid var(--border); border-radius:999px; overflow:hidden;
+  }
+  .bar__fill { position:absolute; inset:0 auto 0 0; width:0%; background:var(--accent);
+               transition:width 1s linear; }
+  .counts { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .countcard {
+    background:var(--bg-row); border:1px solid var(--border); border-radius:var(--radius-sharp);
+    padding:10px 12px;
+  }
+  .countcard .k { font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim); }
+  .countcard .v { font-family:var(--font-d); font-size:22px; font-variant-numeric:tabular-nums;
+                  color:var(--text-bright); margin-top:3px; }
+
+  /* ---- (5) per-band report table ----------------------------------------- */
+  .report { display:flex; flex-direction:column; gap:8px; }
+  table.bands { width:100%; border-collapse:collapse; font-family:var(--font-d); font-size:12px; }
+  table.bands caption { text-align:left; font-family:var(--ff-system); font-size:13px;
+                        font-weight:600; color:var(--text-bright); margin-bottom:6px; }
+  table.bands th, table.bands td { padding:7px 10px; text-align:right; font-variant-numeric:tabular-nums;
+                                   border-bottom:1px solid var(--border); }
+  table.bands th { font-family:var(--ff-system); font-size:10px; letter-spacing:.08em;
+                   text-transform:uppercase; color:var(--text-dim); font-weight:600; }
+  table.bands th:first-child, table.bands td:first-child { text-align:left; color:var(--text-bright); }
+  table.bands tbody tr:nth-child(even) td { background:var(--bg-row-alt); }
+  .reportmd {
+    margin-top:6px; font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+    line-height:1.55; background:var(--bg-row-alt); border:1px solid var(--border);
+    border-radius:var(--radius-sharp); padding:10px 12px; white-space:pre-wrap;
+  }
+  /* a FAIL surface that explains the Frame A HITL hand-off (M2 escalation-only fg) */
+  .escalate {
+    border:2px solid var(--badge-blocked-border); border-radius:var(--radius-soft);
+    background:var(--badge-blocked-bg); color:#7f1d1d; padding:12px 14px; font-size:12px; line-height:1.5;
+  }
+  .escalate b { color:var(--badge-blocked-fg); }
+
+  /* ---- the required amber "build gated on ADR-18 amendment" footnote ------ */
+  .gatenote {
+    margin-top:4px; display:flex; gap:9px; align-items:flex-start;
+    border:1px dashed var(--badge-warn-border); border-radius:var(--radius-soft);
+    background:var(--badge-warn-bg); color:#7c2d12; padding:11px 13px; font-size:11px; line-height:1.5;
+  }
+  .gatenote .glabel {
+    flex:0 0 auto; font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--badge-warn-fg); border:1px solid var(--badge-warn-border); border-radius:999px;
+    padding:2px 8px; margin-top:1px;
+  }
+
+  /* visually-hidden live region for screen readers (aria-live=polite) */
+  .sr-only {
+    position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0;
+    clip:rect(0 0 0 0); overflow:hidden; white-space:nowrap;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(*) { }
+    .bar__fill { transition:none; }
+  }
+  html[data-motion="reduce"] .bar__fill { transition:none; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ============ mockup-only legend + theme switcher ===================== -->
+  <div class="legend">
+    <div>
+      <h1>Frame D -- Live Session Soak + Polarity Audit</h1>
+      <p>
+        KingMode mockup (#16). A BETA-gated right-side drawer summoned from a quiet header
+        "SOAK" affordance -- NOT a fourth always-on frame (the 3-frame floor is inviolable,
+        ADR-18). One ranked click fires a real 5-minute live-JSONL soak; the polarity-audit
+        row turns "is the self-exclusion gate still live?" into a glanceable green/red verdict
+        before the ship-gate. Switch themes to preview all three token sets.
+      </p>
+    </div>
+    <div class="themes" role="group" aria-label="Preview theme">
+      <button class="on" data-theme-btn="obsidian">Obsidian</button>
+      <button data-theme-btn="phosphor">Phosphor</button>
+      <button data-theme-btn="paper">Paper</button>
+    </div>
+  </div>
+
+  <!-- ============ the dashboard topbar the SOAK affordance lives in ======== -->
+  <div class="topbar">
+    <div class="topbar__left">
+      <span class="brand">STREAM&nbsp;MANAGER <small>operator monitor</small></span>
+    </div>
+    <div class="topbar__right">
+      <!-- the quiet hairline SOAK chrome button (next to Settings) -->
+      <button class="chrome-btn" id="soakOpen" aria-haspopup="dialog">
+        <span class="dotlive" aria-hidden="true"></span>SOAK
+      </button>
+      <button class="chrome-btn" aria-label="Operator settings">Settings</button>
+    </div>
+  </div>
+
+  <!-- a dimmed three-frame floor, so Frame D reads as an overlay, not a column -->
+  <div class="floor" aria-hidden="true">
+    <div class="col"><h3>Frame A -- Sessions</h3><div class="skel"></div><div class="skel s2"></div><div class="skel s3"></div><div class="skel s4"></div><div class="skel s2"></div></div>
+    <div class="col"><h3>Frame B -- Sub-Agents</h3><div class="skel s2"></div><div class="skel"></div><div class="skel s3"></div><div class="skel s4"></div></div>
+    <div class="col"><h3>Frame C -- Background Jobs</h3><div class="skel s3"></div><div class="skel s2"></div><div class="skel"></div></div>
+  </div>
+
+  <p style="margin-top:18px;font-size:12px;color:var(--text-dim);line-height:1.5;">
+    Click <b style="color:var(--text-bright);">SOAK</b> above (or it is already open below) to summon Frame D.
+    Use the mock-data controls inside the drawer to walk the run -> COMPLETE-PASS / COMPLETE-FAIL paths.
+  </p>
+</div>
+
+<!-- ============ THE FRAME D DRAWER ======================================== -->
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="fd-title" tabindex="-1" hidden>
+  <!-- aria-live region: announces progress ticks + the final verdict (M17 a11y) -->
+  <div class="sr-only" id="live" aria-live="polite"></div>
+
+  <header class="panel__head">
+    <div class="panel__titlewrap">
+      <h2 class="panel__title" id="fd-title">Frame D -- Live Session Soak</h2>
+      <p class="panel__sub">Tier-4 real-JSONL soak with polarity audit</p>
+      <span class="beta-pill">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    </div>
+    <button class="panel__close" id="soakClose" aria-label="Close Frame D">
+      <span aria-hidden="true">x</span>
+    </button>
+  </header>
+
+  <!-- inline on/off toggle so the operator SEES the gated on/off behaviour -->
+  <div class="gaterow">
+    <span class="gaterow__label">Feature <b>soak-panel</b> -- beta flag</span>
+    <label class="switch">
+      <input type="checkbox" id="betaToggle" checked aria-label="Live Session Soak (Frame D) beta flag">
+      <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+      <span class="switch__text" id="betaText" data-on="true">ON</span>
+    </label>
+  </div>
+
+  <div class="panel__body" id="body">
+    <!-- ===== OFF placeholder (shown when beta flag is OFF) ================= -->
+    <div class="offstate" id="offState" hidden>
+      <b>Live Session Soak is OFF.</b><br>
+      No pollers and no SSE handlers are registered while the flag is off.<br>
+      Turn it ON above (or in Settings &gt; BETA features) to load the selector.
+    </div>
+
+    <!-- ===== LIVE content (shown when flag ON) ============================ -->
+    <div id="liveContent">
+
+      <!-- (1) the LOUD glanceable verdict header ------------------------- -->
+      <div class="verdict">
+        <span class="verdict__caption">Last soak -- polarity verdict</span>
+        <span class="vbadge none" id="verdictBadge" role="status">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="verdictText">NO SOAK YET -- run one below</span>
+        </span>
+        <span class="verdict__meta" id="verdictMeta">Fire a 5-min live soak to populate the self-exclusion audit.</span>
+      </div>
+
+      <!-- (2) ranked self-excluded session selector ---------------------- -->
+      <div style="margin-top:22px;">
+        <div class="section__label">
+          Live session selector
+          <span class="hint">ranked, self-excluded, firewall-filtered</span>
+        </div>
+        <p class="section__desc">
+          Non-SM sessions only (project_slug NOT IN streamManager AND session_id != self).
+          Busiest + most-recent is pre-elevated. project_slug is derived FROM DATA -- domain-agnostic.
+        </p>
+
+        <div class="selector" id="selector" role="listbox" aria-label="Rankable non-SM live sessions">
+          <!-- top-ranked (pre-elevated): a1b2c3d4-0001 webapp-frontend -->
+          <button class="srow top" role="option" aria-pressed="true" data-sid="a1b2c3d4-0001" data-slug="webapp-frontend">
+            <span>
+              <span class="srow__slug">webapp-frontend<span class="toptag">top pick</span></span><br>
+              <span class="srow__id">a1b2c3d4-0001 -- /home/op/vs/webapp</span>
+            </span>
+            <span class="srow__busy">42<small>busy</small></span>
+            <span class="srow__recency" style="grid-column:2;">18s ago</span>
+          </button>
+
+          <button class="srow" role="option" aria-pressed="false" data-sid="a1b2c3d4-0002" data-slug="infra-pipeline">
+            <span>
+              <span class="srow__slug">infra-pipeline</span><br>
+              <span class="srow__id">a1b2c3d4-0002 -- /home/op/vs/infra</span>
+            </span>
+            <span class="srow__busy">17<small>busy</small></span>
+            <span class="srow__recency" style="grid-column:2;">2m 40s ago</span>
+          </button>
+
+          <button class="srow" role="option" aria-pressed="false" data-sid="a1b2c3d4-0003" data-slug="docs-site">
+            <span>
+              <span class="srow__slug">docs-site</span><br>
+              <span class="srow__id">a1b2c3d4-0003 -- /home/op/vs/docs</span>
+            </span>
+            <span class="srow__busy">3<small>busy</small></span>
+            <span class="srow__recency" style="grid-column:2;">19m ago</span>
+          </button>
+        </div>
+
+        <!-- VISIBLE rejection footer (G1/G2): self-exclusion as a feature -->
+        <div class="excluded" aria-label="Sessions excluded by the polarity gate and firewall">
+          excluded:
+          <span class="tag">1 self-session</span>
+          <span class="tag">1 streamManager slug</span>
+          <span class="tag">1 firewalled cwd</span>
+        </div>
+      </div>
+
+      <!-- (3) the single deliberate primary action ----------------------- -->
+      <div style="margin-top:22px;" class="actions">
+        <button class="soak-btn" id="soakRun">Soak (5 min)</button>
+        <span class="actions__note">Spawns a Tier-4 JsonlTail attach on the selected session. The only filled control in the panel.</span>
+      </div>
+
+      <!-- (4) live progress readout (hidden until run fires) -------------- -->
+      <div style="margin-top:22px;" id="progressWrap" hidden>
+        <div class="section__label">Soak progress <span class="hint" id="soakIdLabel">soak-20260611T0915</span></div>
+        <div class="progress" style="margin-top:8px;">
+          <div class="progress__head">
+            <span class="statebadge inprogress" id="stateBadge" role="status">
+              <span class="dot" aria-hidden="true"></span><span id="stateText">IN PROGRESS</span>
+            </span>
+            <span class="progress__elapsed" id="elapsed">47 / 300 s</span>
+          </div>
+          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="300" aria-valuenow="47" id="bar" aria-label="Soak elapsed">
+            <div class="bar__fill" id="barFill" style="width:15.6%;"></div>
+          </div>
+          <div class="counts">
+            <div class="countcard"><div class="k">Messages tailed</div><div class="v" id="msgCount">31</div></div>
+            <div class="countcard"><div class="k">Decisions</div><div class="v" id="decCount">29</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- (5) the per-band report (hidden until COMPLETE) ---------------- -->
+      <div style="margin-top:22px;" id="reportWrap" hidden>
+        <div class="report">
+          <table class="bands">
+            <caption>Per-band latency -- p50 / p95 (mirrors soak_driver._render_per_band)</caption>
+            <thead>
+              <tr><th scope="col">Path</th><th scope="col">n</th><th scope="col">p50 (s)</th><th scope="col">p95 (s)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ALLOW (routine)</td><td>50</td><td>5.9</td><td>9.9</td></tr>
+              <tr><td>L2/L3 escalation</td><td>4</td><td>7.2</td><td>12.4</td></tr>
+              <tr><td>L4 alignment</td><td>2</td><td>13.1</td><td>18.6</td></tr>
+            </tbody>
+          </table>
+
+          <pre class="reportmd" id="reportMd">### Tier-4 live soak -- soak-20260611T0915
+session   : a1b2c3d4-0001 (webapp-frontend)
+duration  : 300s   messages: 58   decisions: 56
+polarity  : PASS    rejections: 2    self-leaks: 0
+recorded_latency_ms: 9912.0  (overall p95 band)</pre>
+
+          <!-- FAIL-only escalation surface (M2 -- routes via Frame A HITL) -->
+          <div class="escalate" id="escalate" hidden>
+            <b>POLARITY FAIL -- routed to Frame A.</b>
+            3 self / streamManager session(s) leaked past the WHERE-clause. Per ADR-18
+            escalation-only-foreground, the failure foregrounds in Frame A as a HITL pending
+            item (soak_ready_for_ship_gate -&gt; hitl_pending) -- this badge is glanceable context,
+            never the silent end of the line. Ship-gate is NOT cleared.
+          </div>
+        </div>
+      </div>
+
+      <!-- the required amber build-gate footnote ------------------------- -->
+      <div class="gatenote" role="note">
+        <span class="glabel">Gated</span>
+        <span>
+          <b>Build gated on an ADR-18 amendment.</b> This UI is approvable now, but the build is
+          BLOCKED until an amendment mints the two new FROZEN bus envelopes
+          (soak_ready_for_ship_gate + soak_polarity_audit) per the 2026-05-12 governance_decision
+          precedent, with same-PR cassette_record.py + soak_driver.py coverage.
+        </span>
+      </div>
+
+      <!-- mockup-only stepper so the operator can walk the states --------- -->
+      <div style="margin-top:18px; border-top:1px dashed var(--border); padding-top:14px;">
+        <div class="section__label" style="margin-bottom:8px;">
+          Mockup walkthrough <span class="hint">demo only -- not part of the feature</span>
+        </div>
+        <div class="themes" role="group" aria-label="Walk the soak states">
+          <button data-demo="reset">Reset</button>
+          <button data-demo="run">Run -> live</button>
+          <button data-demo="pass">Complete (PASS)</button>
+          <button data-demo="fail">Complete (FAIL)</button>
+        </div>
+      </div>
+
+    </div><!-- /liveContent -->
+  </div><!-- /panel__body -->
+</aside>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- theme switcher (mockup chrome) -----------------------------------
+  var root = document.documentElement;
+  document.querySelectorAll('[data-theme-btn]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+    });
+  });
+
+  // ---- drawer open / close (focus-trap + restore, Escape, mirrors SettingsDrawer)
+  var panel = document.getElementById('panel');
+  var scrim = document.getElementById('scrim');
+  var openBtn = document.getElementById('soakOpen');
+  var closeBtn = document.getElementById('soakClose');
+  var live = document.getElementById('live');
+  var lastFocus = null;
+
+  function focusables() {
+    return Array.prototype.slice.call(
+      panel.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])')
+    ).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  }
+  function openPanel() {
+    lastFocus = document.activeElement;
+    panel.hidden = false; scrim.hidden = false;
+    panel.focus();
+  }
+  function closePanel() {
+    panel.hidden = true; scrim.hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  openBtn.addEventListener('click', openPanel);
+  closeBtn.addEventListener('click', closePanel);
+  scrim.addEventListener('click', closePanel);
+
+  document.addEventListener('keydown', function (e) {
+    if (panel.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); closePanel(); return; }
+    if (e.key === 'Tab') {
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  // ---- beta flag toggle: ON shows live content, OFF shows placeholder ----
+  var betaToggle = document.getElementById('betaToggle');
+  var betaText = document.getElementById('betaText');
+  var offState = document.getElementById('offState');
+  var liveContent = document.getElementById('liveContent');
+  function applyBeta() {
+    var on = betaToggle.checked;
+    betaText.textContent = on ? 'ON' : 'OFF';
+    betaText.setAttribute('data-on', String(on));
+    offState.hidden = on;
+    liveContent.hidden = !on;
+  }
+  betaToggle.addEventListener('change', applyBeta);
+  applyBeta();
+
+  // ---- session selector (single-select listbox of real <button> rows) ----
+  var selector = document.getElementById('selector');
+  var selectedSid = 'a1b2c3d4-0001';
+  selector.querySelectorAll('.srow').forEach(function (row) {
+    row.addEventListener('click', function () {
+      selector.querySelectorAll('.srow').forEach(function (r) { r.setAttribute('aria-pressed', 'false'); });
+      row.setAttribute('aria-pressed', 'true');
+      selectedSid = row.getAttribute('data-sid');
+      live.textContent = 'Selected session ' + selectedSid + ' (' + row.getAttribute('data-slug') + ').';
+    });
+  });
+
+  // ---- soak run state machine (mock SSE cadence) -------------------------
+  var verdictBadge = document.getElementById('verdictBadge');
+  var verdictText = document.getElementById('verdictText');
+  var verdictMeta = document.getElementById('verdictMeta');
+  var progressWrap = document.getElementById('progressWrap');
+  var reportWrap = document.getElementById('reportWrap');
+  var escalate = document.getElementById('escalate');
+  var stateBadge = document.getElementById('stateBadge');
+  var stateText = document.getElementById('stateText');
+  var elapsed = document.getElementById('elapsed');
+  var bar = document.getElementById('bar');
+  var barFill = document.getElementById('barFill');
+  var msgCount = document.getElementById('msgCount');
+  var decCount = document.getElementById('decCount');
+  var soakBtn = document.getElementById('soakRun');
+  var reportMd = document.getElementById('reportMd');
+
+  var timer = null;
+
+  function setVerdict(kind, text, meta) {
+    verdictBadge.className = 'vbadge ' + kind;
+    verdictText.textContent = text;
+    verdictMeta.textContent = meta;
+  }
+  function setState(kind, text) {
+    stateBadge.className = 'statebadge ' + kind;
+    stateText.textContent = text;
+  }
+  function reset() {
+    if (timer) { clearInterval(timer); timer = null; }
+    progressWrap.hidden = true;
+    reportWrap.hidden = true;
+    escalate.hidden = true;
+    soakBtn.disabled = false;
+    setVerdict('none', 'NO SOAK YET -- run one below', 'Fire a 5-min live soak to populate the self-exclusion audit.');
+  }
+  function tickTo(targetState) {
+    // compress 300s into a short demo; updates msg/dec/elapsed at ~1s cadence
+    reportWrap.hidden = true;
+    escalate.hidden = true;
+    progressWrap.hidden = false;
+    soakBtn.disabled = true;
+    setState('inprogress', 'IN PROGRESS');
+    setVerdict('none', 'SOAK RUNNING -- awaiting verdict', 'Tailing ' + selectedSid + ' -- audit pending.');
+    document.getElementById('soakIdLabel').textContent = 'soak-20260611T0915';
+
+    var e = 0, msgs = 0, decs = 0;
+    if (timer) clearInterval(timer);
+    timer = setInterval(function () {
+      e += 25; if (e > 300) e = 300;
+      msgs = Math.min(58, Math.round(e / 300 * 58));
+      decs = Math.max(0, msgs - 2);
+      var pct = (e / 300 * 100).toFixed(1);
+      elapsed.textContent = e + ' / 300 s';
+      bar.setAttribute('aria-valuenow', String(e));
+      barFill.style.width = pct + '%';
+      msgCount.textContent = String(msgs);
+      decCount.textContent = String(decs);
+      live.textContent = 'Soak in progress -- ' + e + ' of 300 seconds, ' + msgs + ' messages, ' + decs + ' decisions.';
+      if (e >= 300) {
+        clearInterval(timer); timer = null;
+        finish(targetState);
+      }
+    }, 350);
+  }
+  function finish(kind) {
+    soakBtn.disabled = false;
+    if (kind === 'fail') {
+      setState('failed', 'COMPLETE -- FAIL');
+      setVerdict('fail', 'POLARITY FAIL -- 3 self-leaks',
+        'rejections=0  self_leaks=3  decisions=56 -- routed to Frame A HITL.');
+      reportMd.textContent =
+        '### Tier-4 live soak -- soak-20260611T0915\n' +
+        'session   : a1b2c3d4-0001 (webapp-frontend)\n' +
+        'duration  : 300s   messages: 58   decisions: 56\n' +
+        'polarity  : FAIL    rejections: 0    self-leaks: 3\n' +
+        'ACTION    : soak_ready_for_ship_gate -> hitl_pending (Frame A)';
+      reportWrap.hidden = false;
+      escalate.hidden = false;
+      live.textContent = 'Soak complete. POLARITY FAIL, 3 self-leaks. Escalated to Frame A.';
+    } else {
+      setState('complete', 'COMPLETE -- PASS');
+      setVerdict('pass', 'POLARITY PASS -- 0 self-leaks',
+        'rejections=2  self_leaks=0  decisions=56  p95=9912 ms.');
+      reportMd.textContent =
+        '### Tier-4 live soak -- soak-20260611T0915\n' +
+        'session   : a1b2c3d4-0001 (webapp-frontend)\n' +
+        'duration  : 300s   messages: 58   decisions: 56\n' +
+        'polarity  : PASS    rejections: 2    self-leaks: 0\n' +
+        'recorded_latency_ms: 9912.0  (overall p95 band)';
+      reportWrap.hidden = false;
+      escalate.hidden = true;
+      live.textContent = 'Soak complete. POLARITY PASS, 0 self-leaks. Ship-gate signal green.';
+    }
+  }
+
+  soakBtn.addEventListener('click', function () { tickTo('pass'); });
+
+  // mockup walkthrough buttons
+  document.querySelectorAll('[data-demo]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var d = b.getAttribute('data-demo');
+      if (d === 'reset') reset();
+      else if (d === 'run') tickTo('pass');
+      else if (d === 'pass') { progressWrap.hidden = false; if (timer) { clearInterval(timer); timer = null; } finish('pass'); }
+      else if (d === 'fail') { progressWrap.hidden = false; if (timer) { clearInterval(timer); timer = null; } finish('fail'); }
+    });
+  });
+
+  // open the drawer on load so the operator lands directly on Frame D
+  openPanel();
+})();
+</script>
+</body>
+</html>

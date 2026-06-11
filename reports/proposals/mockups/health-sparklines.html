@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  health-sparklines.html -- KingMode .html MOCKUP (proposal gate, no code yet)
+  ----------------------------------------------------------------------------
+  BETA feature #34: Per-session health sparklines (confidence + throughput) in
+  the SessionRail. Self-contained preview so the operator can confirm the UI
+  approach BEFORE any Svelte/server code is written (directive #2).
+
+  This mockup previews the REAL ui-next tokens: the obsidian theme values +
+  --calm-* + --badge-* are lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css and calm.css so the operator sees the
+  true resting palette, not an approximation.
+
+  ADR-18 MUSTs honored in this mockup:
+    - M1 3-frame presence preserved (the sparkline lives INSIDE an existing
+      SessionLane header as a third line; it is NOT a new frame).
+    - M2 escalation-only foreground: the drawer never auto-pops; it is
+      observational and opens ONLY on hover / keyboard intent.
+    - M4 paired label+color: the existing ACTION REQUIRED / OBSERVING badge is
+      the literal semantic channel; the sparkline color is SUPPLEMENTARY and
+      always accompanied by SVG title/desc text + the lane's badge.
+    - a11y: sparkline is role=img with aria-label; drawer is focus-trapped,
+      Esc-dismiss; meaning is carried by text, never color alone.
+
+  Domain-agnostic (M16): session identities are rendered from data
+  (project_slug / short id) -- generic placeholder slugs only, NO
+  monitored-project / JOB / agent-role vocabulary.
+
+  Polarity (G2): SM's own session is structurally excluded -- only non-self
+  governed sessions get a lane + sparkline.
+
+  BETA gating: the whole feature is default-OFF; the inline toggle below
+  simulates the Settings > BETA features switch so the operator can SEE the
+  gated on/off behavior. OFF renders nothing (no SVG, no drawer, no poller).
+
+  ASCII-only: no smart quotes, no em-dashes (-- is literal), no box-drawing.
+  ============================================================================
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Per-session health sparklines</title>
+<style>
+  /* --------------------------------------------------------------------------
+     TOKENS -- lifted verbatim from theme.css [data-theme=obsidian] + calm.css
+     + the fixed M4 badge tokens. Reusing the REAL variable NAMES so this
+     mockup previews the production palette.
+  -------------------------------------------------------------------------- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed M4 badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+
+    /* spacing rhythm + radius (calm.css) */
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+    --t-calm: 180ms ease; --t-flash: 300ms ease;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    /* calm.css semantic aliases */
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-lane-bg:        var(--bg-card);
+    --calm-lane-edge:      var(--border);
+
+    /* ----------------------------------------------------------------------
+       SPARKLINE INK -- the feature's tri-state supplementary color (M4).
+       Each is keyed to the SAME semantics the lane already carries and each
+       is validated >= 7:1 against the lane ground (--calm-lane-bg #0c1118).
+       slate  = OBSERVING / healthy     (#94a3b8 -> ~7.4:1 on #0c1118)
+       amber  = confidence drifting     (#f59e0b -> ~9.7:1, frozen ACTION tone)
+       red    = confidence-floor breach (#f87171 -> ~7.1:1, BLOCKED tone)
+       The color is NEVER the sole channel -- the lane badge + the SVG
+       title/desc text carry the literal read.
+    ---------------------------------------------------------------------- */
+    --spark-healthy:  #94a3b8;
+    --spark-drift:    #f59e0b;
+    --spark-breach:   #f87171;
+    --spark-floor:    rgba(148, 163, 184, 0.16); /* throughput wash baseline */
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  /* --------------------------------------------------------------------------
+     HEADER STRIP -- feature title + BETA pill + inline on/off toggle (M4 +
+     BETA gating annotation). Bespoke, asymmetric: title left, controls right.
+  -------------------------------------------------------------------------- */
+  .head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    padding-bottom: var(--space-4);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+  }
+  .head__lede { min-width: 0; }
+  .head__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-2);
+  }
+  .head__title {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 620;
+    letter-spacing: -0.01em;
+    color: var(--calm-ink-loud);
+    line-height: var(--lh-tight);
+  }
+  .head__sub {
+    margin: var(--space-2) 0 0;
+    font-size: var(--fs-meta);
+    color: var(--calm-ink-quiet);
+    max-width: 62ch;
+    line-height: var(--lh-body);
+  }
+
+  .head__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+  }
+
+  /* BETA pill -- paired text + slate color; states the gated nature. */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--badge-obs-fg);
+    background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    white-space: nowrap;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline toggle -- simulates Settings > BETA features switch */
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-chrome);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .toggle__btn {
+    position: relative;
+    width: 46px; height: 24px;
+    border-radius: 999px;
+    border: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-alt);
+    cursor: pointer;
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .toggle__btn::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--calm-ink-chrome);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .toggle__btn[aria-pressed="true"] {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .toggle__btn[aria-pressed="true"]::after {
+    transform: translateX(22px);
+    background: var(--accent);
+  }
+  .toggle__btn:focus-visible {
+    outline: 2px solid var(--badge-ar-border);
+    outline-offset: 2px;
+  }
+  .toggle__state {
+    font-weight: 700;
+    min-width: 3.2ch;
+    color: var(--calm-ink-loud);
+  }
+
+  /* --------------------------------------------------------------------------
+     STAGE -- the SessionRail (Frame A / left command-column) shown in context.
+     We render the rail alone (the other two frames are stubbed as edges) so
+     the operator sees exactly WHERE the sparkline lives.
+  -------------------------------------------------------------------------- */
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) 1fr;
+    gap: var(--space-5);
+    align-items: start;
+  }
+  @media (max-width: 720px) {
+    .stage { grid-template-columns: 1fr; }
+    .stage__rest { display: none; }
+  }
+
+  .rail {
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .rail__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 var(--space-2) var(--space-2);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    margin-bottom: var(--space-2);
+  }
+  .rail__title {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .rail__count {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* the "rest of the dashboard" placeholder -- just enough to prove 3-frame
+     presence is preserved; intentionally inert + dim. */
+  .stage__rest {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: var(--space-5);
+    min-height: 360px;
+  }
+  .frame-stub {
+    border: var(--hairline) dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    color: var(--calm-ink-quiet);
+    padding: var(--space-5);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.55;
+  }
+  .frame-stub b {
+    display: block;
+    color: var(--calm-ink-chrome);
+    margin-bottom: var(--space-2);
+  }
+
+  /* --------------------------------------------------------------------------
+     LANE -- mirrors SessionLane.svelte: hairline shelf, asymmetric left
+     gutter, name + meta line, paired badge. The NEW third line is .lane__spark.
+  -------------------------------------------------------------------------- */
+  .lane {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    background: var(--calm-lane-bg);
+    border: var(--hairline) solid var(--calm-lane-edge);
+    border-radius: var(--radius-soft);
+    border-left-width: 2px;
+    border-left-color: transparent;
+    transition: border-color var(--t-calm), background var(--t-calm);
+  }
+  .lane:hover { background: var(--calm-surface-hover); }
+  .lane--selected {
+    border-left-color: var(--accent);
+    background: var(--calm-surface-hover);
+  }
+  .lane--actions { border-left-color: var(--badge-ar-border); }
+  .lane--ended { opacity: 0.62; }
+
+  .lane__main {
+    grid-column: 1; grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: 7px var(--space-4) var(--space-2);
+  }
+  .lane__pip {
+    flex: 0 0 auto;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--calm-ink-quiet); opacity: 0.6;
+  }
+  .lane__pip--live { background: var(--accent); opacity: 0.85; }
+
+  .lane__id { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+  .lane__name {
+    font-size: var(--fs-meta);
+    font-weight: 460;
+    letter-spacing: 0.01em;
+    color: var(--calm-ink-loud);
+    line-height: var(--lh-tight);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lane--selected .lane__name { font-weight: 620; }
+  .lane--actions .lane__name { font-weight: 600; }
+
+  .lane__meta {
+    display: block;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-chrome);
+    font-variant-numeric: tabular-nums;
+  }
+  .lane--selected .lane__meta { color: var(--calm-ink); }
+  .lane__sep { opacity: 0.5; }
+
+  /* paired badge -- reuse Badge.svelte palette exactly */
+  .ar-badge {
+    flex: 0 0 auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-system);
+    font-size: var(--fs-badge);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    white-space: nowrap;
+    border-radius: 2px;
+    line-height: 1;
+  }
+  .ar-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .ar-action-required {
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+    font-weight: 800;
+  }
+  .ar-observing {
+    color: var(--badge-obs-fg);
+    background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+  }
+  .ar-blocked {
+    color: var(--badge-blocked-fg);
+    background: var(--badge-blocked-bg);
+    border: 2px solid var(--badge-blocked-border);
+    font-weight: 700;
+  }
+
+  .lane__expand {
+    grid-column: 2; grid-row: 1;
+    align-self: start;
+    margin-top: 6px;
+    appearance: none;
+    background: transparent; border: none;
+    color: var(--calm-ink-chrome);
+    width: 1.6rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 1rem; line-height: 1;
+  }
+  .lane__expand:hover { color: var(--calm-ink-loud); background: var(--calm-surface-hover); }
+  .lane__expand:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  /* ==========================================================================
+     THE FEATURE -- .lane__spark: the new third line under the meta line.
+     Borrows ThroughputLine's whisper-quiet vocabulary: hairline stroke, low
+     opacity, faint wash, NO border, NO box. It is the QUIETEST thing in the
+     lane and must never out-shout the badge.
+  ========================================================================== */
+  .lane__spark {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0 var(--space-4) 7px calc(var(--space-4) + 8px + var(--space-3));
+    /* left pad aligns the strip under the name, past the pip column */
+  }
+
+  /* the focusable sparkline element: role=img, tabindex 0, in tab order AFTER
+     the expand button (set via DOM order + tabindex). Stops propagation so
+     focusing it never re-scopes the lane. */
+  .spark {
+    position: relative;
+    display: block;
+    width: 132px; height: 18px;
+    flex: 0 0 auto;
+    cursor: pointer;
+    border-radius: var(--radius-sharp);
+  }
+  .spark:focus-visible,
+  .spark:hover {
+    outline: 1px solid var(--badge-ar-border);
+    outline-offset: 2px;
+  }
+  .spark svg { display: block; width: 132px; height: 18px; }
+
+  /* confidence = the load-bearing solid 1.25px trace (top 70% of the band) */
+  .spark__conf {
+    fill: none;
+    stroke-width: 1.25;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    opacity: 0.85;
+  }
+  /* throughput = a dotted/low-opacity baseline-anchored floor wash beneath */
+  .spark__thru-area { stroke: none; fill: var(--spark-floor); }
+  .spark__thru-line {
+    fill: none;
+    stroke: var(--calm-ink-quiet);
+    stroke-width: 1;
+    stroke-dasharray: 1 2;
+    opacity: 0.5;
+  }
+
+  /* tri-state confidence ink -- keyed to lane semantics (color is M4 SECOND
+     channel; the badge + title/desc text carry the literal read) */
+  .spark--healthy .spark__conf { stroke: var(--spark-healthy); }
+  .spark--drift   .spark__conf { stroke: var(--spark-drift); }
+  .spark--breach  .spark__conf { stroke: var(--spark-breach); }
+
+  /* the tiny inline read sitting beside the strip -- this is the TEXT channel
+     so the sparkline state is never color-only at a glance. */
+  .spark__read {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    color: var(--calm-ink-quiet);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .spark__read b { font-weight: 700; }
+  /* tint the inline state word to the lane's supplementary color (M4 second
+     channel; the word itself is the always-present text read) */
+  .lane__spark .spark--healthy + .spark__read .spark__read-state { color: var(--spark-healthy); }
+  .lane__spark .spark--drift   + .spark__read .spark__read-state { color: var(--spark-drift); }
+  .lane__spark .spark--breach  + .spark__read .spark__read-state { color: var(--spark-breach); }
+
+  /* visually-hidden a11y text */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  /* --------------------------------------------------------------------------
+     DRAWER -- SessionSparklineDrawer. Opens on hover / keyboard-focus intent;
+     focus-trapped popover, Esc/blur dismiss, anchored to the lane. It does NOT
+     auto-pop (M2 -- this is observational, never foreground-on-its-own).
+  -------------------------------------------------------------------------- */
+  .scrim {
+    position: fixed; inset: 0;
+    background: rgba(8, 10, 12, 0.55);
+    display: none;
+    z-index: 40;
+  }
+  .scrim.open { display: block; }
+
+  .drawer {
+    position: fixed;
+    z-index: 50;
+    width: min(440px, calc(100vw - 32px));
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--border-hi);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-soft);
+    box-shadow: 0 18px 48px rgba(0,0,0,0.55);
+    display: none;
+    flex-direction: column;
+    max-height: min(70vh, 520px);
+  }
+  .drawer.open { display: flex; }
+
+  .drawer__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+  }
+  .drawer__title {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 620;
+    color: var(--calm-ink-loud);
+    line-height: var(--lh-tight);
+  }
+  .drawer__sub {
+    margin: var(--space-2) 0 0;
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    font-variant-numeric: tabular-nums;
+  }
+  .drawer__close {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    color: var(--calm-ink-chrome);
+    width: 28px; height: 28px;
+    cursor: pointer; flex: 0 0 auto;
+    font-size: 16px; line-height: 1;
+  }
+  .drawer__close:hover { color: var(--calm-ink-loud); background: var(--calm-surface-hover); }
+  .drawer__close:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  .drawer__body {
+    padding: var(--space-5);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  .drawer__section-label {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-3);
+  }
+
+  /* large trace pair for the last ~100 decisions */
+  .drawer__chart {
+    width: 100%;
+    height: 96px;
+    background: var(--calm-surface-alt);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+  }
+  .drawer__chart svg { display: block; width: 100%; height: 96px; }
+  .dc-conf { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.9; }
+  .dc-conf-floor { stroke: var(--spark-breach); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+  .dc-thru-area { fill: var(--spark-floor); stroke: none; }
+  .dc-axis { stroke: var(--calm-hairline); stroke-width: 1; }
+  .dc-axis-text { fill: var(--calm-ink-quiet); font-family: var(--ff-mono); font-size: 9px; }
+
+  .drawer__legend {
+    display: flex;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    margin-top: var(--space-3);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+  }
+  .legend-key { display: inline-flex; align-items: center; gap: var(--space-2); }
+  .legend-swatch { width: 18px; height: 0; border-top-width: 2px; border-top-style: solid; }
+  .legend-swatch--conf { border-top-color: var(--accent); }
+  .legend-swatch--floor { border-top-color: var(--spark-breach); border-top-style: dashed; }
+  .legend-swatch--thru { border-top-color: var(--calm-ink-quiet); border-top-style: dotted; height: 8px; border-top-width: 0; background: var(--spark-floor); }
+
+  /* trigger_reason breakdown -- a paired TEXT + count list, NOT a color-only
+     stacked bar (M4). Domain-agnostic enum only. */
+  .reasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  .reason {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    background: var(--calm-surface-alt);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+  }
+  .reason__swatch { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+  .reason__name {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink);
+    letter-spacing: 0.02em;
+  }
+  .reason__count {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    color: var(--calm-ink-loud);
+    font-variant-numeric: tabular-nums;
+  }
+  .reason--null         .reason__swatch { background: var(--spark-healthy); }
+  .reason--new_pattern  .reason__swatch { background: #7c3aed; }
+  .reason--low_confidence .reason__swatch { background: var(--spark-drift); }
+  .reason--governance_variance_alert .reason__swatch { background: var(--spark-breach); }
+
+  .drawer__obs {
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    line-height: var(--lh-body);
+    margin: 0;
+    padding-top: var(--space-3);
+    border-top: var(--hairline) solid var(--calm-hairline);
+  }
+
+  /* a11y data-table fallback for the traces (hidden, exposed to AT only) */
+
+  /* --------------------------------------------------------------------------
+     RAIL FOOTER -- the slate BETA annotation chip, shown when the flag is ON.
+  -------------------------------------------------------------------------- */
+  .rail__foot {
+    margin-top: var(--space-2);
+    padding-top: var(--space-3);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    display: flex;
+    justify-content: center;
+  }
+  .rail__beta {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--badge-obs-fg);
+    background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+    border-radius: 999px;
+    padding: 2px 9px;
+  }
+
+  /* OFF-state: when the flag is off, the feature renders nothing. We collapse
+     every spark line + footer. The lanes remain (they pre-exist the feature). */
+  body[data-flag="off"] .lane__spark { display: none; }
+  body[data-flag="off"] .rail__foot { display: none; }
+
+  /* legend / note block under the stage */
+  .note {
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    padding: var(--space-5);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    line-height: var(--lh-body);
+  }
+  .note h2 {
+    margin: 0 0 var(--space-3);
+    font-size: var(--fs-meta);
+    color: var(--calm-ink-loud);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .note ul { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: var(--space-2); }
+  .note code {
+    font-family: var(--ff-mono);
+    color: var(--calm-ink);
+    background: var(--calm-surface-alt);
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body data-flag="on">
+
+  <!-- ===================== HEADER STRIP ===================== -->
+  <header class="head">
+    <div class="head__lede">
+      <p class="head__eyebrow">BETA mockup -- proposal gate -- no code yet</p>
+      <h1 class="head__title">Per-session health sparklines</h1>
+      <p class="head__sub">
+        A ~132x18px whisper-quiet trace under each non-self SessionLane:
+        rolling 10-decision mean confidence + per-interval throughput. Spot a
+        lane sagging at a 200ms glance -- before it becomes a pile of ACTION
+        REQUIRED escalations -- without scoping the decision feed to each lane
+        in turn.
+      </p>
+    </div>
+
+    <div class="head__controls">
+      <span class="beta-pill" title="Default OFF -- toggled in Settings > BETA features">
+        <span class="beta-pill__dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings
+      </span>
+      <span class="toggle">
+        <span>health-sparklines</span>
+        <button
+          id="flag-toggle"
+          class="toggle__btn"
+          type="button"
+          aria-pressed="true"
+          aria-label="Toggle the health-sparklines beta feature (Settings > BETA features)"
+        ></button>
+        <span class="toggle__state" id="flag-state">ON</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- ===================== STAGE ===================== -->
+  <div class="stage">
+
+    <!-- Frame A / SessionRail (left command-column) -->
+    <section class="rail" aria-label="Session rail -- live non-self governed sessions">
+      <div class="rail__head">
+        <span class="rail__title">Session rail</span>
+        <span class="rail__count">4 live -- self excluded</span>
+      </div>
+
+      <!-- LANE 1 -- healthy: flat ~0.9 confidence, steady throughput. OBSERVING. -->
+      <div class="lane lane--live" data-session="s-ad41">
+        <div class="lane__main">
+          <span class="lane__pip lane__pip--live" aria-hidden="true"></span>
+          <span class="lane__id">
+            <span class="lane__name">orchard-runtime</span>
+            <span class="lane__meta">live <span class="lane__sep" aria-hidden="true">&middot;</span> pid 24180 <span class="lane__sep" aria-hidden="true">&middot;</span> ASYNC</span>
+          </span>
+          <span class="ar-badge ar-observing" role="status"
+                title="Observing -- no action required" aria-label="Observing -- no action required">
+            <span class="ar-dot" aria-hidden="true"></span><span>OBSERVING</span>
+          </span>
+        </div>
+        <button class="lane__expand" type="button" aria-label="Show detail for orchard-runtime" tabindex="0">&rsaquo;</button>
+
+        <!-- NEW third line: the sparkline strip -->
+        <div class="lane__spark">
+          <span
+            class="spark spark--healthy"
+            role="img"
+            tabindex="0"
+            data-session="s-ad41"
+            data-name="orchard-runtime"
+            data-conf="0.91"
+            data-state="healthy"
+            aria-label="orchard-runtime confidence 0.91, steady; throughput steady. Healthy. Activate to open the last 100 decisions."
+          >
+            <svg viewBox="0 0 132 18" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <path class="spark__thru-area" d="M1 17 L15.5 16 L30 17 L44.5 15 L59 16 L73.5 17 L88 16 L102.5 17 L117 16.5 L131 17 L131 17 L1 17 Z"/>
+              <path class="spark__thru-line" d="M1 17 L15.5 16 L30 17 L44.5 15 L59 16 L73.5 17 L88 16 L102.5 17 L117 16.5 L131 17"/>
+              <path class="spark__conf" d="M1 4 L15.5 4.6 L30 4.2 L44.5 4.8 L59 4.3 L73.5 4.6 L88 4.1 L102.5 4.5 L117 4.3 L131 4.4"/>
+            </svg>
+          </span>
+          <span class="spark__read"><b class="spark__read-state">healthy</b> conf 0.91 -- steady</span>
+        </div>
+      </div>
+
+      <!-- LANE 2 -- DEGRADING: confidence descending, throughput thinning.
+           Quiet (no amber badge yet) -- THIS is the lane the feature catches. -->
+      <div class="lane lane--live" data-session="s-7b09">
+        <div class="lane__main">
+          <span class="lane__pip lane__pip--live" aria-hidden="true"></span>
+          <span class="lane__id">
+            <span class="lane__name">harbor-pipeline</span>
+            <span class="lane__meta">live <span class="lane__sep" aria-hidden="true">&middot;</span> pid 19952 <span class="lane__sep" aria-hidden="true">&middot;</span> SYNC</span>
+          </span>
+          <span class="ar-badge ar-observing" role="status"
+                title="Observing -- no action required (not yet escalated)" aria-label="Observing -- no action required, not yet escalated">
+            <span class="ar-dot" aria-hidden="true"></span><span>OBSERVING</span>
+          </span>
+        </div>
+        <button class="lane__expand" type="button" aria-label="Show detail for harbor-pipeline" tabindex="0">&rsaquo;</button>
+
+        <div class="lane__spark">
+          <span
+            class="spark spark--drift"
+            role="img"
+            tabindex="0"
+            data-session="s-7b09"
+            data-name="harbor-pipeline"
+            data-conf="0.68"
+            data-state="drift"
+            aria-label="harbor-pipeline confidence 0.68, falling; throughput thinning. Confidence drifting -- review advised. Activate to open the last 100 decisions."
+          >
+            <svg viewBox="0 0 132 18" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <path class="spark__thru-area" d="M1 14 L15.5 14.5 L30 13.5 L44.5 15 L59 15.5 L73.5 16 L88 16 L102.5 16.5 L117 17 L131 17 L131 17 L1 17 Z"/>
+              <path class="spark__thru-line" d="M1 14 L15.5 14.5 L30 13.5 L44.5 15 L59 15.5 L73.5 16 L88 16 L102.5 16.5 L117 17 L131 17"/>
+              <path class="spark__conf" d="M1 3.2 L15.5 3.8 L30 3.6 L44.5 5 L59 6.4 L73.5 7 L88 8.2 L102.5 9.4 L117 10 L131 10.6"/>
+            </svg>
+          </span>
+          <span class="spark__read"><b class="spark__read-state">drifting</b> conf 0.68 -- falling</span>
+        </div>
+      </div>
+
+      <!-- LANE 3 -- BREACH + actions open: confidence-floor breached, ACTION REQUIRED. -->
+      <div class="lane lane--live lane--actions lane--selected" data-session="s-c3f8">
+        <div class="lane__main">
+          <span class="lane__pip lane__pip--live" aria-hidden="true"></span>
+          <span class="lane__id">
+            <span class="lane__name">meridian-batch</span>
+            <span class="lane__meta">live <span class="lane__sep" aria-hidden="true">&middot;</span> pid 31044 <span class="lane__sep" aria-hidden="true">&middot;</span> SYNC</span>
+          </span>
+          <span class="ar-badge ar-action-required" role="status"
+                title="3 actions required -- confidence-floor breached" aria-label="Action required, 3 -- confidence-floor breached">
+            <span class="ar-dot" aria-hidden="true"></span><span>ACTION REQUIRED 3</span>
+          </span>
+        </div>
+        <button class="lane__expand" type="button" aria-label="Show detail for meridian-batch" tabindex="0">&rsaquo;</button>
+
+        <div class="lane__spark">
+          <span
+            class="spark spark--breach"
+            role="img"
+            tabindex="0"
+            data-session="s-c3f8"
+            data-name="meridian-batch"
+            data-conf="0.52"
+            data-state="breach"
+            aria-label="meridian-batch confidence 0.52, below floor; throughput erratic. Confidence-floor breached. Activate to open the last 100 decisions."
+          >
+            <svg viewBox="0 0 132 18" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <path class="spark__thru-area" d="M1 13 L15.5 14 L30 12.5 L44.5 15 L59 13 L73.5 16 L88 14.5 L102.5 16 L117 15 L131 16.5 L131 17 L1 17 Z"/>
+              <path class="spark__thru-line" d="M1 13 L15.5 14 L30 12.5 L44.5 15 L59 13 L73.5 16 L88 14.5 L102.5 16 L117 15 L131 16.5"/>
+              <path class="spark__conf" d="M1 5 L15.5 6 L30 7.5 L44.5 8 L59 9.5 L73.5 10.5 L88 11.5 L102.5 12.5 L117 12 L131 12.6"/>
+            </svg>
+          </span>
+          <span class="spark__read"><b class="spark__read-state">breach</b> conf 0.52 -- below floor</span>
+        </div>
+      </div>
+
+      <!-- LANE 4 -- ended: history, recedes. Sparkline frozen on last buffer. -->
+      <div class="lane lane--ended" data-session="s-1182">
+        <div class="lane__main">
+          <span class="lane__pip" aria-hidden="true"></span>
+          <span class="lane__id">
+            <span class="lane__name">delta-verifier</span>
+            <span class="lane__meta">ended <span class="lane__sep" aria-hidden="true">&middot;</span> pid 8820</span>
+          </span>
+          <span class="ar-badge ar-observing" role="status"
+                title="Observing -- session ended" aria-label="Observing -- session ended">
+            <span class="ar-dot" aria-hidden="true"></span><span>OBSERVING</span>
+          </span>
+        </div>
+        <button class="lane__expand" type="button" aria-label="Show detail for delta-verifier" tabindex="0">&rsaquo;</button>
+
+        <div class="lane__spark">
+          <span
+            class="spark spark--healthy"
+            role="img"
+            tabindex="0"
+            data-session="s-1182"
+            data-name="delta-verifier"
+            data-conf="0.88"
+            data-state="healthy"
+            aria-label="delta-verifier confidence 0.88 at session end, steady. Healthy. Activate to open the last 100 decisions."
+          >
+            <svg viewBox="0 0 132 18" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <path class="spark__thru-area" d="M1 16 L20 15 L40 16 L60 15 L80 17 L100 16 L131 17 L131 17 L1 17 Z"/>
+              <path class="spark__thru-line" d="M1 16 L20 15 L40 16 L60 15 L80 17 L100 16 L131 17"/>
+              <path class="spark__conf" d="M1 4.8 L20 4.4 L40 4.9 L60 4.6 L80 5 L100 4.7 L131 4.8"/>
+            </svg>
+          </span>
+          <span class="spark__read"><b class="spark__read-state">healthy</b> conf 0.88 -- ended</span>
+        </div>
+      </div>
+
+      <!-- SM-self lane is structurally ABSENT (G2 polarity) -- there is no lane
+           for the StreamManager session, so there is no sparkline for it. -->
+
+      <!-- rail footer BETA annotation (visible only when flag ON) -->
+      <div class="rail__foot">
+        <span class="rail__beta">
+          BETA -- health sparklines ON -- default OFF, toggled in Settings
+        </span>
+      </div>
+    </section>
+
+    <!-- the other two frames (proves M1 3-frame presence preserved) -->
+    <aside class="stage__rest" aria-hidden="true">
+      <div class="frame-stub"><b>Frame B -- decision feed</b>(unchanged -- the live sparkline buffers are derived 100% client-side from THIS already-open decision stream; no new poller, no new SSE handler)</div>
+      <div class="frame-stub"><b>Frame C -- HITL queue</b>(unchanged -- the drawer is observational, M2: it never auto-foregrounds)</div>
+    </aside>
+  </div>
+
+  <!-- ===================== EXPLAINER NOTE ===================== -->
+  <section class="note">
+    <h2>How to read this mockup</h2>
+    <ul>
+      <li>Toggle <code>health-sparklines</code> OFF (top right) -- every sparkline strip and the BETA footer chip vanish; the lanes remain (they pre-exist the feature) and ZERO new pollers/SSE handlers are registered.</li>
+      <li>Confidence = the solid load-bearing trace (top 70% of the 18px band). Throughput = the dotted, low-opacity floor wash beneath. The two traces are distinguished by SHAPE, not color alone.</li>
+      <li>Color is the SECOND channel only (M4): slate = healthy, amber = drifting, red = floor-breach -- always paired with the lane badge + the inline text read + the SVG aria-label.</li>
+      <li>Hover OR keyboard-focus a sparkline (Tab to it, then Enter/Space) to open the drawer with the last ~100 decisions; Esc closes and returns focus. The drawer never auto-pops (M2).</li>
+      <li>Lane 2 (<code>harbor-pipeline</code>) is the case the feature exists for: still OBSERVING, no amber badge -- but its confidence trace is visibly sagging, caught before the escalation cluster lands.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== DRAWER (SessionSparklineDrawer) ===================== -->
+  <div class="scrim" id="scrim"></div>
+  <div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
+    <div class="drawer__head">
+      <div>
+        <h2 class="drawer__title" id="drawer-title">Session detail</h2>
+        <p class="drawer__sub" id="drawer-sub">last 100 decisions</p>
+      </div>
+      <button class="drawer__close" id="drawer-close" type="button" aria-label="Close session detail (Esc)">&times;</button>
+    </div>
+    <div class="drawer__body">
+
+      <div>
+        <p class="drawer__section-label">Confidence + throughput -- last 100 decisions</p>
+        <div class="drawer__chart">
+          <svg viewBox="0 0 420 96" preserveAspectRatio="none" role="img" id="drawer-chart-svg"
+               aria-label="Line chart of confidence and throughput over the last 100 decisions. A data table follows for assistive technology.">
+            <!-- confidence floor reference line (the breach threshold) -->
+            <line class="dc-conf-floor" x1="0" y1="62" x2="420" y2="62"></line>
+            <!-- throughput floor wash -->
+            <path class="dc-thru-area" id="dc-thru" d=""></path>
+            <!-- confidence trace -->
+            <path class="dc-conf" id="dc-conf" d=""></path>
+            <!-- baseline axis -->
+            <line class="dc-axis" x1="0" y1="95" x2="420" y2="95"></line>
+            <text class="dc-axis-text" x="2" y="10">1.0</text>
+            <text class="dc-axis-text" x="2" y="66">floor</text>
+          </svg>
+        </div>
+        <div class="drawer__legend">
+          <span class="legend-key"><span class="legend-swatch legend-swatch--conf"></span> confidence</span>
+          <span class="legend-key"><span class="legend-swatch legend-swatch--floor"></span> floor 0.60</span>
+          <span class="legend-key"><span class="legend-swatch legend-swatch--thru"></span> throughput</span>
+        </div>
+        <!-- a11y data-table fallback for the traces -->
+        <table class="sr-only" id="drawer-table">
+          <caption>Confidence and throughput per decision interval, oldest first</caption>
+          <thead><tr><th>interval</th><th>confidence</th><th>throughput</th></tr></thead>
+          <tbody id="drawer-table-body"></tbody>
+        </table>
+      </div>
+
+      <div>
+        <p class="drawer__section-label">trigger_reason breakdown</p>
+        <ul class="reasons" id="drawer-reasons">
+          <!-- populated by JS; paired text + count, never color-only -->
+        </ul>
+      </div>
+
+      <p class="drawer__obs">
+        Observational view -- this drawer does not foreground itself and does
+        not attach to the session. Confirm the dip is real, then attach to the
+        session from Frame B if warranted.
+      </p>
+    </div>
+  </div>
+
+<script>
+  /* ==========================================================================
+     CLIENT-SIDE BEHAVIOR (mockup only -- previews the real interaction model)
+     1. BETA flag toggle: simulates GET /api/beta/flags['health-sparklines'].
+        ON  -> { "health-sparklines": true }  -> strips render.
+        OFF -> { "health-sparklines": false } -> nothing renders, no drawer.
+     2. Drawer: opens on hover OR keyboard activation of a .spark; focus-trapped;
+        Esc / scrim-click / blur closes and returns focus to the opener.
+     The mock data here mirrors mockDataSpec exactly.
+  ========================================================================== */
+
+  // -- (1) BETA flag toggle --------------------------------------------------
+  var flagBtn = document.getElementById('flag-toggle');
+  var flagState = document.getElementById('flag-state');
+  var bodyEl = document.body;
+
+  function setFlag(on) {
+    flagBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    flagState.textContent = on ? 'ON' : 'OFF';
+    bodyEl.setAttribute('data-flag', on ? 'on' : 'off');
+    // when OFF, ensure any open drawer is closed (no-op feature when OFF)
+    if (!on) closeDrawer();
+  }
+  flagBtn.addEventListener('click', function () {
+    setFlag(flagBtn.getAttribute('aria-pressed') !== 'true');
+  });
+
+  // -- (2) Mock data per session (mockDataSpec sect 2 + 3) -------------------
+  // Drawer endpoint mock: GET /api/sessions/{session_id}/sparkline-data
+  // -> array of last ~100 rows {timestamp, confidence, action, trigger_reason}.
+  // We synthesize a realistic 100-point series per state from the seed series.
+  var SEEDS = {
+    's-ad41': { name: 'orchard-runtime', base: 0.91, slope: 0.00,  noise: 0.02, thru: 'steady',  state: 'healthy' },
+    's-7b09': { name: 'harbor-pipeline', base: 0.92, slope: -0.0024, noise: 0.02, thru: 'thinning', state: 'drift' },
+    's-c3f8': { name: 'meridian-batch',  base: 0.74, slope: -0.0022, noise: 0.03, thru: 'erratic',  state: 'breach' },
+    's-1182': { name: 'delta-verifier',  base: 0.88, slope: 0.00,  noise: 0.02, thru: 'steady',  state: 'healthy' }
+  };
+
+  var ACTIONS = ['ALLOW', 'SUGGEST', 'GUIDE', 'INTERVENE', 'ESCALATE'];
+  // domain-agnostic enum ONLY (never a project/JOB/role string)
+  var REASON_LABELS = {
+    'null': 'none (clean ALLOW)',
+    'new_pattern': 'new_pattern',
+    'low_confidence': 'low_confidence',
+    'governance_variance_alert': 'governance_variance_alert'
+  };
+
+  // deterministic pseudo-random so the mock is stable across reloads
+  function rng(seed) {
+    var s = seed % 2147483647; if (s <= 0) s += 2147483646;
+    return function () { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+  }
+
+  function buildRows(sid) {
+    var sp = SEEDS[sid];
+    var rand = rng(sid.charCodeAt(2) * 131 + sid.charCodeAt(3));
+    var rows = [];
+    var t0 = 1749600000.0;
+    for (var i = 0; i < 100; i++) {
+      var conf = sp.base + sp.slope * i + (rand() - 0.5) * sp.noise * 2;
+      conf = Math.max(0.30, Math.min(0.99, conf));
+      var reason = null, action = 'ALLOW';
+      if (conf < 0.60) { reason = 'governance_variance_alert'; action = 'ESCALATE'; }
+      else if (conf < 0.72) { reason = 'low_confidence'; action = 'INTERVENE'; }
+      else if (rand() < 0.06) { reason = 'new_pattern'; action = 'GUIDE'; }
+      else { action = rand() < 0.2 ? 'SUGGEST' : 'ALLOW'; }
+      var thru = sp.thru === 'thinning' ? Math.max(0, 5 - Math.floor(i / 22) - (rand() < 0.4 ? 1 : 0))
+               : sp.thru === 'erratic' ? Math.floor(rand() * 5)
+               : 2 + Math.floor(rand() * 3);
+      rows.push({ timestamp: +(t0 + i * 2.4).toFixed(1), confidence: +conf.toFixed(2), action: action, trigger_reason: reason, throughput: thru });
+    }
+    return rows;
+  }
+
+  // -- drawer plumbing -------------------------------------------------------
+  var scrim = document.getElementById('scrim');
+  var drawer = document.getElementById('drawer');
+  var drawerTitle = document.getElementById('drawer-title');
+  var drawerSub = document.getElementById('drawer-sub');
+  var drawerClose = document.getElementById('drawer-close');
+  var confPathEl = document.getElementById('dc-conf');
+  var thruPathEl = document.getElementById('dc-thru');
+  var reasonsEl = document.getElementById('drawer-reasons');
+  var tableBody = document.getElementById('drawer-table-body');
+  var lastOpener = null;
+  var hoverTimer = null;
+
+  function seriesToPath(vals, h, pad, invert, floorY) {
+    var n = vals.length; if (!n) return '';
+    var W = 420, innerW = W;
+    var stepX = n > 1 ? innerW / (n - 1) : 0;
+    var pts = vals.map(function (v, i) {
+      var x = i * stepX;
+      var y = invert ? (pad + (h - 2 * pad) * (1 - v)) : (floorY - (floorY) * v * 0.55);
+      return x.toFixed(1) + ' ' + y.toFixed(1);
+    });
+    return 'M ' + pts.join(' L ');
+  }
+
+  function openDrawerFor(sparkEl) {
+    var sid = sparkEl.getAttribute('data-session');
+    var name = sparkEl.getAttribute('data-name');
+    var state = sparkEl.getAttribute('data-state');
+    var rows = buildRows(sid);
+
+    drawerTitle.textContent = name;
+    drawerSub.textContent = 'last ' + rows.length + ' decisions -- confidence + throughput -- state: ' + state;
+
+    // confidence trace (invert: 1.0 at top, 0 at bottom; band 0..96 with 4px pad)
+    var conf = rows.map(function (r) { return r.confidence; });
+    confPathEl.setAttribute('d', seriesToPath(conf, 96, 4, true));
+
+    // throughput floor wash (anchored to the baseline y=95)
+    var maxT = Math.max(1, Math.max.apply(null, rows.map(function (r) { return r.throughput; })));
+    var n = rows.length, W = 420, stepX = n > 1 ? W / (n - 1) : 0;
+    var tpts = rows.map(function (r, i) {
+      var x = (i * stepX).toFixed(1);
+      var y = (95 - (r.throughput / maxT) * 26).toFixed(1);
+      return x + ' ' + y;
+    });
+    var tpath = 'M 0 95 L ' + tpts.join(' L ') + ' L ' + W + ' 95 Z';
+    thruPathEl.setAttribute('d', tpath);
+
+    // trigger_reason breakdown -- paired text + count (M4, not color-only)
+    var counts = { 'null': 0, 'new_pattern': 0, 'low_confidence': 0, 'governance_variance_alert': 0 };
+    rows.forEach(function (r) { var k = r.trigger_reason === null ? 'null' : r.trigger_reason; counts[k] = (counts[k] || 0) + 1; });
+    reasonsEl.innerHTML = '';
+    Object.keys(counts).forEach(function (k) {
+      var li = document.createElement('li');
+      li.className = 'reason reason--' + k;
+      li.innerHTML =
+        '<span class="reason__swatch" aria-hidden="true"></span>' +
+        '<span class="reason__name">' + REASON_LABELS[k] + '</span>' +
+        '<span class="reason__count">' + counts[k] + '</span>';
+      reasonsEl.appendChild(li);
+    });
+
+    // a11y data-table fallback (every 10th interval to keep it scannable)
+    tableBody.innerHTML = '';
+    rows.forEach(function (r, i) {
+      if (i % 10 !== 0 && i !== rows.length - 1) return;
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + i + '</td><td>' + r.confidence.toFixed(2) + '</td><td>' + r.throughput + '</td>';
+      tableBody.appendChild(tr);
+    });
+
+    // position the drawer near the opener (anchored to the lane); clamp to view
+    var rect = sparkEl.getBoundingClientRect();
+    drawer.style.display = 'flex';
+    var dh = drawer.offsetHeight, dw = drawer.offsetWidth;
+    var top = Math.min(window.innerHeight - dh - 12, Math.max(12, rect.top - 8));
+    var left = Math.min(window.innerWidth - dw - 12, rect.right + 12);
+    if (left + dw > window.innerWidth - 12) left = Math.max(12, rect.left - dw - 12);
+    drawer.style.top = top + 'px';
+    drawer.style.left = left + 'px';
+
+    scrim.classList.add('open');
+    drawer.classList.add('open');
+    lastOpener = sparkEl;
+    drawer.focus();
+  }
+
+  function closeDrawer() {
+    scrim.classList.remove('open');
+    drawer.classList.remove('open');
+    drawer.style.display = 'none';
+    if (lastOpener) { try { lastOpener.focus(); } catch (e) {} }
+    lastOpener = null;
+  }
+
+  // wire every sparkline: hover (observational) + keyboard intent
+  Array.prototype.forEach.call(document.querySelectorAll('.spark'), function (sp) {
+    // hover opens on a short dwell so a casual sweep does not pop the drawer
+    sp.addEventListener('mouseenter', function () {
+      if (bodyEl.getAttribute('data-flag') === 'off') return;
+      hoverTimer = setTimeout(function () { openDrawerFor(sp); }, 260);
+    });
+    sp.addEventListener('mouseleave', function () { clearTimeout(hoverTimer); });
+    // keyboard: Enter / Space opens; stop propagation so the lane is NOT re-scoped
+    sp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (bodyEl.getAttribute('data-flag') !== 'off') openDrawerFor(sp);
+      }
+    });
+    // clicking the strip also opens (mirrors hover intent for mouse users)
+    sp.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (bodyEl.getAttribute('data-flag') !== 'off') openDrawerFor(sp);
+    });
+  });
+
+  drawerClose.addEventListener('click', closeDrawer);
+  scrim.addEventListener('click', closeDrawer);
+
+  // Esc closes + focus-trap inside the drawer (focus-trapped popover)
+  document.addEventListener('keydown', function (e) {
+    if (!drawer.classList.contains('open')) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); return; }
+    if (e.key === 'Tab') {
+      var focusables = drawer.querySelectorAll('button, [tabindex]:not([tabindex="-1"])');
+      if (!focusables.length) return;
+      var first = focusables[0], last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+</script>
+</body>
+</html>

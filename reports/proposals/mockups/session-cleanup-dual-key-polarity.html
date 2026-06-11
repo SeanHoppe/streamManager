@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "session-cleanup-dual-key-polarity" (#27)
+  Stale Session Cleanup -- Dual-Key Polarity Sweep.
+
+  PURPOSE: a click-through preview FOR THE OPERATOR to confirm the UI approach
+  BEFORE any code is written (directive #2). Self-contained: inline <style> +
+  inline <script>, NO external assets / CDNs / fonts (system font stack only).
+
+  WHAT IT PREVIEWS: the Settings batch-sweep BANNER pinned to the TOP of the
+  "BETA features" section in SettingsDrawer. NOT a 4th frame, NOT an auto-
+  foregrounding overlay (ADR-18 M1/M2 -- the three frames are untouched and it
+  steals no focus). It is the polarity-hardened, liveness-aware, batch sibling
+  of the shipped #46 per-session preview modal: same soft-delete spine, distinct
+  affordance (batch from Settings vs per-session from the rail).
+
+  This mockup reuses the REAL ui-next design tokens (theme.css obsidian +
+  calm.css + focus.css) so the operator previews the production palette, the
+  paired label+color badges (M4 -- color is NEVER the sole signal), and the
+  amber focus-ring contract. All four interactions are wired client-side: the
+  BETA on/off toggle, the Sweep button (soft-archive eligible rows), the
+  per-row Restore, and the keyboard path.
+
+  ASCII-only (cp1252-safe): dash is "--". No smart quotes, no em-dashes, no
+  box-drawing characters.
+-->
+<html lang="en" data-theme="obsidian" data-motion="auto">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BETA #27 -- Stale Session Cleanup (Dual-Key Polarity Sweep) -- KingMode mockup</title>
+<style>
+  /* ==========================================================================
+     TOKEN LAYER -- lifted verbatim from dashboard/ui-next/src/styles/theme.css
+     (obsidian theme + fixed M4 badge tokens), calm.css (calm-* spine, spacing
+     rhythm, motion budget) and focus.css (focus-ring contract). Inlined here so
+     the mockup is a faithful, dependency-free preview of the REAL tokens.
+  ========================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed M4 badge tokens (theme-invariant -- the paired label+color palette) */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:      #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border:     #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg:    #ffedd5;  --badge-warn-border:    #ea580c;
+
+    /* spacing rhythm + radius (calm.css modular scale, root 4px) */
+    --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+    --t-calm: 180ms ease;
+
+    /* focus-ring contract (focus.css) */
+    --focus-ring-color: #d97706; --focus-ring-width: 2px;
+    --focus-ring-offset: 2px; --focus-ring-style: solid;
+  }
+
+  /* obsidian base tokens + calm-* semantic aliases */
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-row:    var(--bg-row);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-accent-glow:    var(--accent-glow);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(245,158,11,0.05), transparent 60%),
+      var(--calm-surface, #080a0c);
+    color: var(--calm-ink, #b8b098);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: var(--space-7, 36px) var(--space-6, 22px) var(--space-8, 58px);
+  }
+
+  /* ---- compact header strip: feature title + BETA pill + on/off toggle ----- */
+  .hdr {
+    display: flex; align-items: flex-start; gap: var(--space-5, 14px);
+    flex-wrap: wrap;
+    padding-bottom: var(--space-5, 14px);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    margin-bottom: var(--space-6, 22px);
+  }
+  .hdr__id {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--calm-accent); opacity: 0.85;
+  }
+  .hdr__titles { display: flex; flex-direction: column; gap: 4px; flex: 1 1 320px; min-width: 0; }
+  .hdr__title {
+    margin: 0; font-size: 24px; font-weight: 750; letter-spacing: -0.01em;
+    line-height: var(--lh-tight); color: var(--calm-ink-loud);
+  }
+  .hdr__sub {
+    margin: 0; font-family: var(--ff-mono); font-size: var(--fs-meta, 13px);
+    color: var(--calm-ink-quiet); letter-spacing: 0.02em; max-width: 62ch;
+    line-height: var(--lh-body);
+  }
+  .hdr__aside {
+    display: flex; flex-direction: column; gap: var(--space-3, 6px);
+    align-items: flex-end;
+  }
+
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: var(--hairline) solid var(--badge-ar-border);
+    padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+  }
+  .beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .beta-pill__note {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.02em;
+    color: var(--calm-ink-quiet); text-transform: none; font-weight: 400;
+  }
+
+  /* on/off toggle (real switch, keyboard-reachable) */
+  .toggle {
+    display: inline-flex; align-items: center; gap: 9px;
+    cursor: pointer; user-select: none;
+  }
+  .toggle__label {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .toggle__track {
+    position: relative; width: 42px; height: 22px; border-radius: 999px;
+    background: var(--calm-surface-alt); border: var(--hairline) solid var(--calm-hairline);
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .toggle__thumb {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--calm-ink-chrome);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .toggle[aria-checked="true"] .toggle__track {
+    background: var(--calm-accent-wash); border-color: var(--badge-ar-border);
+  }
+  .toggle[aria-checked="true"] .toggle__thumb {
+    transform: translateX(20px); background: var(--calm-accent);
+  }
+  .toggle:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+    border-radius: 4px;
+  }
+  .toggle__state {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; min-width: 3ch;
+    color: var(--calm-ink-loud);
+  }
+
+  /* ---- the simulated SettingsDrawer (FR-UI-9 right-anchored surface) ------- */
+  .drawer-frame {
+    display: grid; grid-template-columns: 1fr minmax(380px, 480px);
+    gap: var(--space-6, 22px); align-items: start;
+  }
+  @media (max-width: 860px) { .drawer-frame { grid-template-columns: 1fr; } }
+
+  .context {
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    padding: var(--space-6, 22px);
+  }
+  .context__h {
+    margin: 0 0 var(--space-4, 10px);
+    font-family: var(--ff-mono); font-size: var(--fs-chrome, 11px); font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .context p { margin: 0 0 var(--space-4, 10px); font-size: var(--fs-meta, 13px); line-height: var(--lh-body); color: var(--calm-ink); }
+  .context p:last-child { margin-bottom: 0; }
+  .context strong { color: var(--calm-ink-loud); font-weight: 700; }
+  .context code {
+    font-family: var(--ff-mono); font-size: 12px; color: var(--calm-accent);
+    background: var(--calm-surface-alt); padding: 1px 5px; border-radius: 3px;
+  }
+  .context__rail {
+    margin-top: var(--space-5, 14px);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    padding-top: var(--space-5, 14px);
+  }
+  .rail-lane {
+    display: flex; align-items: center; gap: var(--space-3, 6px);
+    padding: var(--space-3, 6px) var(--space-4, 10px);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    background: var(--calm-surface-row);
+    margin-bottom: var(--space-2, 4px);
+    font-family: var(--ff-mono); font-size: 12px;
+    transition: opacity var(--t-calm), filter var(--t-calm);
+  }
+  .rail-lane.is-ghost { opacity: 0.5; }
+  .rail-lane.is-swept { opacity: 0.22; filter: grayscale(0.7); }
+  .rail-lane__slug { color: var(--calm-ink-loud); flex: 1 1 auto; }
+  .rail-lane__dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+  .rail-lane__dot--live { background: var(--c-allow, #22c55e); }
+  .rail-lane__dot--dead { background: var(--calm-ink-quiet); opacity: 0.7; }
+  .rail-lane__tag {
+    font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .rail-foot {
+    margin-top: var(--space-4, 10px);
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.04em;
+    color: var(--calm-ink-chrome);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .rail-foot__num {
+    font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums;
+    color: var(--calm-ink-loud);
+  }
+  .rail-foot__num.is-truth { color: var(--c-allow, #22c55e); }
+
+  /* the drawer column (right-anchored Settings surface) */
+  .drawer {
+    border: var(--hairline) solid var(--calm-hairline-hi);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    box-shadow: -18px 0 48px -28px rgba(0,0,0,0.7);
+    overflow: hidden;
+  }
+  .drawer__head {
+    padding: var(--space-5, 14px) var(--space-6, 22px);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .drawer__title {
+    margin: 0; font-size: 14px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--calm-ink-loud);
+  }
+  .drawer__close {
+    appearance: none; width: 26px; height: 26px; line-height: 1; font-size: 14px;
+    background: transparent; color: var(--calm-ink-chrome);
+    border: var(--hairline) solid var(--calm-hairline); border-radius: var(--radius-sharp);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .drawer__body { padding: var(--space-5, 14px) var(--space-6, 22px) var(--space-7, 36px); }
+  .drawer__section-h {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome, 11px); font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-4, 10px);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .drawer__section-h::after {
+    content: ""; flex: 1 1 auto; height: 1px; background: var(--calm-hairline);
+  }
+
+  /* ======================================================================
+     THE FEATURE: the batch-sweep banner. A single low, wide typographic
+     strip pinned to the TOP of the BETA section. 2px accent hairline on the
+     left edge (calm hygiene, NOT a filled alarm bar). aria-live=polite.
+  ====================================================================== */
+  .scb {
+    position: relative;
+    border: var(--hairline) solid var(--calm-hairline);
+    border-left: 2px solid var(--calm-accent);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface);
+    padding: var(--space-4, 10px) var(--space-5, 14px);
+    margin-bottom: var(--space-5, 14px);
+    display: flex; flex-direction: column; gap: var(--space-3, 6px);
+  }
+  .scb.is-receipt { border-left-color: var(--badge-decided-fg); }
+  .scb.is-clean   { border-left-color: var(--calm-hairline); }
+
+  /* row 1: paired tally -- big tabular count beside its literal unit + self echo */
+  .scb__tally {
+    display: flex; align-items: baseline; flex-wrap: wrap;
+    gap: var(--space-3, 6px) var(--space-4, 10px);
+  }
+  .scb__num {
+    font-family: var(--ff-mono); font-variant-numeric: tabular-nums;
+    font-size: 24px; font-weight: 750; line-height: 1;
+    color: var(--calm-ink-loud);
+  }
+  .scb__unit {
+    font-family: var(--ff-mono); font-size: var(--fs-meta, 13px); font-weight: 600;
+    letter-spacing: 0.02em; color: var(--calm-ink);
+  }
+  .scb__self {
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.03em;
+    color: var(--calm-ink-quiet);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .scb__self-dash { color: var(--calm-ink-quiet); opacity: 0.7; }
+  .scb__self-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--calm-ink-quiet); opacity: 0.7;
+    border: 1px dashed var(--badge-obs-border);
+  }
+
+  /* row 2: per-reason breakdown -- three paired text+dot micro-segments */
+  .scb__reasons {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: var(--space-2, 4px) var(--space-4, 10px);
+  }
+  .scb__seg {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--ff-mono); font-size: var(--fs-badge, 12px); font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .scb__seg-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: currentColor; }
+  .scb__seg-n { font-variant-numeric: tabular-nums; }
+  /* paired label+color badge families reused from theme.css (M4) */
+  .seg--obs  { color: var(--badge-obs-fg);  background: var(--badge-obs-bg);  border: 1px solid var(--badge-obs-border); }
+  .seg--warn { color: var(--badge-warn-fg); background: var(--badge-warn-bg); border: 1px solid var(--badge-warn-border); }
+  .seg--ar   { color: var(--badge-ar-fg);   background: var(--badge-ar-bg);   border: 2px solid var(--badge-ar-border); }
+
+  .scb__sep { width: var(--hairline); align-self: stretch; background: var(--calm-hairline); margin: 2px 0; }
+
+  /* the actionbar row -- the single saturated control sits right-anchored */
+  .scb__bar { display: flex; align-items: center; gap: var(--space-4, 10px); flex-wrap: wrap; }
+  .scb__bar-spacer { flex: 1 1 auto; min-width: 8px; }
+  .scb__hint {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.03em;
+    color: var(--calm-ink-quiet); max-width: 46ch; line-height: var(--lh-body);
+  }
+  .scb__hint code { color: var(--calm-accent); }
+
+  /* SWEEP -- the ONLY saturated control. Accent, NOT destructive-red: soft-
+     delete is reversible, so the language is "sweep / archive", never "delete". */
+  .btn-sweep {
+    appearance: none; cursor: pointer; white-space: nowrap;
+    background: var(--calm-accent); border: var(--hairline) solid var(--calm-accent);
+    color: #1a1206; font-family: var(--ff-system);
+    font-size: var(--fs-meta, 13px); font-weight: 750; letter-spacing: 0.04em;
+    padding: var(--space-3, 6px) var(--space-5, 14px); border-radius: var(--radius-sharp);
+    transition: filter var(--t-calm);
+  }
+  .btn-sweep:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-sweep:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-ghost {
+    appearance: none; cursor: pointer;
+    background: transparent; border: var(--hairline) solid var(--calm-hairline-hi);
+    color: var(--calm-ink-loud); font-family: var(--ff-mono);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: var(--radius-sharp);
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .btn-ghost:hover {
+    color: var(--calm-accent); border-color: var(--calm-accent);
+    background: var(--calm-accent-wash);
+  }
+
+  /* the receipt state after a sweep -- calm green confirmation line */
+  .scb__receipt {
+    font-family: var(--ff-mono); font-size: var(--fs-meta, 13px); letter-spacing: 0.02em;
+    color: var(--badge-decided-fg);
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  }
+  .scb__receipt-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; align-self: center; }
+  .scb__receipt strong { color: var(--calm-ink-loud); font-weight: 750; font-variant-numeric: tabular-nums; }
+
+  .scb__restored-list { display: flex; flex-direction: column; gap: var(--space-2, 4px); }
+  .scb__restored-row {
+    display: flex; align-items: center; gap: var(--space-3, 6px);
+    padding: var(--space-2, 4px) var(--space-3, 6px);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); background: var(--calm-surface-row);
+    font-family: var(--ff-mono); font-size: 12px;
+  }
+  .scb__restored-slug { color: var(--calm-ink-loud); flex: 1 1 auto; }
+  .scb__restored-reason { color: var(--calm-ink-quiet); font-size: 10px; }
+
+  /* the expandable per-session breakdown (the "why each lane qualified") */
+  .scb__detail { display: flex; flex-direction: column; gap: var(--space-2, 4px); margin-top: 2px; }
+  .scb__detail-toggle {
+    appearance: none; background: transparent; border: none; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--calm-ink-chrome);
+    padding: 2px 0; display: inline-flex; align-items: center; gap: 6px; text-align: left;
+  }
+  .scb__detail-toggle:hover { color: var(--calm-accent); }
+  .scb__detail-toggle .caret { transition: transform var(--t-calm); display: inline-block; }
+  .scb__detail-toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
+
+  .scb__rows { display: flex; flex-direction: column; gap: var(--space-2, 4px); }
+  .scb-row {
+    display: flex; align-items: center; gap: var(--space-3, 6px);
+    padding: var(--space-3, 6px) var(--space-4, 10px);
+    background: var(--calm-surface-row);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+  }
+  .scb-row.is-protected { border-color: var(--badge-ar-border); }
+  .scb-row.is-self { border-style: dashed; opacity: 0.85; }
+  .scb-row.is-swept { opacity: 0.32; filter: grayscale(0.5); }
+  .scb-row__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .scb-row__slug { font-family: var(--ff-mono); font-size: var(--fs-meta, 13px); color: var(--calm-ink-loud); }
+  .scb-row__meta { font-family: var(--ff-mono); font-size: 10px; color: var(--calm-ink-quiet); letter-spacing: 0.02em; }
+  .scb-row__block { font-family: var(--ff-mono); font-size: 10px; color: var(--badge-ar-fg); letter-spacing: 0.02em; margin-top: 2px; }
+  .scb-row__spacer { flex: 1 1 auto; }
+
+  /* the per-row badge (paired text + dot, reusing the M4 token families) */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    font-family: var(--ff-mono); font-size: var(--fs-badge, 12px); font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .badge__dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: currentColor; }
+  .badge--obs  { color: var(--badge-obs-fg);  background: var(--badge-obs-bg);  border: 1px solid var(--badge-obs-border); }
+  .badge--warn { color: var(--badge-warn-fg); background: var(--badge-warn-bg); border: 1px solid var(--badge-warn-border); }
+  .badge--ar   { color: var(--badge-ar-fg);   background: var(--badge-ar-bg);   border: 2px solid var(--badge-ar-border); }
+  .badge--decided { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .badge--self { color: var(--badge-obs-fg); background: transparent; border: 1px dashed var(--badge-obs-border); }
+  .badge--self .badge__dot { background: var(--calm-ink-quiet); opacity: 0.7; }
+
+  .scb-row__restore {
+    appearance: none; cursor: pointer; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline-hi); color: var(--calm-ink-loud);
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: var(--radius-sharp);
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .scb-row__restore:hover {
+    color: var(--calm-accent); border-color: var(--calm-accent); background: var(--calm-accent-wash);
+  }
+
+  /* a sibling-cross-reference note: this is the #46 modal's batch sibling */
+  .sibling-note {
+    font-family: var(--ff-mono); font-size: 10px; line-height: var(--lh-body);
+    letter-spacing: 0.02em; color: var(--calm-ink-quiet);
+    border: var(--hairline) dashed var(--calm-hairline); border-radius: var(--radius-sharp);
+    padding: var(--space-3, 6px) var(--space-4, 10px); margin-top: var(--space-5, 14px);
+  }
+  .sibling-note strong { color: var(--calm-ink-chrome); }
+
+  /* OFF state placeholder: when toggled OFF, banner renders NOTHING */
+  .scb-off {
+    border: var(--hairline) dashed var(--calm-hairline); border-radius: var(--radius-soft);
+    padding: var(--space-5, 14px); margin-bottom: var(--space-5, 14px);
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.03em;
+    color: var(--calm-ink-quiet); text-align: center; line-height: var(--lh-body);
+  }
+
+  /* the amber "build gated" footnote */
+  .gate-note {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin-top: var(--space-6, 22px);
+    border: var(--hairline) solid var(--badge-ar-border);
+    border-left: 3px solid var(--badge-ar-border);
+    border-radius: var(--radius-soft);
+    background: rgba(217, 119, 6, 0.06);
+    padding: var(--space-4, 10px) var(--space-5, 14px);
+  }
+  .gate-note__badge {
+    flex: 0 0 auto;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border); border-radius: 999px;
+    padding: 2px 9px; white-space: nowrap;
+  }
+  .gate-note__text {
+    font-size: var(--fs-meta, 13px); line-height: var(--lh-body); color: var(--calm-ink);
+  }
+  .gate-note__text strong { color: var(--calm-ink-loud); }
+  .gate-note__text code {
+    font-family: var(--ff-mono); font-size: 12px; color: var(--calm-accent);
+    background: var(--calm-surface-alt); padding: 1px 5px; border-radius: 3px;
+  }
+
+  /* the legend: the full paired badge/label table so it is demonstrable headless */
+  .legend {
+    margin-top: var(--space-6, 22px);
+    border: var(--hairline) solid var(--calm-hairline); border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+    padding: var(--space-5, 14px) var(--space-6, 22px);
+  }
+  .legend__h {
+    margin: 0 0 var(--space-4, 10px);
+    font-family: var(--ff-mono); font-size: var(--fs-chrome, 11px); font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .legend__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4, 10px); }
+  .legend__item { display: flex; flex-direction: column; gap: 5px; }
+  .legend__desc { font-family: var(--ff-mono); font-size: 10px; line-height: var(--lh-body); color: var(--calm-ink-quiet); }
+
+  .footer-meta {
+    margin-top: var(--space-7, 36px); padding-top: var(--space-5, 14px);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.03em;
+    color: var(--calm-ink-quiet); line-height: var(--lh-body);
+  }
+  .footer-meta code { color: var(--calm-ink-chrome); }
+
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* focus-ring contract (focus.css) -- 2px solid amber, 2px offset, every control */
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  [tabindex]:focus-visible, [role="switch"]:focus-visible, [role="button"]:focus-visible,
+  summary:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  /* reduced-motion (NFR-UI-7): honor OS preference unless force-allowed */
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion="allow"]) * { transition: none !important; animation: none !important; }
+  }
+  html[data-motion="reduce"] * { transition: none !important; animation: none !important; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============ COMPACT HEADER STRIP ============ -->
+  <header class="hdr">
+    <div class="hdr__titles">
+      <span class="hdr__id">BETA #27 // group: session // additive read-API</span>
+      <h1 class="hdr__title">Stale Session Cleanup -- Dual-Key Polarity Sweep</h1>
+      <p class="hdr__sub">
+        One reversible click sweeps provably-dead NON-SM sessions off the rail --
+        with the SM-self polarity guard made visible -- so the ACTIVE tally tells
+        the truth and every glance stays calm.
+      </p>
+    </div>
+    <div class="hdr__aside">
+      <span class="beta-pill">
+        <span class="beta-pill__dot" aria-hidden="true"></span>
+        BETA
+        <span class="beta-pill__note">default OFF, toggled in Settings &gt; BETA features</span>
+      </span>
+      <div
+        class="toggle"
+        id="betaToggle"
+        role="switch"
+        tabindex="0"
+        aria-checked="true"
+        aria-label="Enable BETA feature session-cleanup-dual-key-polarity"
+      >
+        <span class="toggle__label">Feature</span>
+        <span class="toggle__track" aria-hidden="true"><span class="toggle__thumb"></span></span>
+        <span class="toggle__state" id="toggleState">ON</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ DRAWER FRAME (left context + right Settings drawer) ============ -->
+  <div class="drawer-frame">
+
+    <!-- LEFT: the rail context this banner cleans up, so the operator sees WHY -->
+    <section class="context" aria-label="Why this matters -- the rail it cleans">
+      <h2 class="context__h">The rail it cleans -- end of a long soak</h2>
+      <p>
+        You glance at the SessionRail and count <strong>seven lanes</strong> -- but you
+        KNOW only two are still running. Five are ghosts from crashed runs and finished
+        probes. The footer <strong>ACTIVE</strong> tally reads a number you no longer trust.
+      </p>
+      <p>
+        Today's only cleanup is a hand-written <code>SQL DELETE</code> against
+        <code>gov.db</code> -- irreversible, and one fat-fingered <code>WHERE</code> could
+        nuke a live audit trail, or worse, SM's own row, poisoning the corpus.
+      </p>
+
+      <div class="context__rail" aria-label="SessionRail preview (mock)">
+        <div class="rail-lane">
+          <span class="rail-lane__dot rail-lane__dot--live" aria-hidden="true"></span>
+          <span class="rail-lane__slug">delta-stream</span>
+          <span class="rail-lane__tag">live</span>
+        </div>
+        <div class="rail-lane">
+          <span class="rail-lane__dot rail-lane__dot--live" aria-hidden="true"></span>
+          <span class="rail-lane__slug">epsilon-watch</span>
+          <span class="rail-lane__tag">live</span>
+        </div>
+        <div class="rail-lane is-ghost" data-lane="sess-a91f">
+          <span class="rail-lane__dot rail-lane__dot--dead" aria-hidden="true"></span>
+          <span class="rail-lane__slug">alpha-svc</span>
+          <span class="rail-lane__tag">ghost -- process gone</span>
+        </div>
+        <div class="rail-lane is-ghost" data-lane="sess-7c20">
+          <span class="rail-lane__dot rail-lane__dot--dead" aria-hidden="true"></span>
+          <span class="rail-lane__slug">beta-pipe</span>
+          <span class="rail-lane__tag">ghost -- idle</span>
+        </div>
+        <div class="rail-lane is-ghost" data-lane="sess-de03">
+          <span class="rail-lane__dot rail-lane__dot--dead" aria-hidden="true"></span>
+          <span class="rail-lane__slug">gamma-batch</span>
+          <span class="rail-lane__tag">protected -- open HITL</span>
+        </div>
+        <div class="rail-foot">
+          ACTIVE
+          <span class="rail-foot__num" id="railActiveNum">5</span>
+          <span id="railActiveNote">lanes -- 3 are dead</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: the simulated SettingsDrawer with the BETA section + the banner -->
+    <aside class="drawer" role="region" aria-label="Settings drawer -- BETA features">
+      <div class="drawer__head">
+        <h2 class="drawer__title">Settings</h2>
+        <button class="drawer__close" type="button" aria-label="Close settings (Esc)">&times;</button>
+      </div>
+      <div class="drawer__body">
+        <h3 class="drawer__section-h">BETA features</h3>
+
+        <!-- =====================================================================
+             THE BANNER. Pinned FIRST in the BETA section. Rendered ONLY while the
+             flag is ON and exited_count > 0. aria-live=polite so the tally +
+             receipt are announced. The whole thing is the feature being previewed.
+        ===================================================================== -->
+        <div id="bannerSlot" aria-live="polite">
+          <!-- banner is injected by JS so the OFF / ON / receipt / clean states
+               are all switchable client-side -->
+        </div>
+
+        <!-- the registry toggle row that lives below the banner in the real drawer -->
+        <div class="sibling-note">
+          <strong>How it relates to the shipped #46.</strong> #46 is per-session
+          surgery from the rail (a preview modal). #27 is this batch sweep from
+          Settings -- two distinct affordances, one shared soft-delete spine
+          (sessions.deleted_at), never duplicated. Both honor the same dual-key
+          polarity exclude. No background poller runs while OFF; the exited-count
+          is fetched on demand when this drawer opens (or once on enable), never
+          on the verdict hot path.
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ AMBER "BUILD GATED" FOOTNOTE ============ -->
+  <div class="gate-note" role="note">
+    <span class="gate-note__badge">Build gated</span>
+    <div class="gate-note__text">
+      <strong>UI is approvable; the build is governance-gated.</strong>
+      The deferral ledger (<code>BETA-DEFERRAL-LEDGER.md</code>, Group A, row 27)
+      classifies #27 as batch-2 CONSTRAIN: "Overlaps #46; merge polarity-fix
+      detail into #46 impl." This brief assumes #27 ships standalone -- the
+      maintainer must confirm (A) standalone (then update the ledger) OR (B)
+      fold the dual-key refinement into a #46-v2 follow-up. The technical
+      footprint is clean (<code>newEnvelope:false</code>,
+      <code>frozenTouch:false</code>, no <code>message_bus.py</code> edit, no
+      ADR-18 revision). Only the GOVERNANCE status is unresolved -- not a
+      code-gate. Confirm before build.
+    </div>
+  </div>
+
+  <!-- ============ PAIRED BADGE / LABEL LEGEND (M4 -- demonstrable headless) ====== -->
+  <section class="legend" aria-label="Paired label + color badge legend">
+    <h2 class="legend__h">Paired label + color scheme (M4 -- color is never the sole signal)</h2>
+    <div class="legend__grid">
+      <div class="legend__item">
+        <span class="badge badge--obs"><span class="badge__dot" aria-hidden="true"></span>Process gone</span>
+        <span class="legend__desc">slate "obs" badge -- the claude PID exited; reason=process_gone.</span>
+      </div>
+      <div class="legend__item">
+        <span class="badge badge--obs"><span class="badge__dot" aria-hidden="true"></span>Idle</span>
+        <span class="legend__desc">slate "obs" badge -- JSONL tail stalled past the window; reason=idle.</span>
+      </div>
+      <div class="legend__item">
+        <span class="badge badge--warn"><span class="badge__dot" aria-hidden="true"></span>Cwd gone</span>
+        <span class="legend__desc">amber "warn" badge -- the session cwd vanished; reason=cwd_inaccessible.</span>
+      </div>
+      <div class="legend__item">
+        <span class="badge badge--ar"><span class="badge__dot" aria-hidden="true"></span>Protected -- open HITL</span>
+        <span class="legend__desc">amber 2px-border -- has open HITL rows; the absolute HITL gate forbids sweeping.</span>
+      </div>
+      <div class="legend__item">
+        <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+        <span class="legend__desc">dim dashed echo -- SM's own session; project_slug excluded at SQL WHERE. Never counted, never eligible.</span>
+      </div>
+      <div class="legend__item">
+        <span class="badge badge--decided"><span class="badge__dot" aria-hidden="true"></span>Archived</span>
+        <span class="legend__desc">settled green -- soft-deleted this pass (deleted_at set); carries a one-click Restore.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer-meta">
+    <p>
+      KingMode mockup // preview-before-code (directive #2) //
+      tokens lifted from <code>dashboard/ui-next/src/styles/theme.css</code> +
+      <code>calm.css</code> + <code>focus.css</code> (obsidian theme).
+      Mock fixture is domain-agnostic (invented slugs only) and exercises all
+      three reason states + the protected gate + one SM-self row. The dual-key
+      polarity contract: <code>project_slug NOT IN {streamManager}</code> is the
+      durable read-side SQL WHERE key; <code>session_id != self</code> is the
+      cheap ephemeral Python backstop. ASCII-only.
+    </p>
+  </footer>
+
+</div>
+
+<script>
+  /* ======================================================================
+     MOCK FIXTURE -- mirrors mockDataSpec (the shipped StaleCleanup-data shape
+     extended with a typed `reason` + `state`). Domain-agnostic invented slugs
+     ONLY. Includes the streamManager SELF row + all three reason states + the
+     protected (open-HITL) gate so every badge + the polarity exclude render.
+  ====================================================================== */
+  var FIXTURE = {
+    now: 1749600000,
+    excluded_self: 1,
+    older_than_minutes: 30,
+    sessions: [
+      { id: "sess-a91f", project_slug: "alpha-svc",    pid: 48213, state: "exited", reason: "process_gone",     last_seen_minutes_ago: 92,  message_count: 210, decision_count: 71, open_hitl: 0, eligible: true },
+      { id: "sess-7c20", project_slug: "beta-pipe",    pid: 48990, state: "exited", reason: "idle",             last_seen_minutes_ago: 41,  message_count: 150, decision_count: 52, open_hitl: 0, eligible: true },
+      { id: "sess-de03", project_slug: "gamma-batch",  pid: null,  state: "exited", reason: "cwd_inaccessible", last_seen_minutes_ago: 210, message_count: 52,  decision_count: 15, open_hitl: 2, eligible: false, block_reason: "has 2 open HITL rows -- protected" },
+      { id: "sess-11bd", project_slug: "delta-stream", pid: 49120, state: "active", reason: null,               last_seen_minutes_ago: 1,   message_count: 88,  decision_count: 30, open_hitl: 0, eligible: false, block_reason: "still live -- not exited" },
+      { id: "sess-self0",project_slug: "streamManager",pid: 40001, state: "exited", reason: "idle",             last_seen_minutes_ago: 300, message_count: 999, decision_count: 999, open_hitl: 0, eligible: false, block_reason: "SM own session -- never governed (project_slug excluded at SQL WHERE)" }
+    ]
+  };
+
+  /* The SM-own project slug set echoed client-side (mirrors the server exclude). */
+  var SELF_SLUGS = { streammanager: true };
+  function isSelfRow(s) {
+    return !!(s && SELF_SLUGS[String(s.project_slug || "").trim().toLowerCase()]);
+  }
+
+  /* reason -> paired badge variant + literal label (color is never alone). */
+  function reasonBadge(reason) {
+    switch (reason) {
+      case "process_gone":     return { variant: "obs",  label: "Process gone" };
+      case "idle":             return { variant: "obs",  label: "Idle" };
+      case "cwd_inaccessible": return { variant: "warn", label: "Cwd gone" };
+      default:                 return { variant: "obs",  label: "Exited" };
+    }
+  }
+
+  /* pure liveness-classify -- mirrors the server-side dual-key + HITL gate.
+     Self rows are NEVER eligible + NEVER counted. */
+  function classify(s) {
+    if (isSelfRow(s)) {
+      return { state: "self", eligible: false,
+               block: "SM own session -- never governed (project_slug excluded at SQL WHERE)" };
+    }
+    if (s.state !== "exited") {
+      return { state: "active", eligible: false, block: s.block_reason || "still live -- not exited" };
+    }
+    if ((Number(s.open_hitl) || 0) > 0) {
+      return { state: "protected", eligible: false,
+               block: s.block_reason || ("has " + s.open_hitl + " open HITL rows -- protected") };
+    }
+    return { state: "exited", eligible: true, block: "" };
+  }
+
+  /* tally helper: count eligible exited NON-SM rows + per-reason breakdown +
+     the excluded-self count (the polarity guard made visible). */
+  function tally(sessions) {
+    var t = { exited: 0, self: 0, reasons: { process_gone: 0, idle: 0, cwd_inaccessible: 0 }, eligibleIds: [] };
+    sessions.forEach(function (s) {
+      var c = classify(s);
+      if (c.state === "self") { t.self += 1; return; }
+      if (c.eligible) {
+        t.exited += 1;
+        t.eligibleIds.push(s.id);
+        if (t.reasons[s.reason] != null) t.reasons[s.reason] += 1;
+      }
+    });
+    return t;
+  }
+
+  function esc(str) {
+    return String(str).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  /* relative-time, ASCII-only ("idle 1h 32m" / "92m ago") */
+  function relMin(m) {
+    m = Number(m);
+    if (!isFinite(m)) return "--";
+    if (m < 60) return m + "m ago";
+    var h = Math.floor(m / 60), r = m % 60;
+    return h + "h" + (r ? " " + r + "m" : "") + " ago";
+  }
+
+  /* ----- runtime state ----- */
+  var swept = {};         // id -> true once soft-archived this pass
+  var detailOpen = false; // per-session breakdown expanded?
+
+  function badgeMarkup(variant, label) {
+    return '<span class="badge badge--' + variant + '">'
+      + '<span class="badge__dot" aria-hidden="true"></span>' + esc(label) + '</span>';
+  }
+
+  /* ======================================================================
+     RENDER -- rebuilds the banner from current state. Three faces:
+       OFF      -> a dashed placeholder explaining the gate renders NOTHING.
+       CLEAN    -> a calm "still water" line (no exited sessions).
+       BANNER   -> the tally + per-reason + self echo + Sweep button.
+       RECEIPT  -> after a sweep, a green confirmation + per-row Restore.
+  ====================================================================== */
+  function render() {
+    var slot = document.getElementById("bannerSlot");
+    var on = document.getElementById("betaToggle").getAttribute("aria-checked") === "true";
+
+    if (!on) {
+      slot.innerHTML =
+        '<div class="scb-off">'
+        + 'BETA flag OFF -- the banner renders NOTHING.<br>'
+        + 'No poller, no SSE handler, no timer, no fetch of its own is registered.<br>'
+        + 'Flip the toggle above (Settings &gt; BETA features) to enable.'
+        + '</div>';
+      syncRail(0, false);
+      return;
+    }
+
+    var sessions = FIXTURE.sessions;
+    var t = tally(sessions);
+    var remainingIds = t.eligibleIds.filter(function (id) { return !swept[id]; });
+    var sweptIds = t.eligibleIds.filter(function (id) { return swept[id]; });
+    var remaining = remainingIds.length;
+
+    // CLEAN state: nothing exited (all eligible already swept, or none existed).
+    if (remaining === 0 && sweptIds.length === 0) {
+      slot.innerHTML =
+        '<div class="scb is-clean">'
+        + '<div class="scb__tally">'
+        + '<span class="scb__num">0</span>'
+        + '<span class="scb__unit">exited sessions</span>'
+        + '<span class="scb__self"><span class="scb__self-dash">--</span>'
+        + '<span class="scb__self-dot" aria-hidden="true"></span> ' + t.self + ' self excluded</span>'
+        + '</div>'
+        + '<div class="scb__hint">Still water. No banner work to do -- the rail is calm.</div>'
+        + '</div>';
+      syncRail(0, false);
+      return;
+    }
+
+    // RECEIPT state: at least one row swept -> green confirmation + Restore list.
+    var receiptHtml = "";
+    if (sweptIds.length > 0) {
+      var rmap = { process_gone: 0, idle: 0, cwd_inaccessible: 0 };
+      sweptIds.forEach(function (id) {
+        var s = byId(id); if (s && rmap[s.reason] != null) rmap[s.reason] += 1;
+      });
+      var rows = sweptIds.map(function (id) {
+        var s = byId(id); var rb = reasonBadge(s.reason);
+        return '<div class="scb__restored-row">'
+          + '<span class="scb__restored-slug">' + esc(s.project_slug) + '</span>'
+          + badgeMarkup(rb.variant, rb.label)
+          + '<button class="scb-row__restore" type="button" data-restore="' + esc(id) + '" '
+          + 'aria-label="Restore session ' + esc(s.project_slug) + '">Restore</button>'
+          + '</div>';
+      }).join("");
+      receiptHtml =
+        '<div class="scb__receipt">'
+        + '<span class="scb__receipt-dot" aria-hidden="true"></span>'
+        + '<strong>' + sweptIds.length + '</strong> archived -- soft-deleted (deleted_at set); '
+        + t.self + ' self excluded. Restore retained per row.'
+        + '</div>'
+        + '<div class="scb__restored-list">' + rows + '</div>';
+    }
+
+    // the live remaining tally + per-reason breakdown + the Sweep control.
+    var liveHtml = "";
+    if (remaining > 0) {
+      var rA = remainingIds.reduce(function (acc, id) {
+        var s = byId(id); if (s && acc[s.reason] != null) acc[s.reason] += 1; return acc;
+      }, { process_gone: 0, idle: 0, cwd_inaccessible: 0 });
+
+      liveHtml =
+        '<div class="scb__tally">'
+        + '<span class="scb__num">' + remaining + '</span>'
+        + '<span class="scb__unit">exited session' + (remaining === 1 ? '' : 's') + '</span>'
+        + '<span class="scb__self"><span class="scb__self-dash">--</span>'
+        + '<span class="scb__self-dot" aria-hidden="true"></span> ' + t.self + ' self excluded</span>'
+        + '</div>'
+        + '<div class="scb__reasons">'
+        + reasonSeg("obs",  "Process gone", rA.process_gone)
+        + '<span class="scb__sep" aria-hidden="true"></span>'
+        + reasonSeg("obs",  "Idle", rA.idle)
+        + '<span class="scb__sep" aria-hidden="true"></span>'
+        + reasonSeg("warn", "Cwd gone", rA.cwd_inaccessible)
+        + '</div>'
+        + '<div class="scb__bar">'
+        + '<button class="scb__detail-toggle" type="button" id="detailToggle" '
+        + 'aria-expanded="' + (detailOpen ? "true" : "false") + '" aria-controls="scbRows">'
+        + '<span class="caret" aria-hidden="true">&rsaquo;</span> '
+        + (detailOpen ? "Hide why each lane qualified" : "Why each lane qualified")
+        + '</button>'
+        + '<span class="scb__bar-spacer"></span>'
+        + '<span class="scb__hint">Soft-archive -- reversible <code>deleted_at</code>, never a hard DELETE.</span>'
+        + '<button class="btn-sweep" type="button" id="sweepBtn" '
+        + 'aria-label="Sweep ' + remaining + ' exited NON-SM session' + (remaining === 1 ? '' : 's') + '">'
+        + 'Sweep exited &middot; ' + remaining + '</button>'
+        + '</div>'
+        + (detailOpen ? detailRows(sessions) : "");
+    }
+
+    var cls = sweptIds.length > 0 && remaining === 0 ? "scb is-receipt"
+            : sweptIds.length > 0 ? "scb is-receipt" : "scb";
+
+    slot.innerHTML = '<div class="' + cls + '">' + liveHtml + receiptHtml + '</div>';
+
+    // wire the live controls
+    var sweep = document.getElementById("sweepBtn");
+    if (sweep) sweep.addEventListener("click", onSweep);
+    var dt = document.getElementById("detailToggle");
+    if (dt) dt.addEventListener("click", function () { detailOpen = !detailOpen; render(); focusEl("detailToggle"); });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-restore]"), function (b) {
+      b.addEventListener("click", function () { onRestore(b.getAttribute("data-restore")); });
+    });
+
+    syncRail(remaining, sweptIds.length > 0);
+  }
+
+  function reasonSeg(variant, label, n) {
+    return '<span class="scb__seg seg--' + variant + '">'
+      + '<span class="scb__seg-dot" aria-hidden="true"></span>'
+      + esc(label) + ' <span class="scb__seg-n">' + n + '</span></span>';
+  }
+
+  /* the expandable per-session breakdown -- every state visible incl. protected
+     + active + the SM-self echo, each with its paired badge + a literal reason. */
+  function detailRows(sessions) {
+    var rows = sessions.map(function (s) {
+      var c = classify(s);
+      var isSwept = !!swept[s.id];
+      var rowCls = "scb-row"
+        + (c.state === "protected" ? " is-protected" : "")
+        + (c.state === "self" ? " is-self" : "")
+        + (isSwept ? " is-swept" : "");
+
+      var badge;
+      if (isSwept) badge = badgeMarkup("decided", "Archived");
+      else if (c.state === "self") badge = badgeMarkup("self", "Self -- never governed");
+      else if (c.state === "protected") badge = badgeMarkup("ar", "Protected -- open HITL");
+      else if (c.state === "active") badge = badgeMarkup("obs", "Active -- live");
+      else { var rb = reasonBadge(s.reason); badge = badgeMarkup(rb.variant, rb.label); }
+
+      var meta = "pid " + (s.pid == null ? "--" : s.pid)
+        + " // last seen " + relMin(s.last_seen_minutes_ago)
+        + " // " + s.message_count + " msgs, " + s.decision_count + " decisions";
+
+      var restore = isSwept
+        ? '<button class="scb-row__restore" type="button" data-restore="' + esc(s.id) + '" '
+          + 'aria-label="Restore session ' + esc(s.project_slug) + '">Restore</button>'
+        : "";
+
+      return '<div class="' + rowCls + '">'
+        + '<div class="scb-row__main">'
+        + '<span class="scb-row__slug">' + esc(s.project_slug) + '</span>'
+        + '<span class="scb-row__meta">' + esc(meta) + '</span>'
+        + (c.block ? '<span class="scb-row__block">' + esc(c.block) + '</span>' : '')
+        + '</div>'
+        + '<span class="scb-row__spacer"></span>'
+        + badge
+        + restore
+        + '</div>';
+    }).join("");
+    return '<div class="scb__rows" id="scbRows">' + rows + '</div>';
+  }
+
+  function byId(id) {
+    for (var i = 0; i < FIXTURE.sessions.length; i++) {
+      if (FIXTURE.sessions[i].id === id) return FIXTURE.sessions[i];
+    }
+    return null;
+  }
+
+  /* SWEEP -- mock path: soft-archive eligible rows client-side (no POST). Mirrors
+     the POST /api/sessions/cleanup response shape: {count_archived, session_ids_-
+     purged, reasons, excluded_self, timestamp}. */
+  function onSweep() {
+    var t = tally(FIXTURE.sessions);
+    var ids = t.eligibleIds.filter(function (id) { return !swept[id]; });
+    ids.forEach(function (id) { swept[id] = true; });
+    // (mock cleanup response, for parity with the real endpoint)
+    // { count_archived: ids.length, session_ids_purged: ids,
+    //   reasons: {...}, excluded_self: t.self, timestamp: <iso> }
+    render();
+    focusFirstRestore();
+  }
+
+  function onRestore(id) {
+    delete swept[id];
+    render();
+    // focus returns to the live Sweep button (or detail toggle) after restore.
+    focusEl("sweepBtn") || focusEl("detailToggle");
+  }
+
+  function focusEl(id) { var el = document.getElementById(id); if (el) { el.focus(); return true; } return false; }
+  function focusFirstRestore() {
+    var b = document.querySelector("[data-restore]");
+    if (b) b.focus(); else focusEl("sweepBtn");
+  }
+
+  /* sync the left-rail preview so the operator SEES the ACTIVE tally drop to the
+     truth as ghosts are swept (the whole point of the feature). */
+  function syncRail(remainingDead, didSweep) {
+    var liveCount = 2; // delta-stream + epsilon-watch
+    var num = document.getElementById("railActiveNum");
+    var note = document.getElementById("railActiveNote");
+    var on = document.getElementById("betaToggle").getAttribute("aria-checked") === "true";
+
+    // mark swept ghost lanes faded in the rail preview
+    ["sess-a91f", "sess-7c20"].forEach(function (id) {
+      var lane = document.querySelector('[data-lane="' + id + '"]');
+      if (lane) lane.classList.toggle("is-swept", !!swept[id]);
+    });
+
+    if (!on) {
+      num.textContent = "5"; num.classList.remove("is-truth");
+      note.textContent = "lanes -- 3 are dead"; return;
+    }
+    if (didSweep && remainingDead === 0) {
+      // gamma-batch (protected) + delta-stream + epsilon-watch remain; the 2
+      // sweepable ghosts are gone -> tally tells the truth.
+      num.textContent = String(liveCount + 1);
+      num.classList.add("is-truth");
+      note.textContent = "lanes -- swept clean (1 protected kept)";
+    } else {
+      num.textContent = "5"; num.classList.remove("is-truth");
+      note.textContent = "lanes -- " + (remainingDead + 1) + " dead (1 protected)";
+    }
+  }
+
+  /* ----- the BETA on/off toggle (keyboard + click) ----- */
+  var toggle = document.getElementById("betaToggle");
+  function flip() {
+    var on = toggle.getAttribute("aria-checked") === "true";
+    toggle.setAttribute("aria-checked", on ? "false" : "true");
+    document.getElementById("toggleState").textContent = on ? "OFF" : "ON";
+    if (on) { swept = {}; detailOpen = false; } // OFF tears down state
+    render();
+  }
+  toggle.addEventListener("click", flip);
+  toggle.addEventListener("keydown", function (e) {
+    if (e.key === " " || e.key === "Enter") { e.preventDefault(); flip(); }
+  });
+
+  // initial paint (feature shown ON with realistic data, per requirements)
+  render();
+</script>
+</body>
+</html>

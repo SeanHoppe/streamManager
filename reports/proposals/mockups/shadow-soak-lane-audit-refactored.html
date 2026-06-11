@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "shadow-soak-lane-audit-refactored"
+  (#38: Shadow Soak Audit Lane -- live-vs-shadow governance agreement, polarity-safe).
+
+  Self-contained, hand-reviewable. NO external assets / CDNs / fonts -- system
+  stack only. ASCII-only: no smart quotes, no em-dashes (written as "--"), no
+  box-drawing characters.
+
+  PURPOSE (directive #2): let the operator confirm the UI approach BEFORE any code
+  is written. The post-change regression sentry: one glance tells the operator
+  whether a governance.py / pattern-graph change moved ANY verdict on real non-SM
+  traffic; one more click lists the exact decisions that disagreed (live verdict
+  vs a shadow re-evaluation of the same message_id), each copyable as a
+  regression-corpus seed.
+
+  STATUS: NEEDS-AMENDMENT (metadata). The vetted verdict is PASS-once-corrected:
+  shadow_evaluator.py imports governance.py / DecisionGraph fresh (additive, never
+  edits the FROZEN flow) and adds an OPTIONAL message_bus subscribe hook
+  (message_bus.py is EVOLVING per ADR-18, so this is additive). No FROZEN surface
+  is modified; the proposal compliance section (line 72-73) concludes "No FROZEN
+  surfaces modified. No ADR amendment required." Until the brief's footprint
+  metadata is corrected (frozenTouch true -> false), the BUILD is HELD -- a small
+  amber "build gated on ADR-18 amendment" footnote rides the drawer header so the
+  operator knows the UI is APPROVABLE but the build is gated.
+
+  Real obsidian / phosphor / paper tokens lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css. The drawer is a Frame-D SIBLING of
+  SoakPanel.svelte -- same scrim + right-anchored aside (role=dialog, aria-modal,
+  Escape-close, focus-trap, focus-restore) under a .sa-* namespace so no shared
+  .sp-* class is polluted. Paired M4 label+color badges everywhere (color is NEVER
+  the only signal). Mock data drawn from the brief's mockDataSpec.
+
+  G1 firewall + G2 polarity: every read is polarity-filtered (project_slug NOT IN
+  streamManager AND session_id != self) so SM's own sessions never appear; the
+  excluded counts (self / firewalled) are rendered VISIBLE in a footer so
+  self-exclusion is a feature, not a silent filter. Domain-agnostic: project_slug
+  is rendered FROM DATA, never hard-coded vocabulary.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- client-side defense-in-depth self-exclude tags (G2): SM's own identity -->
+<meta name="sm-own-session-id" content="sm-own-0000-bridge">
+<meta name="sm-own-project-slugs" content="streamManager">
+<title>Shadow Soak Audit Lane -- live-vs-shadow agreement (BETA mockup)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired-badge tokens (theme-invariant per M4, from theme.css :root) */
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+    --badge-decided-fg:#16a34a; --badge-decided-bg:#dcfce7; --badge-decided-border:#86efac;
+    --badge-blocked-fg:#dc2626; --badge-blocked-bg:#fee2e2; --badge-blocked-border:#dc2626;
+    --badge-warn-fg:#ea580c; --badge-warn-bg:#ffedd5; --badge-warn-border:#ea580c;
+    --badge-timeout-fg:#7c3aed; --badge-timeout-bg:#ede9fe; --badge-timeout-border:#c4b5fd;
+
+    /* action palette (M4 -- always paired with a literal text label below) */
+    --c-allow:#22c55e; --c-suggest:#84cc16; --c-guide:#eab308; --c-intervene:#f97316; --c-block:#ef4444;
+
+    --space-2:4px; --space-3:6px; --space-4:10px; --space-5:14px; --space-6:22px; --space-7:36px;
+    --radius-sharp:2px; --radius-soft:4px;
+    --focus-ring-color:#d97706;
+    --t-calm: 180ms ease;
+  }
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+    /* action palette unchanged (the default tuned set) */
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+    --c-allow:#39ff14; --c-suggest:#7fff00; --c-guide:#ccff00; --c-intervene:#ffaa00; --c-block:#ff3333;
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+    --c-allow:#16a34a; --c-suggest:#65a30d; --c-guide:#ca8a04; --c-intervene:#ea580c; --c-block:#dc2626;
+  }
+
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 82% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    min-height:100%;
+    padding: 36px 24px 80px;
+  }
+  .stage { width:100%; max-width: 980px; margin:0 auto; }
+
+  /* ---- page chrome (mockup-only legend + theme switcher) ------------------ */
+  .legend { display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+    font-size:26px; color:var(--text-bright);
+  }
+  .legend p { margin:5px 0 0; font-size:13px; color:var(--text-dim); max-width:64ch; line-height:1.55; }
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; flex:0 0 auto; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+  [data-theme="paper"] .themes button.on { color:#f8f4ee; }
+  .themes button:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:-2px; }
+
+  /* ---- the BETA feature header strip (title + pill + on/off toggle) -------- */
+  .featurebar {
+    display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    padding:13px 18px; margin-bottom:14px;
+  }
+  .featurebar__title { display:flex; align-items:center; gap:12px; min-width:0; flex-wrap:wrap; }
+  .featurebar__title h2 {
+    margin:0; font-family:var(--font-h); letter-spacing:.06em; text-transform:uppercase;
+    color:var(--text-bright); font-size:18px; font-weight:700;
+  }
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:6px;
+    font-family:var(--font-d); font-size:10px; letter-spacing:.04em; font-weight:700;
+    color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border);
+    border-radius:999px; padding:3px 10px; line-height:1.3;
+  }
+  .beta-pill__dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  /* the inline on/off toggle (client-side wired) */
+  .toggle { display:inline-flex; align-items:center; gap:10px; flex:0 0 auto; }
+  .toggle__state {
+    font-family:var(--font-d); font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    min-width:6ch; text-align:right;
+  }
+  .toggle__state.on  { color:var(--badge-decided-fg); }
+  .toggle__state.off { color:var(--badge-obs-fg); }
+  .switch {
+    appearance:none; cursor:pointer; position:relative; width:48px; height:26px; flex:0 0 auto;
+    border:1px solid var(--border); border-radius:999px; background:var(--bg-row);
+    transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .switch::after {
+    content:""; position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
+    background:var(--text-ui); transition: left var(--t-calm), background var(--t-calm);
+  }
+  .switch[aria-pressed="true"] { background:var(--badge-decided-bg); border-color:var(--badge-decided-border); }
+  .switch[aria-pressed="true"]::after { left:24px; background:var(--badge-decided-fg); }
+  .switch:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .featurebar__hint { width:100%; margin:4px 0 0; font-size:11px; color:var(--text-dim); line-height:1.5; }
+
+  /* ---- the dashboard footer the SHADOW affordance lives in (Frame D chrome) - */
+  .deck {
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    padding:0; overflow:hidden;
+  }
+  .deck__body { padding:22px 20px; color:var(--text-dim); font-size:13px; line-height:1.6; }
+  .deck__body strong { color:var(--text-bright); }
+  .deck__body code {
+    font-family:var(--font-d); color:var(--accent); background:var(--bg-row);
+    padding:1px 5px; border-radius:2px; font-size:12px;
+  }
+  .footerstrip {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    border-top:1px solid var(--border); background:var(--bg-row-alt);
+    padding:10px 16px;
+  }
+  .footerstrip__meta { font-family:var(--font-d); font-size:11px; color:var(--text-dim); letter-spacing:.03em; }
+  .footerstrip__chrome { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  /* a quiet hairline chrome button -- NOT a loud always-on Frame D column */
+  .chrome-btn {
+    appearance:none; background:transparent; cursor:pointer;
+    border:1px solid var(--border); border-radius:var(--radius-sharp);
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.1em; text-transform:uppercase; padding:7px 11px; line-height:1;
+    display:inline-flex; align-items:center; gap:7px;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .chrome-btn:hover { color:var(--accent); border-color:var(--border-hi); background:var(--accent-dim); }
+  .chrome-btn:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .chrome-btn__dot { width:5px; height:5px; border-radius:50%; background:var(--accent); flex:0 0 auto; }
+  .chrome-btn[disabled] { opacity:.45; cursor:not-allowed; }
+  .chrome-btn[disabled] .chrome-btn__dot { background:var(--text-ui); }
+
+  /* the micro paired GLANCE badge that rides the SHADOW footer button (CLICK 0).
+     Text agreement % is the load-bearing signal; the color dot is the 2nd channel. */
+  .glance {
+    display:inline-flex; align-items:center; gap:6px; margin-left:2px;
+    font-family:var(--font-d); font-size:10px; font-weight:700; letter-spacing:.02em;
+    border:1px solid currentColor; border-radius:999px; padding:1px 7px; line-height:1.6;
+  }
+  .glance__dot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .glance--agree   { color:var(--badge-decided-fg); }
+  .glance--drift   { color:var(--badge-ar-fg); }
+  .glance--diverge { color:var(--badge-blocked-fg); }
+  .glance--none    { color:var(--badge-obs-fg); }
+
+  /* tiny inline note that the SHADOW affordance is hidden while the flag is OFF */
+  .gateline {
+    margin-top:12px; font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  .gateline b { color:var(--badge-ar-fg); }
+
+  /* ====================================================================== */
+  /* ====  .sa-* DRAWER -- Frame-D sibling of SoakPanel's .sp-* chrome  ==== */
+  /* ====================================================================== */
+  .sa-scrim {
+    position:fixed; inset:0; background:rgba(8,10,12,.55); backdrop-filter:blur(1px); z-index:80;
+  }
+  [data-theme="paper"] .sa-scrim { background:rgba(40,32,24,.42); }
+  .sa-panel {
+    position:fixed; top:0; right:0; bottom:0; width:min(520px, 96vw); z-index:81;
+    display:flex; flex-direction:column;
+    background:var(--bg-card);
+    border-left:1px solid var(--border-hi);
+    box-shadow:-18px 0 48px -24px rgba(0,0,0,.7);
+    color:var(--text); font-family:var(--ff-system); overflow:hidden;
+    animation: saSlide 160ms ease-out;
+  }
+  @keyframes saSlide { from { transform:translateX(14px); opacity:0; } to { transform:none; opacity:1; } }
+
+  .sa-head {
+    flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
+    padding:14px 22px 11px; border-bottom:1px solid var(--border);
+  }
+  .sa-head__titlewrap { min-width:0; }
+  .sa-head__title {
+    margin:0; font-family:var(--font-h); font-size:18px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-bright);
+  }
+  .sa-head__sub { margin:3px 0 0; font-size:11px; letter-spacing:.04em; color:var(--text-dim); }
+  .sa-beta { display:inline-block; margin-top:8px; font-family:var(--font-d); font-size:10px; letter-spacing:.04em; color:var(--text-dim); }
+  .sa-beta__mock { color:var(--badge-ar-fg); font-weight:700; }
+  /* amber "build gated on ADR-18 amendment" footnote -- rides the header */
+  .sa-gatenote {
+    margin-top:9px; display:flex; gap:8px; align-items:flex-start;
+    border:1px dashed var(--badge-ar-border); border-radius:var(--radius-soft);
+    background:var(--badge-ar-bg); color:#7c4a04; padding:8px 10px; font-size:11px; line-height:1.45;
+    max-width:46ch;
+  }
+  .sa-gatenote__tag {
+    flex:0 0 auto; font-family:var(--font-d); font-size:9px; font-weight:800; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--badge-ar-fg); border:1px solid var(--badge-ar-border);
+    border-radius:999px; padding:2px 7px; line-height:1.3; white-space:nowrap;
+  }
+  .sa-close {
+    appearance:none; background:transparent; border:1px solid var(--border); border-radius:var(--radius-sharp);
+    color:var(--text-ui); width:28px; height:28px; line-height:1; font-size:14px; cursor:pointer; flex:0 0 auto;
+    display:inline-flex; align-items:center; justify-content:center;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .sa-close:hover { color:var(--accent); border-color:var(--border-hi); }
+  .sa-close:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+
+  .sa-body {
+    flex:1 1 auto; overflow-y:auto;
+    padding:14px 22px 36px; display:flex; flex-direction:column; gap:22px;
+  }
+  .sa-section { display:flex; flex-direction:column; gap:6px; }
+  .sa-section__label {
+    font-size:13px; font-weight:600; letter-spacing:.02em; color:var(--text-bright);
+    display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  }
+  .sa-section__hint { font-size:11px; font-weight:400; color:var(--text-dim); letter-spacing:.02em; font-family:var(--font-d); }
+  .sa-section__desc { margin:0; font-size:11px; line-height:1.5; color:var(--text-dim); max-width:54ch; }
+
+  /* ---- (1) the LOUD agreement verdict header (M4 paired badge) ------------ */
+  .sa-verdict {
+    border:1px solid var(--border); border-radius:var(--radius-soft);
+    padding:16px 18px; background:var(--bg-row-alt);
+    display:flex; flex-direction:column; gap:9px;
+  }
+  .sa-verdict__caption { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-dim); }
+  .sa-vbadge {
+    display:inline-flex; align-items:center; gap:10px; align-self:flex-start;
+    font-family:var(--ff-system); font-size:15px; font-weight:800; letter-spacing:.05em;
+    text-transform:uppercase; padding:9px 15px; border-radius:var(--radius-sharp); line-height:1.05;
+  }
+  .sa-vbadge__dot { width:9px; height:9px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .sa-vbadge--agree   { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border:2px solid var(--badge-decided-border); }
+  .sa-vbadge--drift   { color:var(--badge-ar-fg);      background:var(--badge-ar-bg);      border:2px solid var(--badge-ar-border); }
+  .sa-vbadge--diverge { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border:2px solid var(--badge-blocked-border); }
+  .sa-vbadge--none    { color:var(--badge-obs-fg);     background:var(--badge-obs-bg);     border:1px solid var(--badge-obs-border); font-weight:700; }
+  .sa-verdict__meta { font-family:var(--font-d); font-size:11px; color:var(--text-dim); font-variant-numeric:tabular-nums; line-height:1.55; }
+  .sa-verdict__ts   { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.03em; }
+
+  /* ---- (2)/(3) disagreement delta list ------------------------------------ */
+  .sa-deltas { display:flex; flex-direction:column; gap:9px; margin-top:2px; }
+  .sa-empty {
+    margin:6px 0; font-size:13px; font-style:italic; color:var(--text-dim);
+    border:1px dashed var(--border); border-radius:var(--radius-soft); padding:14px;
+  }
+
+  /* THE BESPOKE differentiator: a dual-verdict delta row read as a before/after
+     ledger entry -- two stacked, vertically-aligned action chips joined by a
+     hairline connector, NOT a generic table row. */
+  .sa-drow {
+    appearance:none; text-align:left; cursor:pointer; width:100%;
+    display:grid; grid-template-columns: 1fr auto; gap:4px 16px; align-items:center;
+    background:var(--bg-row); border:1px solid var(--border); border-left:3px solid transparent;
+    border-radius:var(--radius-sharp); padding:11px 13px; color:var(--text); font-family:var(--ff-system);
+    transition: border-color var(--t-calm), background var(--t-calm);
+  }
+  .sa-drow:hover { background:var(--bg-row-hover); }
+  .sa-drow:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .sa-drow[aria-selected="true"] { border-color:var(--border-hi); border-left-color:var(--accent); background:var(--bg-row-hover); }
+
+  .sa-drow__main { min-width:0; display:flex; flex-direction:column; gap:3px; grid-column:1; }
+  .sa-drow__idline { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+  .sa-drow__id { font-family:var(--font-d); font-size:13px; font-weight:700; color:var(--text-bright); letter-spacing:.01em; }
+  .sa-drow__slug {
+    font-size:11px; font-weight:600; color:var(--text-dim); letter-spacing:.02em;
+    border:1px solid var(--border); border-radius:999px; padding:1px 8px;
+  }
+  .sa-drow__reason { font-size:11px; color:var(--text-dim); line-height:1.45; max-width:38ch; }
+  .sa-drow__dir { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.05em; }
+
+  /* the stacked live-over-shadow chip ledger (right column) */
+  .sa-ledger { grid-column:2; display:grid; grid-template-columns:auto 1fr; gap:0 9px; align-items:center; }
+  .sa-ledger__rail { grid-row:1 / span 2; grid-column:1; width:0; border-left:1px dashed var(--border); justify-self:center; height:100%; }
+  .sa-arrow { grid-column:1; grid-row:1 / span 2; align-self:center; justify-self:center; color:var(--text-dim); font-family:var(--font-d); font-size:12px; }
+  .sa-chip {
+    grid-column:2; display:inline-flex; align-items:center; gap:7px; justify-content:space-between;
+    border:1px solid; border-radius:var(--radius-sharp); padding:4px 9px; line-height:1; min-width:172px;
+    font-family:var(--ff-system); font-size:11px; font-weight:700; letter-spacing:.03em;
+  }
+  .sa-chip + .sa-chip { margin-top:5px; }
+  .sa-chip__lead { display:inline-flex; align-items:center; gap:6px; text-transform:uppercase; }
+  .sa-chip__dot { width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .sa-chip__side { font-family:var(--font-d); font-size:9px; letter-spacing:.06em; opacity:.85; text-transform:uppercase; }
+  .sa-chip__conf { font-family:var(--font-d); font-size:12px; font-variant-numeric:tabular-nums; }
+  /* action-band chips: paired label + color (the word is always present) */
+  .sa-chip--allow     { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border-color:var(--badge-decided-border); }
+  .sa-chip--suggest   { color:#3f6212; background:#ecfccb; border-color:#a3e635; }
+  .sa-chip--guide     { color:#854d0e; background:#fef9c3; border-color:#facc15; }
+  .sa-chip--intervene { color:var(--badge-warn-fg); background:var(--badge-warn-bg); border-color:var(--badge-warn-border); }
+  .sa-chip--block     { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border-color:var(--badge-blocked-border); }
+
+  /* copied confirmation (aria-live) under a selected row */
+  .sa-copied {
+    margin-top:7px; font-family:var(--font-d); font-size:11px; color:var(--badge-decided-fg);
+    display:flex; align-items:center; gap:7px;
+  }
+  .sa-copied__seed {
+    color:var(--text-dim); background:var(--bg-row-alt); border:1px solid var(--border);
+    border-radius:2px; padding:2px 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:34ch;
+  }
+
+  /* quiet pagination (never infinite scroll) */
+  .sa-page { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:6px; }
+  .sa-page__meta { font-family:var(--font-d); font-size:11px; color:var(--text-dim); font-variant-numeric:tabular-nums; }
+  .sa-page__btn {
+    appearance:none; background:transparent; cursor:pointer; color:var(--text-ui);
+    border:1px solid var(--border); border-radius:var(--radius-sharp);
+    font-family:var(--ff-system); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+    padding:5px 11px; line-height:1;
+  }
+  .sa-page__btn:hover { color:var(--accent); border-color:var(--border-hi); }
+  .sa-page__btn:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+
+  /* ---- (4) VISIBLE polarity/firewall exclusion footer (G2/M15) ------------ */
+  .sa-excluded {
+    margin-top:2px; font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    border-top:1px dashed var(--border); padding-top:11px;
+  }
+  .sa-excluded__lead { letter-spacing:.04em; }
+  .sa-excluded__tag {
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+    border-radius:999px; padding:2px 9px; font-size:10px; letter-spacing:.04em; font-weight:600;
+    font-variant-numeric:tabular-nums;
+  }
+
+  /* ---- (5) the DEFERRED launch affordance (clearly non-functional) -------- */
+  .sa-launch {
+    border:1px dashed var(--badge-ar-border); border-radius:var(--radius-soft);
+    padding:12px 14px; background:var(--bg-row-alt);
+  }
+  .sa-launch__btn {
+    appearance:none; align-self:flex-start; cursor:not-allowed; background:transparent;
+    color:var(--text-dim); border:1px solid var(--border); border-radius:5px;
+    font-family:var(--ff-system); font-size:13px; font-weight:600; letter-spacing:.02em;
+    padding:10px 16px; line-height:1; opacity:.6;
+  }
+  .sa-launch__note { margin:6px 0 0; font-size:11px; line-height:1.5; color:var(--text-dim); max-width:54ch; }
+  .sa-launch__tag {
+    display:inline-block; margin-right:7px; font-size:9px; font-weight:800; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--badge-ar-fg); border:1px solid var(--badge-ar-border);
+    border-radius:999px; padding:2px 7px;
+  }
+  .sa-launch__note code {
+    font-family:var(--font-d); color:var(--accent); background:var(--bg-row); padding:1px 5px; border-radius:2px;
+  }
+
+  /* visually-hidden live region (M17) */
+  .sa-sr-only {
+    position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0;
+    clip:rect(0 0 0 0); overflow:hidden; white-space:nowrap;
+  }
+
+  /* reduced motion (M17): suppress the slide-in */
+  @media (prefers-reduced-motion: reduce) {
+    .sa-panel { animation:none; }
+    .chrome-btn, .switch, .switch::after, .sa-close, .sa-drow { transition:none; }
+  }
+
+  /* mockup-only annotation footer */
+  .annot { margin-top:22px; font-family:var(--font-d); font-size:11px; color:var(--text-dim); line-height:1.7; }
+  .annot b { color:var(--text-bright); }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <!-- mockup-only legend + theme switcher (NOT part of the feature) -->
+    <div class="legend">
+      <div>
+        <h1>Shadow Soak Audit Lane</h1>
+        <p>
+          Post-change regression sentry. After a governance.py / pattern-graph change, one glance answers
+          "did my change move ANY verdict on real non-SM traffic?" -- a live decision vs a shadow
+          re-evaluation of the same message_id, every row polarity-filtered so SM's own sessions never
+          appear. Frame-D drawer sibling of the SOAK panel; raises no escalation, steals no focus.
+        </p>
+      </div>
+      <div class="themes" role="group" aria-label="Preview theme (mockup only)">
+        <button type="button" class="on" data-theme-btn="obsidian">Obsidian</button>
+        <button type="button" data-theme-btn="phosphor">Phosphor</button>
+        <button type="button" data-theme-btn="paper">Paper</button>
+      </div>
+    </div>
+
+    <!-- BETA feature header strip: title + pill + wired on/off toggle -->
+    <div class="featurebar">
+      <div class="featurebar__title">
+        <h2>Shadow Soak Audit Lane</h2>
+        <span class="beta-pill"><span class="beta-pill__dot" aria-hidden="true"></span>BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+      </div>
+      <div class="toggle">
+        <span class="toggle__state on" id="toggleState" aria-live="polite">ON</span>
+        <button type="button" class="switch" id="flagSwitch" role="switch" aria-checked="true" aria-pressed="true" aria-label="Shadow Soak Audit Lane BETA flag"></button>
+      </div>
+      <p class="featurebar__hint">
+        Registered in <code style="font-family:var(--font-d);color:var(--accent)">lib/beta/registry.js</code> default OFF.
+        While OFF the panel renders nothing and registers NO poller / fetch -- the SHADOW footer affordance is
+        hidden. Flip the switch to preview the ON state below.
+      </p>
+    </div>
+
+    <!-- the dashboard deck (Frame D chrome) the SHADOW affordance lives in -->
+    <div class="deck">
+      <div class="deck__body" id="deckBody">
+        <strong>Frame D footer.</strong> The SHADOW affordance is a quiet sibling of the existing SOAK chrome
+        button -- a footer button carrying a micro paired badge, never a 4th always-on frame (ADR-18 M1
+        three-frame floor is inviolable). One look at the badge = "engine still agrees with itself; nothing
+        drifted." Click it to open the Frame-D drawer. Live half reads the existing <code>decisions</code> table;
+        the shadow half reads an additive <code>shadow_decisions</code> table written out-of-process by the CLI
+        shadow worker.
+
+        <div class="gateline" id="gateLine">
+          <b>FLAG OFF:</b> SHADOW footer affordance is hidden -- no poller, no fetch. Toggle ON to reveal it.
+        </div>
+      </div>
+
+      <!-- the footer strip with the two quiet chrome buttons -->
+      <div class="footerstrip">
+        <span class="footerstrip__meta" id="footMeta">scope=FROM DATA -- 1,250 sessions -- 21,065 decisions checked</span>
+        <div class="footerstrip__chrome" id="footChrome" hidden>
+          <!-- existing SOAK button (context sibling; non-functional here) -->
+          <button type="button" class="chrome-btn" disabled aria-label="Open Live Session Soak panel (existing sibling)">
+            <span class="chrome-btn__dot" aria-hidden="true"></span>SOAK
+          </button>
+          <!-- the NEW SHADOW button with its micro GLANCE badge (CLICK 0 read) -->
+          <button type="button" class="chrome-btn" id="shadowTrigger" aria-haspopup="dialog"
+                  aria-label="Open Shadow Soak Audit Lane (Frame D). Shadow agreement 98 percent, 8 disagreements.">
+            <span class="chrome-btn__dot" aria-hidden="true"></span>SHADOW
+            <span class="glance glance--agree" aria-hidden="true">
+              <span class="glance__dot"></span>AGREE 98% / 412
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- mockup-only annotation -->
+    <p class="annot">
+      <b>Glance-or-click path to value.</b> CLICK 0 (glance): the SHADOW footer badge reads "AGREE 98% / 412".
+      CLICK 1: the loud paired agreement verdict header + compared count + last-pass timestamp. CLICK 2: the
+      decision-by-decision disagreement rows, each copyable as a regression-corpus seed. Try it: toggle ON,
+      open the drawer, Tab through the rows, Enter on a row to copy its seed, Escape to close (focus returns to
+      the SHADOW button). The "build gated on ADR-18 amendment" amber footnote rides the drawer header.
+    </p>
+  </div>
+
+  <!-- ====================================================================== -->
+  <!-- ====  THE .sa-* DRAWER (built in JS so the interaction is real)   ==== -->
+  <!-- ====================================================================== -->
+  <div id="drawerHost"></div>
+
+<script>
+  "use strict";
+
+  // ---- MOCK DATA (from the brief mockDataSpec; domain-agnostic governance ----
+  // slugs only -- NO monitored-project vocabulary, NO JOB-IDs). usedMockData is
+  // surfaced as a literal "SAMPLE DATA" text label. -----------------------------
+  var STATUS_MOCK = {
+    compared: 412,
+    agree: 404,
+    disagree: 8,
+    agreement_pct: 98.1,
+    verdict: "agreeing",            // agreeing>=95 | drifting 85-95 | diverged<95 | none(0 compared)
+    last_run_iso: "2026-06-11T09:15:42Z",
+    polarity_filtered: true,
+    excluded_self: 3,               // self rows the WHERE-clause dropped (rendered VISIBLE)
+    excluded_firewalled: 0,
+    checked: 21065,
+    mock: true
+  };
+
+  // Newest-first; ONLY rows where live != shadow. Includes one SM-self-by-slug
+  // row + one firewalled-cwd seed so the self-exclude / firewall footer is
+  // exercised on the mock path (mirrors SoakPanel-data.js). The polarity WHERE
+  // drops them at the SQL layer; they are counted in excluded_* and NEVER
+  // rendered as selectable rows.
+  var DELTAS_RAW = [
+    {decision_id:1234, message_id:"m-0a1b", project_slug:"webapp-frontend",
+     live_action:"ALLOW", live_confidence:0.92, shadow_action:"SUGGEST", shadow_confidence:0.68,
+     delta_reason:"L2->L3 threshold crossed", timestamp:"2026-06-11T09:15:38Z"},
+    {decision_id:1228, message_id:"m-0a14", project_slug:"infra-pipeline",
+     live_action:"SUGGEST", live_confidence:0.71, shadow_action:"ALLOW", shadow_confidence:0.81,
+     delta_reason:"confidence +0.10 -- band unchanged but crossed display threshold", timestamp:"2026-06-11T09:15:31Z"},
+    {decision_id:1201, message_id:"m-09e2", project_slug:"docs-site",
+     live_action:"BLOCK", live_confidence:0.40, shadow_action:"INTERVENE", shadow_confidence:0.55,
+     delta_reason:"escalation tier softened", timestamp:"2026-06-11T09:14:50Z"},
+    {decision_id:1190, message_id:"m-09d0", project_slug:"webapp-frontend",
+     live_action:"GUIDE", live_confidence:0.61, shadow_action:"SUGGEST", shadow_confidence:0.58,
+     delta_reason:"band relaxed GUIDE->SUGGEST", timestamp:"2026-06-11T09:14:22Z"},
+    {decision_id:1177, message_id:"m-09b3", project_slug:"data-warehouse",
+     live_action:"INTERVENE", live_confidence:0.49, shadow_action:"BLOCK", shadow_confidence:0.38,
+     delta_reason:"escalation tier hardened", timestamp:"2026-06-11T09:13:58Z"},
+    {decision_id:1162, message_id:"m-0992", project_slug:"infra-pipeline",
+     live_action:"ALLOW", live_confidence:0.88, shadow_action:"GUIDE", shadow_confidence:0.64,
+     delta_reason:"L1->L2 threshold crossed", timestamp:"2026-06-11T09:13:30Z"},
+    {decision_id:1149, message_id:"m-0980", project_slug:"mobile-client",
+     live_action:"SUGGEST", live_confidence:0.66, shadow_action:"GUIDE", shadow_confidence:0.59,
+     delta_reason:"band tightened SUGGEST->GUIDE", timestamp:"2026-06-11T09:12:55Z"},
+    {decision_id:1131, message_id:"m-0961", project_slug:"docs-site",
+     live_action:"ALLOW", live_confidence:0.95, shadow_action:"ALLOW", shadow_confidence:0.83,
+     delta_reason:"confidence -0.12 -- crossed display threshold, band unchanged", timestamp:"2026-06-11T09:12:11Z"},
+    // EXCLUDED -- SM-self by project_slug (G2): dropped by the polarity WHERE,
+    // counted in excluded_self, NEVER rendered as a delta row.
+    {decision_id:9001, message_id:"m-self01", project_slug:"streamManager",
+     live_action:"ALLOW", live_confidence:0.90, shadow_action:"SUGGEST", shadow_confidence:0.70,
+     delta_reason:"SM-SELF -- excluded by WHERE-clause", timestamp:"2026-06-11T09:10:00Z", _excluded:"self"},
+    // EXCLUDED -- firewalled cwd seed (G1): a monitored-project working dir.
+    {decision_id:9002, message_id:"m-fw01", project_slug:"walled-target", cwd:"/home/op/vs/certPortal",
+     live_action:"BLOCK", live_confidence:0.30, shadow_action:"ALLOW", shadow_confidence:0.60,
+     delta_reason:"FIREWALLED cwd -- excluded", timestamp:"2026-06-11T09:09:00Z", _excluded:"firewalled"}
+  ];
+
+  // SELECTABLE rows only = polarity-filtered (no _excluded). This mirrors the
+  // server WHERE-clause: SM-self + firewalled are dropped, counted, never shown.
+  var SELF_SLUGS = { "streammanager": true };
+  function isExcluded(r) {
+    if (r._excluded) return true;
+    var slug = String(r.project_slug || "").trim().toLowerCase();
+    if (SELF_SLUGS[slug]) return true;
+    var cwd = String(r.cwd || "").toLowerCase();
+    if (cwd.indexOf("certportal") !== -1) return true;
+    return false;
+  }
+  var DELTAS = DELTAS_RAW.filter(function (r) { return !isExcluded(r); });
+  var PAGE_SIZE = 5;
+
+  // ---- pure helpers (mirror ShadowAuditPanel-data.js intent) ----------------
+  function verdictBadge(s) {
+    // TEXT (agreement % + n/N) is the load-bearing signal; color is 2nd channel.
+    if (!s || !s.compared) return { variant:"none", label:"NO SHADOW DATA" };
+    var pct = Number(s.agreement_pct);
+    var nn = s.agree + "/" + s.compared;
+    if (pct >= 95) return { variant:"agree",   label:"AGREEING -- " + pct.toFixed(0) + "% (" + nn + ")" };
+    if (pct >= 85) return { variant:"drift",   label:"DRIFTING -- " + pct.toFixed(0) + "% (" + nn + ")" };
+    return            { variant:"diverge", label:"DIVERGED -- " + pct.toFixed(0) + "% (" + nn + ")" };
+  }
+  function actionClass(a) {
+    var k = String(a || "").toLowerCase();
+    if (k === "allow") return "allow";
+    if (k === "suggest") return "suggest";
+    if (k === "guide") return "guide";
+    if (k === "intervene") return "intervene";
+    if (k === "block") return "block";
+    return "allow";
+  }
+  function fmtConf(c) { var v = Number(c); return v.toFixed(2); }
+  function fmtNum(n) { var v = Number(n); return isFinite(v) ? v.toLocaleString("en-US") : "0"; }
+  function fmtTs(iso) { return String(iso || "").replace("T", " ").replace("Z", " UTC"); }
+  function regressionSeed(r) {
+    return "#" + r.decision_id + " " + r.message_id + " [" + r.project_slug + "] live=" +
+      r.live_action + "(" + fmtConf(r.live_confidence) + ") shadow=" + r.shadow_action +
+      "(" + fmtConf(r.shadow_confidence) + ") -- " + r.delta_reason;
+  }
+
+  // ---- ESCAPE for safe innerHTML of data-derived strings --------------------
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  // ---- state ----------------------------------------------------------------
+  var flagOn = true;
+  var offset = 0;
+  var selectedId = null;
+  var lastFocused = null;
+
+  var host = document.getElementById("drawerHost");
+  var footChrome = document.getElementById("footChrome");
+  var gateLine = document.getElementById("gateLine");
+  var toggleState = document.getElementById("toggleState");
+  var flagSwitch = document.getElementById("flagSwitch");
+  var shadowTrigger = null; // re-bound below (it lives inside footChrome)
+
+  // ---- the BETA flag toggle (client-side wired) -----------------------------
+  function applyFlag() {
+    flagSwitch.setAttribute("aria-pressed", flagOn ? "true" : "false");
+    flagSwitch.setAttribute("aria-checked", flagOn ? "true" : "false");
+    toggleState.textContent = flagOn ? "ON" : "OFF";
+    toggleState.className = "toggle__state " + (flagOn ? "on" : "off");
+    footChrome.hidden = !flagOn;
+    gateLine.hidden = flagOn;
+    if (!flagOn) closeDrawer(); // OFF unmounts the drawer + clears any poller
+  }
+  flagSwitch.addEventListener("click", function () { flagOn = !flagOn; applyFlag(); });
+
+  // bind the SHADOW trigger (it is present in markup but only active when ON)
+  shadowTrigger = document.getElementById("shadowTrigger");
+  shadowTrigger.addEventListener("click", openDrawer);
+
+  // ---- render the delta rows for the current page ---------------------------
+  function renderDeltas() {
+    var page = DELTAS.slice(offset, offset + PAGE_SIZE);
+    if (!page.length) {
+      return '<div class="sa-empty">No disagreements. Live and shadow verdicts match.</div>';
+    }
+    var rows = page.map(function (r) {
+      var lc = actionClass(r.live_action), sc = actionClass(r.shadow_action);
+      var sel = (selectedId === r.decision_id);
+      var copied = sel
+        ? '<div class="sa-copied" role="status">copied regression seed '
+          + '<span class="sa-copied__seed">' + esc(regressionSeed(r)) + '</span></div>'
+        : '';
+      return ''
+      + '<button type="button" class="sa-drow" role="option" aria-selected="' + (sel ? "true" : "false") + '"'
+      + '  data-decision="' + r.decision_id + '">'
+      + '  <span class="sa-drow__main">'
+      + '    <span class="sa-drow__idline">'
+      + '      <span class="sa-drow__id">#' + esc(r.decision_id) + '</span>'
+      + '      <span class="sa-drow__slug">' + esc(r.project_slug) + '</span>'
+      + '    </span>'
+      + '    <span class="sa-drow__reason">' + esc(r.delta_reason) + '</span>'
+      + '    <span class="sa-drow__dir">live -&gt; shadow</span>'
+      + copied
+      + '  </span>'
+      + '  <span class="sa-ledger">'
+      + '    <span class="sa-arrow" aria-hidden="true">v</span>'
+      + '    <span class="sa-chip sa-chip--' + lc + '">'
+      + '      <span class="sa-chip__lead"><span class="sa-chip__dot" aria-hidden="true"></span>'
+      + '        <span class="sa-chip__side">live</span> ' + esc(r.live_action) + '</span>'
+      + '      <span class="sa-chip__conf">' + fmtConf(r.live_confidence) + '</span>'
+      + '    </span>'
+      + '    <span class="sa-chip sa-chip--' + sc + '">'
+      + '      <span class="sa-chip__lead"><span class="sa-chip__dot" aria-hidden="true"></span>'
+      + '        <span class="sa-chip__side">shadow</span> ' + esc(r.shadow_action) + '</span>'
+      + '      <span class="sa-chip__conf">' + fmtConf(r.shadow_confidence) + '</span>'
+      + '    </span>'
+      + '  </span>'
+      + '</button>';
+    }).join("");
+
+    var shownTo = Math.min(offset + PAGE_SIZE, DELTAS.length);
+    var older = (offset + PAGE_SIZE < DELTAS.length)
+      ? '<button type="button" class="sa-page__btn" data-page="older">show older</button>'
+      : '<span></span>';
+    var newer = (offset > 0)
+      ? '<button type="button" class="sa-page__btn" data-page="newer">newer</button>'
+      : '<span></span>';
+    var pager = '<div class="sa-page">'
+      + newer
+      + '<span class="sa-page__meta">' + (offset + 1) + '-' + shownTo + ' of ' + DELTAS.length + ' disagreements</span>'
+      + older
+      + '</div>';
+
+    return '<div class="sa-deltas" role="listbox" aria-label="Live-vs-shadow disagreements (newest first)">'
+      + rows + '</div>' + pager;
+  }
+
+  // ---- build + open the drawer ----------------------------------------------
+  function drawerHtml() {
+    var vb = verdictBadge(STATUS_MOCK);
+    var meta = "checked " + fmtNum(STATUS_MOCK.checked) + " rows -- "
+      + STATUS_MOCK.excluded_self + " SM-self leak(s) excluded by the WHERE-clause -- "
+      + "compared " + fmtNum(STATUS_MOCK.compared) + ", disagree " + STATUS_MOCK.disagree + ".";
+    return ''
+    + '<div class="sa-scrim" id="saScrim"></div>'
+    + '<aside class="sa-panel" id="saPanel" role="dialog" aria-modal="true" aria-labelledby="saTitle" tabindex="-1">'
+    + '  <div class="sa-sr-only" aria-live="polite" id="saLive">'
+    +      'Shadow agreement ' + Math.round(STATUS_MOCK.agreement_pct) + ' percent, ' + STATUS_MOCK.disagree + ' disagreements.'
+    + '  </div>'
+
+    + '  <header class="sa-head">'
+    + '    <div class="sa-head__titlewrap">'
+    + '      <h2 id="saTitle" class="sa-head__title">Shadow Soak Audit Lane</h2>'
+    + '      <p class="sa-head__sub">live verdict vs shadow re-evaluation -- polarity-safe</p>'
+    + '      <span class="sa-beta">BETA -- default OFF, toggled in Settings &gt; BETA features'
+    + '        <span class="sa-beta__mock"> -- SAMPLE DATA</span></span>'
+    + '      <div class="sa-gatenote" role="note">'
+    + '        <span class="sa-gatenote__tag">build held</span>'
+    + '        <span>UI approvable now; <b>build gated on ADR-18 amendment</b> (metadata fix:'
+    + '          footprint frozenTouch true -&gt; false). The proposal compliance section concludes'
+    + '          "No FROZEN surfaces modified. No ADR amendment required."</span>'
+    + '      </div>'
+    + '    </div>'
+    + '    <button class="sa-close" type="button" id="saClose" aria-label="Close Frame D (Esc)"><span aria-hidden="true">x</span></button>'
+    + '  </header>'
+
+    + '  <div class="sa-body">'
+    // (1) the LOUD agreement verdict header
+    + '    <div class="sa-section">'
+    + '      <div class="sa-verdict">'
+    + '        <span class="sa-verdict__caption">Live-vs-shadow agreement -- post-change regression sentry</span>'
+    + '        <span class="sa-vbadge sa-vbadge--' + vb.variant + '" role="status">'
+    + '          <span class="sa-vbadge__dot" aria-hidden="true"></span><span>' + esc(vb.label) + '</span>'
+    + '        </span>'
+    + '        <span class="sa-verdict__meta">' + esc(meta) + '</span>'
+    + '        <span class="sa-verdict__ts">last shadow pass: ' + esc(fmtTs(STATUS_MOCK.last_run_iso)) + '</span>'
+    + '      </div>'
+    + '    </div>'
+
+    // (2)/(3) disagreement delta list (CLICK 2)
+    + '    <div class="sa-section">'
+    + '      <div class="sa-section__label">Disagreements <span class="sa-section__hint">live != shadow, newest first</span></div>'
+    + '      <p class="sa-section__desc">Each row is a before/after ledger entry: the live verdict stacked over the'
+    + '        shadow re-evaluation of the same message_id. project_slug renders FROM DATA (domain-agnostic).'
+    + '        Select a row to copy its regression-corpus seed.</p>'
+    + '      <div id="saDeltas">' + renderDeltas() + '</div>'
+    + '    </div>'
+
+    // (4) VISIBLE polarity / firewall exclusion footer (G2/M15)
+    + '    <div class="sa-section">'
+    + '      <div class="sa-excluded" aria-label="Rows excluded by the polarity gate and firewall">'
+    + '        <span class="sa-excluded__lead">excluded:</span>'
+    + '        <span class="sa-excluded__tag">' + STATUS_MOCK.excluded_self + ' self</span>'
+    + '        <span class="sa-excluded__tag">' + STATUS_MOCK.excluded_firewalled + ' firewalled</span>'
+    + '      </div>'
+    + '    </div>'
+
+    // (5) the DEFERRED CLI affordance (never spawns the long-running worker)
+    + '    <div class="sa-section sa-launch">'
+    + '      <div class="sa-section__label">Shadow worker runs from the CLI</div>'
+    + '      <button class="sa-launch__btn" type="button" disabled aria-disabled="true"'
+    + '        aria-label="Launch deferred -- the shadow re-evaluation worker runs from the CLI">'
+    + '        Run shadow worker from CLI (shadow_evaluator --replay)</button>'
+    + '      <p class="sa-launch__note"><span class="sa-launch__tag">CLI ONLY</span>'
+    + '        The live re-evaluation is long-running -- it populates shadow_decisions out-of-process and is'
+    + '        NEVER spawned in-process here. Run: <code>shadow_evaluator --replay &lt;since&gt;</code></p>'
+    + '    </div>'
+    + '  </div>'
+    + '</aside>';
+  }
+
+  function openDrawer() {
+    if (!flagOn) return;
+    lastFocused = document.activeElement;
+    offset = 0; selectedId = null;
+    host.innerHTML = drawerHtml();
+    var panel = document.getElementById("saPanel");
+
+    document.getElementById("saScrim").addEventListener("click", closeDrawer);
+    document.getElementById("saClose").addEventListener("click", closeDrawer);
+    panel.addEventListener("keydown", onPanelKeydown);
+    wireDeltaHost();
+
+    // default focus lands on the first delta row (per the brief)
+    var first = panel.querySelector(".sa-drow") || panel.querySelector("button:not([disabled])");
+    if (first) first.focus();
+  }
+
+  function closeDrawer() {
+    if (!host.innerHTML) return;
+    host.innerHTML = "";
+    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  }
+
+  function wireDeltaHost() {
+    var deltaHost = document.getElementById("saDeltas");
+    if (!deltaHost) return;
+    deltaHost.addEventListener("click", function (e) {
+      var pageBtn = e.target.closest ? e.target.closest(".sa-page__btn") : null;
+      if (pageBtn) {
+        if (pageBtn.getAttribute("data-page") === "older") offset += PAGE_SIZE;
+        else offset = Math.max(0, offset - PAGE_SIZE);
+        selectedId = null;
+        deltaHost.innerHTML = renderDeltas();
+        var f = deltaHost.querySelector(".sa-drow"); if (f) f.focus();
+        return;
+      }
+      var row = e.target.closest ? e.target.closest(".sa-drow") : null;
+      if (row) selectRow(Number(row.getAttribute("data-decision")), deltaHost);
+    });
+  }
+
+  function selectRow(decisionId, deltaHost) {
+    selectedId = decisionId;
+    var r = DELTAS.filter(function (x) { return x.decision_id === decisionId; })[0];
+    deltaHost.innerHTML = renderDeltas();
+    // restore focus to the (re-rendered) selected row
+    var sel = deltaHost.querySelector('.sa-drow[data-decision="' + decisionId + '"]');
+    if (sel) sel.focus();
+    // copy the regression seed to the clipboard + announce (aria-live)
+    if (r) {
+      var seed = regressionSeed(r);
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(seed);
+      } catch (err) { /* clipboard may be blocked in file:// -- the seed still renders */ }
+      var live = document.getElementById("saLive");
+      if (live) live.textContent = "Copied regression seed for decision " + decisionId + ".";
+    }
+  }
+
+  function focusablesIn(panel) {
+    return Array.prototype.slice
+      .call(panel.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])'))
+      .filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  }
+
+  function onPanelKeydown(e) {
+    if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+    if (e.key === "Tab") {
+      var panel = document.getElementById("saPanel");
+      var f = focusablesIn(panel);
+      if (!f.length) return;
+      var firstEl = f[0], lastEl = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+    }
+  }
+
+  // ---- theme switcher (mockup-only) -----------------------------------------
+  var themeBtns = document.querySelectorAll("[data-theme-btn]");
+  for (var i = 0; i < themeBtns.length; i++) {
+    themeBtns[i].addEventListener("click", function (e) {
+      var t = e.currentTarget.getAttribute("data-theme-btn");
+      document.documentElement.setAttribute("data-theme", t);
+      for (var j = 0; j < themeBtns.length; j++) themeBtns[j].classList.remove("on");
+      e.currentTarget.classList.add("on");
+    });
+  }
+
+  // ---- boot -----------------------------------------------------------------
+  applyFlag();
+</script>
+</body>
+</html>

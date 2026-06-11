@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<!--
+  session-housekeeping-api.html -- KingMode .html MOCKUP for BETA feature #35
+  "Session Housekeeping: bulk stale-session sweep (pairs the shipped per-session #46)".
+
+  PURPOSE: a self-contained, click-through preview the operator confirms BEFORE
+  any code is written (directive #2). It is NOT the production component -- it
+  reproduces the obsidian theme tokens inline + mirrors the #46 classify/badgeFor/
+  preview math so the operator sees the REAL look and the REAL interaction.
+
+  WHAT IT SHOWS
+    - The left rail-footer cleanup cluster: #46's single "Archive stale" beside
+      the NEW #35 "Sweep stale (N)" hairline ghost button (only appears N>=2 --
+      the 'why factor': below 2, the single #46 path is enough).
+    - A right-anchored SELECTABLE LEDGER modal (deliberately distinct from #46's
+      read-only preview): asymmetric header where the verb-tally "Archive N" is
+      the largest type on screen; an 'older than' window slider to its RIGHT;
+      a checkbox ledger (one row per session, NOT a table); a single saturated
+      "Archive N" commit; per-row Restore + a sweep-level "Undo last sweep".
+    - Paired label+color badges everywhere (M4): Stale / Protected -- open HITL /
+      Archived / Self -- never governed. Color is NEVER the sole signal.
+    - The BETA on/off toggle wired client-side so the gated nature is visible.
+
+  ADR-18 MUST honoured: 3-frame presence untouched (this is a rail-footer
+  affordance + overlay, no 4th frame); escalation-only foreground (operator-
+  initiated only); paired label+color badges; absolute HITL gate (Protected rows
+  structurally un-checkable); domain-agnostic (identity rendered FROM DATA);
+  polarity G2 (the SM-self row is structurally un-checkable + never counted).
+
+  ASCII-only (cp1252-safe): dash is "--". No smart quotes, no em-dashes, no
+  box-drawing. System font stack only; no external assets/CDNs/fonts.
+-->
+<html lang="en" data-theme="obsidian" data-motion="reduce">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA #35 -- Session Housekeeping: bulk stale-session sweep (mockup)</title>
+<style>
+  /* ====================================================================
+     THEME TOKENS -- obsidian, lifted verbatim from dashboard/ui-next/src/
+     styles/theme.css so this mockup previews the REAL palette/tokens.
+  ==================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed badge tokens (M4) -- theme-invariant paired-badge palette */
+    --badge-ar-fg: #d97706;  --badge-ar-bg: #fef3c7;  --badge-ar-border: #d97706;
+    --badge-obs-fg: #475569; --badge-obs-bg: #f1f5f9; --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+
+    /* spacing + chrome knobs the component layer consumes */
+    --space-2: 4px; --space-3: 6px; --space-4: 10px; --space-5: 14px;
+    --space-6: 22px; --space-7: 36px;
+    --hairline: 1px; --radius-sharp: 2px; --radius-soft: 4px;
+    --t-calm: 180ms ease;
+    --focus-ring-width: 2px; --focus-ring-style: solid; --focus-ring-color: #d97706;
+    --focus-ring-offset: 2px;
+  }
+  [data-theme="obsidian"] {
+    --bg: #080a0c; --bg-card: #0c1118; --bg-row: #0e141e; --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --border: #192030; --border-hi: rgba(245, 158, 11, 0.25);
+    --text: #b8b098; --text-dim: #948870; --text-ui: #8a8068; --text-bright: #e8e0cc;
+    --accent: #f59e0b; --accent-dim: rgba(245, 158, 11, 0.09);
+    --accent-glow: rgba(245, 158, 11, 0.35);
+    --font-h: var(--ff-system); --font-d: var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 540px at 86% -8%, rgba(245,158,11,0.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ---- compact page header strip (mockup chrome, not production) ---- */
+  .page {
+    max-width: 1180px; margin: 0 auto; padding: 26px 26px 80px;
+  }
+  .phead {
+    display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap;
+    border-bottom: var(--hairline) solid var(--border);
+    padding-bottom: 18px; margin-bottom: 8px;
+  }
+  .phead__id {
+    font-family: var(--font-d); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent);
+    padding-top: 6px;
+  }
+  .phead__titles { flex: 1 1 320px; min-width: 260px; }
+  .phead h1 {
+    margin: 0; font-size: 25px; line-height: 1.15; letter-spacing: -0.01em;
+    color: var(--text-bright); font-weight: 760;
+  }
+  .phead__sub {
+    margin: 6px 0 0; font-size: 13px; color: var(--text-dim); max-width: 70ch;
+  }
+  .phead__ctl { display: flex; align-items: center; gap: 12px; padding-top: 4px; }
+
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-d); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    padding: 4px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* the wired on/off toggle (client-side; shows the gated nature) */
+  .gate {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--font-d); font-size: 11px; letter-spacing: 0.05em;
+    color: var(--text-ui); text-transform: uppercase;
+  }
+  .switch {
+    appearance: none; position: relative; cursor: pointer;
+    width: 44px; height: 22px; border-radius: 999px;
+    background: var(--bg-row); border: 1px solid var(--border);
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--text-ui); transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch:checked { background: var(--accent-dim); border-color: var(--border-hi); }
+  .switch:checked::after { transform: translateX(22px); background: var(--accent); }
+  .switch:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+  .gate__state { font-weight: 700; color: var(--text-bright); min-width: 26px; }
+
+  /* ---- the staged scene: a slice of the left command-column rail ---- */
+  .scene {
+    margin-top: 30px;
+    display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 30px;
+    align-items: start;
+  }
+  @media (max-width: 760px) { .scene { grid-template-columns: 1fr; } }
+
+  .stagecap {
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--text-ui); margin: 0 0 10px;
+  }
+
+  /* SessionRail mini -- enough lanes to make the "too many to thumb" case real */
+  .rail {
+    background: var(--bg-card); border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-soft); overflow: hidden;
+  }
+  .rail__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 12px 14px; border-bottom: var(--hairline) solid var(--border);
+  }
+  .rail__title { font-family: var(--font-d); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui); }
+  .rail__tally { font-family: var(--font-d); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+  .rail__tally b { color: var(--accent); font-weight: 700; }
+  .rail__lanes { max-height: 246px; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
+  .lane {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: var(--radius-sharp); border: var(--hairline) solid transparent;
+    font-family: var(--font-d); font-size: 12px;
+  }
+  .lane--live { background: var(--bg-row-hover); border-color: var(--border-hi); }
+  .lane__dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--text-dim); opacity: 0.55; }
+  .lane--live .lane__dot { background: var(--accent); opacity: 1; box-shadow: 0 0 0 3px var(--accent-dim); }
+  .lane__slug { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lane--live .lane__slug { color: var(--text-bright); }
+  .lane__when { margin-left: auto; font-size: 10px; color: var(--text-dim); letter-spacing: 0.03em; white-space: nowrap; }
+  .lane--gone .lane__slug { color: var(--text-dim); }
+
+  /* the rail-footer cleanup CLUSTER: #46 single + #35 bulk side by side */
+  .cluster {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 8px; padding: 8px 12px;
+    border: var(--hairline) solid var(--border); border-radius: var(--radius-soft);
+    background: var(--bg);
+  }
+  .cluster__self {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-ui);
+  }
+  .cluster__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); opacity: 0.7; }
+  .cluster__spacer { flex: 1 1 auto; }
+
+  .ftbtn {
+    appearance: none; display: inline-flex; align-items: center; gap: 6px;
+    background: transparent; cursor: pointer;
+    border: var(--hairline) solid var(--border);
+    color: var(--text-ui); font-family: var(--font-d);
+    font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 999px;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .ftbtn:hover { color: var(--accent); border-color: var(--border-hi); background: var(--accent-dim); }
+  .ftbtn:focus-visible { outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+  .ftbtn__count { font-variant-numeric: tabular-nums; color: var(--text-bright); }
+  /* #35 ghost button -- hairline, only the eligible-N earns it; appears N>=2 */
+  .ftbtn--sweep { border-style: dashed; }
+  .ftbtn--sweep[hidden] { display: none; }
+
+  /* ---- the side notes column ---- */
+  .notes { font-size: 13px; color: var(--text-dim); }
+  .notes h2 {
+    font-family: var(--font-d); font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--text-ui); margin: 0 0 10px;
+  }
+  .notes p { margin: 0 0 12px; max-width: 62ch; }
+  .notes b { color: var(--text); font-weight: 700; }
+  .notes code {
+    font-family: var(--font-d); font-size: 12px; color: var(--accent);
+    background: var(--bg-card); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: var(--radius-sharp);
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
+
+  /* ====================================================================
+     PAIRED label+color BADGES (M4) -- color is NEVER the sole signal.
+     Mirrors StaleCleanup-data.badgeFor variants + theme.css badge tokens.
+  ==================================================================== */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-d); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap; line-height: 1.3;
+  }
+  .badge__dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: currentColor; }
+  /* eligible = accent chip */
+  .badge--stale { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border); }
+  /* protected = warn/amber-on-cream, 2px border (the escalation identity) */
+  .badge--protected { color: #9a3412; background: #ffedd5; border: 2px solid #ea580c; }
+  /* archived = settled slate/green */
+  .badge--archived { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  /* self = dim, dashed, never a color-only signal -- the word is the signal */
+  .badge--self { color: var(--badge-obs-fg); background: transparent; border: 1px dashed var(--badge-obs-border); }
+  .badge--self .badge__dot { background: var(--text-dim); opacity: 0.7; }
+
+  /* ====================================================================
+     RIGHT-ANCHORED SELECTABLE LEDGER MODAL (#35) -- distinct from #46's
+     read-only preview. A hairline-ruled ledger, no card grid, the commit
+     verb-count is the hero, reversibility stated in the chrome.
+  ==================================================================== */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(8,10,12,0.55);
+    backdrop-filter: blur(1px); z-index: 80;
+  }
+  .scrim[hidden], .modal[hidden] { display: none; }
+  .modal {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: min(520px, 96vw); z-index: 81;
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border-left: var(--hairline) solid var(--border-hi);
+    box-shadow: -18px 0 48px -24px rgba(0,0,0,0.7);
+    color: var(--text); font-family: var(--ff-system); overflow: hidden;
+  }
+
+  .m-head {
+    flex: 0 0 auto; padding: 18px 24px 16px;
+    border-bottom: var(--hairline) solid var(--border);
+  }
+  .m-head__top {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  }
+  /* the hero verb-tally: the LARGEST type on screen, mono tabular, left-weighted */
+  .m-verb {
+    font-family: var(--font-d); font-variant-numeric: tabular-nums;
+    font-size: 34px; line-height: 1; font-weight: 750; letter-spacing: -0.01em;
+    color: var(--text-bright); margin: 0;
+  }
+  .m-verb__n { color: var(--accent); }
+  .m-cascade {
+    margin: 8px 0 0; font-family: var(--font-d); font-size: 12px;
+    color: var(--text-dim); letter-spacing: 0.02em;
+  }
+  .m-cascade b { color: var(--text); font-weight: 700; }
+  .m-cascade .rev { color: var(--badge-decided-fg); }
+  .m-excl { color: var(--text-ui); }
+
+  .m-close {
+    appearance: none; background: transparent; cursor: pointer;
+    border: var(--hairline) solid var(--border); border-radius: var(--radius-sharp);
+    color: var(--text-ui); width: 28px; height: 28px; line-height: 1; font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .m-close:hover { color: var(--accent); border-color: var(--border-hi); }
+  .m-beta {
+    display: block; margin-top: 12px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+  .m-beta .mock { color: var(--badge-ar-fg); font-weight: 700; }
+
+  /* the 'older than' window slider sits to the RIGHT of the tally -- the
+     asymmetry signals it is a refinement, not the primary action. */
+  .m-refine {
+    display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .m-refine__sel {
+    display: inline-flex; gap: 8px; flex: 0 0 auto;
+    font-family: var(--font-d); font-size: 11px; letter-spacing: 0.04em;
+  }
+  .selbtn {
+    appearance: none; background: transparent; cursor: pointer;
+    border: var(--hairline) solid var(--border); border-radius: 999px;
+    color: var(--text-ui); font-family: var(--font-d); font-size: 10px;
+    font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    padding: 3px 10px; transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .selbtn:hover { color: var(--text-bright); border-color: var(--border-hi); }
+  .m-refine__win { margin-left: auto; flex: 1 1 200px; max-width: 260px; }
+  .m-refine__winhead {
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-family: var(--font-d); font-size: 11px; letter-spacing: 0.04em;
+  }
+  .m-refine__winhead label { color: var(--text-ui); text-transform: uppercase; letter-spacing: 0.08em; }
+  .m-refine__winval { font-variant-numeric: tabular-nums; color: var(--accent); }
+  .range { width: 100%; margin: 6px 0 0; accent-color: var(--accent); cursor: pointer; }
+
+  .m-body {
+    flex: 1 1 auto; overflow-y: auto;
+    padding: 14px 24px 30px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .m-listhead {
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-ui); margin: 4px 0 2px;
+  }
+
+  /* THE LEDGER: one row per session, NOT a table. Hairline-ruled. */
+  .lrow {
+    display: grid; grid-template-columns: 22px 1fr auto auto;
+    align-items: center; gap: 12px;
+    padding: 9px 4px; border-bottom: var(--hairline) solid var(--border);
+  }
+  .lrow:last-child { border-bottom: none; }
+  .lrow--locked { opacity: 0.62; }          /* dim decoration ONLY (not the label) */
+  .lrow__check { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+  .lrow__check:disabled { cursor: not-allowed; }
+  .lrow__id { min-width: 0; }
+  .lrow__slug {
+    font-family: var(--font-d); font-size: 13px; color: var(--text-bright);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lrow--locked .lrow__slug { color: var(--text); }
+  .lrow__when { font-family: var(--font-d); font-size: 10px; color: var(--text-dim); letter-spacing: 0.02em; }
+  .lrow__reason { font-family: var(--font-d); font-size: 10px; color: #c2792f; margin-top: 2px; letter-spacing: 0.01em; }
+  /* locked-row label text stays at FULL contrast (dimming must never dim meaning) */
+  .lrow--locked .badge { opacity: 1; }
+  .lrow__counts {
+    font-family: var(--font-d); font-size: 11px; font-variant-numeric: tabular-nums;
+    color: var(--text-dim); text-align: right; white-space: nowrap; line-height: 1.4;
+  }
+  .lrow__counts b { color: var(--text); font-weight: 700; }
+  .lrow__restore {
+    appearance: none; background: transparent; cursor: pointer;
+    border: var(--hairline) solid var(--border-hi); border-radius: var(--radius-sharp);
+    color: var(--text-bright); font-family: var(--font-d); font-size: 10px;
+    font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+    padding: 3px 9px; transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .lrow__restore:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+  .m-empty { font-family: var(--font-d); font-size: 13px; font-style: italic; color: var(--text-dim); padding: 16px 4px; }
+
+  .m-receipt {
+    margin: 8px 0 0; padding: 10px 12px;
+    border: var(--hairline) solid var(--badge-decided-border);
+    border-radius: var(--radius-soft); background: rgba(22,163,74,0.06);
+    font-family: var(--font-d); font-size: 12px; color: var(--badge-decided-fg);
+    letter-spacing: 0.01em;
+  }
+  .m-receipt[hidden] { display: none; }
+
+  /* footer: ONE saturated commit; everything else hairline/ghost so the eye
+     lands on the single committing action. */
+  .m-foot {
+    flex: 0 0 auto; border-top: var(--hairline) solid var(--border);
+    padding: 12px 24px; display: flex; flex-direction: column; gap: 10px;
+    background: var(--bg);
+  }
+  .m-foot__self {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text-ui);
+  }
+  .m-foot__self code { color: var(--text-dim); background: transparent; }
+  .m-foot__bar { display: flex; align-items: center; gap: 10px; }
+  .m-foot__spacer { flex: 1 1 auto; }
+
+  .btn-undo {
+    appearance: none; background: transparent; cursor: pointer;
+    border: var(--hairline) solid var(--border-hi); border-radius: var(--radius-sharp);
+    color: var(--text-bright); font-family: var(--font-d); font-size: 11px;
+    font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 7px 13px; transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .btn-undo:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+  .btn-undo[hidden] { display: none; }
+  .btn-cancel {
+    appearance: none; background: transparent; cursor: pointer;
+    border: var(--hairline) solid var(--border); border-radius: var(--radius-sharp);
+    color: var(--text-ui); font-family: var(--ff-system); font-size: 13px;
+    font-weight: 600; letter-spacing: 0.04em; padding: 7px 15px;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .btn-cancel:hover { color: var(--text-bright); border-color: var(--border-hi); }
+
+  /* the ONLY saturated control. Accent, not destructive red: soft-delete is
+     reversible, so the language is "Archive", not "Delete". */
+  .btn-commit {
+    appearance: none; cursor: pointer;
+    background: var(--accent); border: var(--hairline) solid var(--accent);
+    color: #1a1206; font-family: var(--ff-system); font-size: 14px;
+    font-weight: 760; letter-spacing: 0.02em; padding: 8px 18px;
+    border-radius: var(--radius-sharp); font-variant-numeric: tabular-nums;
+    transition: filter var(--t-calm), opacity var(--t-calm);
+  }
+  .btn-commit:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-commit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* shared focus-ring contract -- 2px solid amber, 2px offset, every control */
+  .ftbtn:focus-visible, .selbtn:focus-visible, .range:focus-visible,
+  .lrow__check:focus-visible, .lrow__restore:focus-visible,
+  .btn-undo:focus-visible, .btn-cancel:focus-visible, .btn-commit:focus-visible,
+  .m-close:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  /* when the BETA flag is OFF the whole cluster + footer render NOTHING */
+  body[data-beta="off"] .cluster,
+  body[data-beta="off"] .scrim,
+  body[data-beta="off"] .modal { display: none !important; }
+  .gate-off-note { display: none; font-family: var(--font-d); font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+  body[data-beta="off"] .gate-off-note { display: block; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body data-beta="on">
+<div class="page">
+
+  <!-- ============ compact header strip + wired BETA toggle ============ -->
+  <header class="phead">
+    <span class="phead__id">BETA #35</span>
+    <div class="phead__titles">
+      <h1>Session Housekeeping -- bulk stale-session sweep</h1>
+      <p class="phead__sub">
+        Clear a weekend of dead non-SM session lanes in one reviewed, reversible
+        sweep -- so every monitoring glance shows only the sessions that still
+        matter. Pairs the shipped per-session #46 (which archives one at a time).
+      </p>
+    </div>
+    <div class="phead__ctl">
+      <span class="beta-pill"><span class="beta-pill__dot" aria-hidden="true"></span>BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+      <label class="gate">
+        <span>Flag</span>
+        <input id="gate" class="switch" type="checkbox" checked
+               role="switch" aria-label="session-housekeeping-api BETA flag">
+        <span class="gate__state" id="gateState">ON</span>
+      </label>
+    </div>
+  </header>
+  <p class="gate-off-note">
+    Flag OFF -- the component renders NOTHING and registers NO poller / no fetch
+    of its own (zero runtime cost). Flip the toggle ON to preview the feature.
+  </p>
+
+  <!-- ============ the staged scene ============ -->
+  <div class="scene">
+
+    <!-- LEFT: a slice of the left command-column SessionRail -->
+    <section aria-label="Session rail (mockup slice)">
+      <p class="stagecap">Left command column -- SessionRail</p>
+      <div class="rail">
+        <div class="rail__head">
+          <span class="rail__title">Sessions</span>
+          <span class="rail__tally"><b id="railActive">3</b> active / <span id="railTotal">8</span> total</span>
+        </div>
+        <div class="rail__lanes" id="railLanes"><!-- lanes injected by script --></div>
+      </div>
+
+      <!-- the rail-footer cleanup CLUSTER: #46 single + #35 NEW bulk -->
+      <div class="cluster">
+        <span class="cluster__self" title="StreamManager's own session is never eligible for cleanup">
+          <span class="cluster__self-dot" aria-hidden="true"></span>self excluded
+        </span>
+        <span class="cluster__spacer"></span>
+        <button class="ftbtn" type="button" id="single46"
+                aria-haspopup="dialog"
+                aria-label="Archive one stale session at a time (feature #46)">
+          Archive stale <span class="ftbtn__count" id="single46count">5</span>
+        </button>
+        <button class="ftbtn ftbtn--sweep" type="button" id="sweepBtn"
+                aria-haspopup="dialog"
+                aria-label="Open bulk stale-session sweep preview">
+          Sweep stale <span class="ftbtn__count" id="sweepCount">3</span>
+        </button>
+      </div>
+      <p class="stagecap" style="margin-top:10px">
+        #46 = "Archive stale" (one at a time). #35 = "Sweep stale (N)" -- the
+        hairline dashed button. It appears only when N&gt;=2 (its 'why factor').
+      </p>
+    </section>
+
+    <!-- RIGHT: orientation notes + the badge legend -->
+    <aside class="notes">
+      <h2>What the operator sees</h2>
+      <p>
+        It is Monday morning. Over the weekend three Tier-3 soaks fired and exited;
+        the rail now shows <b>8 lanes, 5 of them ended</b>. The 3 that matter are
+        buried. Click <b>Sweep stale (3)</b> to open the bulk preview.
+      </p>
+      <p>
+        The sweep modal is a <b>selectable ledger</b>, not an "are you sure?"
+        dialog: every stale row is pre-checked; <b>Protected</b> (open-HITL) and
+        <b>Self</b> rows are shown but structurally un-checkable. Drag the
+        <code>older than</code> slider to widen/narrow the set; press the single
+        saturated <b>Archive N</b>. Each archived row keeps a <b>Restore</b>, and
+        a sweep-level <b>Undo last sweep</b> reverses the whole pass in one click.
+      </p>
+      <p>
+        Soft-delete only (<code>deleted_at</code> set) -- never a hard DELETE, so
+        audit/forensic replay survives. An SM-self id is refused per-row (not a
+        whole-batch error), enforcing polarity in the result map.
+      </p>
+      <h2>Paired badge scheme (M4 -- color is never the sole signal)</h2>
+      <div class="legend">
+        <span class="badge badge--stale"><span class="badge__dot" aria-hidden="true"></span>Stale</span>
+        <span class="badge badge--protected"><span class="badge__dot" aria-hidden="true"></span>Protected -- open HITL</span>
+        <span class="badge badge--archived"><span class="badge__dot" aria-hidden="true"></span>Archived</span>
+        <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+      </div>
+      <p>
+        New, additive read/write surface: <code>POST /api/sessions/bulk-archive</code>
+        (soft-delete loop, per-id result map) + optional
+        <code>/bulk-restore</code>; the preview reuses the already-shipped
+        <code>GET /api/sessions/stale</code>. No FROZEN edit, no new envelope,
+        no new table.
+      </p>
+    </aside>
+  </div>
+</div>
+
+<!-- ============ RIGHT-ANCHORED SELECTABLE LEDGER MODAL ============ -->
+<div class="scrim" id="scrim" hidden></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true"
+     aria-labelledby="mVerb" hidden>
+  <header class="m-head">
+    <div class="m-head__top">
+      <div>
+        <!-- the HERO: largest type on screen, mono tabular, left-weighted -->
+        <p class="m-verb" id="mVerb"><span id="mVerbN">Archive 3</span></p>
+        <p class="m-cascade" id="mCascade" aria-live="polite">
+          <b id="cMsgs">678</b> messages -- <b id="cDecs">227</b> decisions --
+          <span class="rev">reversible</span>
+          <span class="m-excl" id="cExcl">// 1 protected, 1 self excluded</span>
+        </p>
+      </div>
+      <button class="m-close" type="button" id="mClose"
+              aria-label="Close sweep preview (Esc)"><span aria-hidden="true">&times;</span></button>
+    </div>
+
+    <span class="m-beta">
+      BETA -- default OFF, toggled in Settings &gt; BETA features
+      <span class="mock" id="mMock"> -- SAMPLE DATA (live gov.db unavailable)</span>
+    </span>
+
+    <!-- refinement row: select toggles LEFT, window slider RIGHT (asymmetry) -->
+    <div class="m-refine">
+      <div class="m-refine__sel" role="group" aria-label="Select eligible rows">
+        <button class="selbtn" type="button" id="selAll">Select all eligible</button>
+        <button class="selbtn" type="button" id="selNone">Select none</button>
+      </div>
+      <div class="m-refine__win">
+        <div class="m-refine__winhead">
+          <label for="winRange">Older than</label>
+          <span class="m-refine__winval"><span id="winVal">24</span> h</span>
+        </div>
+        <input id="winRange" class="range" type="range" min="0" max="168" step="1"
+               value="24" aria-valuetext="24 hours -- older-than window">
+      </div>
+    </div>
+  </header>
+
+  <div class="m-body">
+    <p class="m-listhead" id="listHead">Sessions in this window</p>
+    <div id="ledger"><!-- ledger rows injected by script --></div>
+    <p class="m-empty" id="empty" hidden>No stale sessions in this window. Still water.</p>
+    <p class="m-receipt" id="receipt" role="status" hidden></p>
+  </div>
+
+  <footer class="m-foot">
+    <span class="m-foot__self" title="StreamManager's own session is never eligible for cleanup">
+      <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+      <code>sess-self0</code>
+    </span>
+    <div class="m-foot__bar">
+      <button class="btn-undo" type="button" id="undoBtn" hidden>Undo last sweep</button>
+      <span class="m-foot__spacer"></span>
+      <button class="btn-cancel" type="button" id="cancelBtn">Cancel</button>
+      <button class="btn-commit" type="button" id="commitBtn">Archive 3</button>
+    </div>
+  </footer>
+</div>
+
+<script>
+/* ======================================================================
+   Client-side mirror of StaleCleanup-data.js (classify / badgeFor /
+   preview) so the mockup interaction is FAITHFUL to the shipped logic.
+   No network: the GET /api/sessions/stale seed is the mockDataSpec fixture;
+   the POST /api/sessions/bulk-archive response is computed client-side.
+====================================================================== */
+"use strict";
+
+var SELF_SLUGS = { "streammanager": true };
+var OWN_SESSION_ID = "sess-self0";
+
+/* the GET /api/sessions/stale seed -- mockDataSpec verbatim shape. */
+var SEED = [
+  { id: "sess-a91f", project_slug: "alpha-svc",   pid: 48213, ended_hours_ago: 28,   message_count: 210, decision_count: 71,  open_hitl: 0 },
+  { id: "sess-7c20", project_slug: "beta-pipe",   pid: 48990, ended_hours_ago: 33,   message_count: 150, decision_count: 52,  open_hitl: 0 },
+  { id: "sess-de03", project_slug: "gamma-batch", pid: null,  ended_hours_ago: 36,   message_count: 52,  decision_count: 15,  open_hitl: 2 },
+  { id: "sess-4f8c", project_slug: "epsilon-job", pid: 50710, ended_hours_ago: 61,   message_count: 318, decision_count: 104, open_hitl: 0 },
+  { id: "sess-11bd", project_slug: "delta-stream",pid: 49120, ended_hours_ago: null, message_count: 88,  decision_count: 30,  open_hitl: 0 },
+  { id: "sess-self0",project_slug: "streamManager",pid: 40001,ended_hours_ago: 50,   message_count: 999, decision_count: 999, open_hitl: 0 }
+];
+
+function isSelfRow(s) {
+  if (!s) return false;
+  var slug = String(s.project_slug || "").trim().toLowerCase();
+  if (slug && SELF_SLUGS[slug]) return true;
+  if (OWN_SESSION_ID && s.id && String(s.id) === String(OWN_SESSION_ID)) return true;
+  return false;
+}
+
+/* classify a row vs the window. Mirrors StaleCleanup-data.classify exactly. */
+function classify(s, windowHours, archived) {
+  if (isSelfRow(s)) return { state: "self", eligible: false, reason: "SM own session -- never governed" };
+  if (archived)     return { state: "archived", eligible: false, reason: "" };
+  var openHitl = Number(s && s.open_hitl) || 0;
+  if (openHitl > 0) {
+    return { state: "protected", eligible: false,
+             reason: "has " + openHitl + " open HITL row" + (openHitl === 1 ? "" : "s") + " -- protected" };
+  }
+  var ended = Number(s && s.ended_hours_ago);
+  if (!isFinite(ended)) return { state: "toonew", eligible: false, reason: "still live -- not ended" };
+  if (ended < windowHours) return { state: "toonew", eligible: false, reason: "within the window -- not yet stale" };
+  return { state: "stale", eligible: true, reason: "" };
+}
+
+function badgeFor(state) {
+  switch (state) {
+    case "stale":     return { variant: "stale",     label: "Stale" };
+    case "protected": return { variant: "protected", label: "Protected -- open HITL" };
+    case "archived":  return { variant: "archived",  label: "Archived" };
+    case "self":      return { variant: "self",      label: "Self -- never governed" };
+    default:          return { variant: "stale",     label: "Stale" };
+  }
+}
+
+function fmtNum(n) {
+  var v = Number(n);
+  return isFinite(v) ? v.toLocaleString("en-US") : "0";
+}
+function relWhen(h) {
+  h = Number(h);
+  if (!isFinite(h)) return "still live";
+  if (h < 1) return "ended just now";
+  if (h < 24) return "ended " + Math.floor(h) + "h ago";
+  var d = Math.floor(h / 24), r = Math.floor(h % 24);
+  return "ended " + d + "d" + (r ? " " + r + "h" : "") + " ago";
+}
+
+/* ----------------------------------------------------------------------
+   STATE: which ids the operator has un-checked, which are archived.
+---------------------------------------------------------------------- */
+var windowHours = 24;
+var unchecked = {};          /* id -> true when operator un-checks an eligible row */
+var archivedMap = {};        /* id -> true once soft-deleted this pass */
+var lastSweptIds = [];       /* the just-archived ids (for Undo) */
+var sliderTimer = null;
+var lastFocused = null;
+
+var $ = function (id) { return document.getElementById(id); };
+
+/* the visible+tally model for the current window (mirrors data.preview). */
+function model() {
+  var rows = [];
+  var sessionCount = 0, messageCount = 0, decisionCount = 0;
+  var protectedCount = 0, selfCount = 0;
+  for (var i = 0; i < SEED.length; i++) {
+    var s = SEED[i];
+    var isArch = !!archivedMap[s.id];
+    var c = classify(s, windowHours, isArch);
+    if (c.state === "toonew" && !isArch) continue;     /* hidden unless archived */
+    var checked = c.eligible && !unchecked[s.id];
+    rows.push({ s: s, state: c.state, eligible: c.eligible, reason: c.reason, archived: isArch, checked: checked });
+    if (checked) { sessionCount++; messageCount += s.message_count; decisionCount += s.decision_count; }
+    if (c.state === "protected") protectedCount++;
+    if (c.state === "self") selfCount++;
+  }
+  return { rows: rows, sessionCount: sessionCount, messageCount: messageCount,
+           decisionCount: decisionCount, protectedCount: protectedCount, selfCount: selfCount };
+}
+
+/* how many lanes are currently archivable at the resting window (rail footer). */
+function eligibleAtRest() {
+  var n = 0;
+  for (var i = 0; i < SEED.length; i++) {
+    var c = classify(SEED[i], 24, false);
+    if (c.eligible) n++;
+  }
+  return n;
+}
+
+/* ----------------------------------------------------------------------
+   RENDER: the rail lanes (left) + the ledger (modal).
+---------------------------------------------------------------------- */
+function renderRail() {
+  /* lanes derived from the seed: live = sess-11bd (still running) + 2 synthetic
+     live lanes so "3 active" reads true; ended/self the rest. */
+  var lanes = [
+    { slug: "delta-stream", live: true,  when: "live -- 88 msgs" },
+    { slug: "omega-watch",  live: true,  when: "live -- 12 msgs" },
+    { slug: "kappa-probe",  live: true,  when: "live -- 4 msgs" },
+    { slug: "alpha-svc",    live: false, when: relWhen(28) },
+    { slug: "beta-pipe",    live: false, when: relWhen(33) },
+    { slug: "gamma-batch",  live: false, when: relWhen(36) },
+    { slug: "epsilon-job",  live: false, when: relWhen(61) },
+    { slug: "streamManager",live: false, when: "self -- excluded" }
+  ];
+  var host = $("railLanes");
+  host.innerHTML = "";
+  for (var i = 0; i < lanes.length; i++) {
+    var L = lanes[i];
+    var el = document.createElement("div");
+    el.className = "lane " + (L.live ? "lane--live" : "lane--gone");
+    var dot = document.createElement("span"); dot.className = "lane__dot"; dot.setAttribute("aria-hidden", "true");
+    var slug = document.createElement("span"); slug.className = "lane__slug"; slug.textContent = L.slug;
+    var when = document.createElement("span"); when.className = "lane__when"; when.textContent = L.when;
+    el.appendChild(dot); el.appendChild(slug); el.appendChild(when);
+    host.appendChild(el);
+  }
+  $("railActive").textContent = "3";
+  $("railTotal").textContent = String(lanes.length);
+
+  /* footer counts: #46 single shows ALL stale-eligible at 24h; #35 sweep shows
+     the same eligible-N and only renders when N>=2 (the 'why factor'). */
+  var n = eligibleAtRest();
+  $("single46count").textContent = String(n);
+  $("sweepCount").textContent = String(n);
+  $("sweepBtn").hidden = !(n >= 2);
+}
+
+function makeBadge(variant, label) {
+  var b = document.createElement("span");
+  b.className = "badge badge--" + variant;
+  b.setAttribute("role", "status");
+  b.setAttribute("aria-label", label);
+  var dot = document.createElement("span"); dot.className = "badge__dot"; dot.setAttribute("aria-hidden", "true");
+  b.appendChild(dot);
+  b.appendChild(document.createTextNode(label));
+  return b;
+}
+
+function renderLedger() {
+  var m = model();
+  var host = $("ledger");
+  host.innerHTML = "";
+
+  $("empty").hidden = m.rows.length !== 0;
+
+  for (var i = 0; i < m.rows.length; i++) {
+    (function (r) {
+      var locked = !r.eligible;     /* protected / self / archived = structurally locked */
+      var row = document.createElement("div");
+      row.className = "lrow" + (locked ? " lrow--locked" : "");
+
+      /* [checkbox] -- disabled for protected/self/archived (the gate in markup) */
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "lrow__check";
+      cb.checked = r.checked;
+      cb.disabled = !r.eligible;
+      if (cb.disabled) {
+        cb.setAttribute("aria-disabled", "true");
+        /* the WHY of un-checkability is the accessible name -- never inferred from color */
+        cb.setAttribute("aria-label", r.s.project_slug + " -- " + (r.reason || "not eligible") + " -- cannot be archived");
+      } else {
+        cb.setAttribute("aria-label", "Archive " + r.s.project_slug);
+        cb.addEventListener("change", function () {
+          if (cb.checked) delete unchecked[r.s.id]; else unchecked[r.s.id] = true;
+          refresh();
+        });
+      }
+
+      /* [project_slug mono] [relWhen ghost] [reason if locked] */
+      var idc = document.createElement("div"); idc.className = "lrow__id";
+      var slug = document.createElement("div"); slug.className = "lrow__slug"; slug.textContent = r.s.project_slug;
+      var when = document.createElement("div"); when.className = "lrow__when"; when.textContent = relWhen(r.s.ended_hours_ago) + "  //  pid " + (r.s.pid == null ? "--" : r.s.pid);
+      idc.appendChild(slug); idc.appendChild(when);
+      if (locked && r.reason) {
+        var rs = document.createElement("div"); rs.className = "lrow__reason"; rs.textContent = r.reason;
+        idc.appendChild(rs);
+      }
+
+      /* [paired state badge] */
+      var bf = badgeFor(r.state);
+      var badge = makeBadge(bf.variant, bf.label);
+
+      /* [counts right-aligned tabular] OR per-row Restore once archived */
+      var tail = document.createElement("div");
+      if (r.archived) {
+        var rb = document.createElement("button");
+        rb.type = "button"; rb.className = "lrow__restore";
+        rb.textContent = "Restore";
+        rb.setAttribute("aria-label", "Restore session " + r.s.project_slug);
+        rb.addEventListener("click", function () { restoreOne(r.s.id); });
+        tail.appendChild(rb);
+      } else {
+        tail.className = "lrow__counts";
+        tail.innerHTML = "<b>" + fmtNum(r.s.message_count) + "</b> msgs<br><b>" + fmtNum(r.s.decision_count) + "</b> dec";
+      }
+
+      row.appendChild(cb); row.appendChild(idc); row.appendChild(badge); row.appendChild(tail);
+      host.appendChild(row);
+    })(m.rows[i]);
+  }
+
+  /* HERO verb-tally + cascade detail + commit label, all driven by the model. */
+  var n = m.sessionCount;
+  $("mVerbN").textContent = "Archive " + n;
+  $("cMsgs").textContent = fmtNum(m.messageCount);
+  $("cDecs").textContent = fmtNum(m.decisionCount);
+  $("cExcl").textContent = "// " + m.protectedCount + " protected, " + m.selfCount + " self excluded";
+  $("commitBtn").textContent = "Archive " + n;
+  $("commitBtn").disabled = n === 0;
+  $("listHead").textContent = "Sessions in this window (" + m.rows.length + " shown -- " + m.protectedCount + " protected, " + m.selfCount + " self)";
+}
+
+function refresh() { renderLedger(); }
+
+/* ----------------------------------------------------------------------
+   COMMIT = one POST /api/sessions/bulk-archive with the checked ids; render
+   the per-id result map back into the badges in place. (Mock: computed here.)
+---------------------------------------------------------------------- */
+function bulkArchiveResult(ids) {
+  /* mirrors the mockDataSpec POST response: SM-self refused per-row, never 400 */
+  var results = [], archived = 0, refused = 0;
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    if (isSelfRow({ id: id, project_slug: idSlug(id) })) {
+      results.push({ id: id, archived: false, refused: "SM-self" }); refused++;
+    } else {
+      results.push({ id: id, archived: true }); archived++;
+    }
+  }
+  return { results: results, archived_count: archived, refused_count: refused };
+}
+function idSlug(id) {
+  for (var i = 0; i < SEED.length; i++) if (SEED[i].id === id) return SEED[i].project_slug;
+  return "";
+}
+
+function commit() {
+  var m = model();
+  var ids = [];
+  for (var i = 0; i < m.rows.length; i++) if (m.rows[i].checked) ids.push(m.rows[i].s.id);
+  if (!ids.length) return;
+
+  var resp = bulkArchiveResult(ids);
+  lastSweptIds = [];
+  for (var j = 0; j < resp.results.length; j++) {
+    var r = resp.results[j];
+    if (r.archived) { archivedMap[r.id] = true; lastSweptIds.push(r.id); }
+  }
+  refresh();
+
+  var rec = $("receipt");
+  rec.hidden = false;
+  rec.textContent = resp.archived_count + " archived -- soft-deleted (deleted_at set); RESTORE retained per row." +
+    (resp.refused_count ? " " + resp.refused_count + " refused (SM-self, per-row -- batch not failed)." : "");
+  $("undoBtn").hidden = lastSweptIds.length === 0;
+}
+
+function undoSweep() {
+  for (var i = 0; i < lastSweptIds.length; i++) delete archivedMap[lastSweptIds[i]];
+  lastSweptIds = [];
+  $("undoBtn").hidden = true;
+  var rec = $("receipt"); rec.hidden = false;
+  rec.textContent = "Sweep undone -- deleted_at cleared for every archived lane; the rail is restored.";
+  refresh();
+}
+
+function restoreOne(id) {
+  delete archivedMap[id];
+  var idx = lastSweptIds.indexOf(id);
+  if (idx >= 0) lastSweptIds.splice(idx, 1);
+  if (!lastSweptIds.length) $("undoBtn").hidden = true;
+  var rec = $("receipt"); rec.hidden = false;
+  rec.textContent = "Restored " + idSlug(id) + " -- deleted_at cleared; lane returns to the rail.";
+  refresh();
+}
+
+/* ----------------------------------------------------------------------
+   MODAL open / close + focus trap + Escape (M17 keyboard path).
+---------------------------------------------------------------------- */
+function openModal() {
+  lastFocused = document.activeElement;
+  $("scrim").hidden = false;
+  $("modal").hidden = false;
+  $("receipt").hidden = true;
+  $("undoBtn").hidden = true;
+  refresh();
+  var first = $("selAll");
+  if (first) first.focus();
+}
+function closeModal() {
+  $("scrim").hidden = true;
+  $("modal").hidden = true;
+  if (lastFocused && lastFocused.focus) lastFocused.focus();
+}
+function focusables() {
+  var modal = $("modal");
+  var list = modal.querySelectorAll("button, input, [tabindex]:not([tabindex='-1'])");
+  return Array.prototype.slice.call(list).filter(function (el) {
+    return !el.disabled && el.offsetParent !== null;
+  });
+}
+function onModalKeydown(e) {
+  if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+  if (e.key === "Tab") {
+    var f = focusables();
+    if (!f.length) return;
+    var firstEl = f[0], lastEl = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+    else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+  }
+}
+
+/* slider: debounced (~250ms) re-derive of the checked set, like the component. */
+function onSlider(e) {
+  windowHours = Number(e.currentTarget.value) || 0;
+  $("winVal").textContent = String(windowHours);
+  e.currentTarget.setAttribute("aria-valuetext", windowHours + " hours -- older-than window");
+  if (sliderTimer) clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(function () {
+    sliderTimer = null;
+    unchecked = {};   /* a window change re-derives the eligible set fresh */
+    refresh();
+  }, 250);
+}
+
+/* select-all-eligible / select-none toggles (header convenience). */
+function selectAllEligible() { unchecked = {}; refresh(); }
+function selectNone() {
+  var m = model();
+  for (var i = 0; i < m.rows.length; i++) if (m.rows[i].eligible) unchecked[m.rows[i].s.id] = true;
+  refresh();
+}
+
+/* ----------------------------------------------------------------------
+   BETA gate toggle (client-side) -- shows the default-OFF gated nature.
+---------------------------------------------------------------------- */
+function setGate(on) {
+  document.body.setAttribute("data-beta", on ? "on" : "off");
+  $("gateState").textContent = on ? "ON" : "OFF";
+  if (!on) closeModal();
+}
+
+/* ----------------------------------------------------------------------
+   WIRING.
+---------------------------------------------------------------------- */
+$("gate").addEventListener("change", function (e) { setGate(e.currentTarget.checked); });
+$("sweepBtn").addEventListener("click", openModal);
+$("single46").addEventListener("click", function () {
+  /* the #46 single path is out-of-scope for this mockup; nudge to the sweep. */
+  $("single46").setAttribute("title", "Feature #46 -- single-session modal (already shipped). This mockup previews #35's bulk sweep.");
+});
+$("mClose").addEventListener("click", closeModal);
+$("cancelBtn").addEventListener("click", closeModal);
+$("commitBtn").addEventListener("click", commit);
+$("undoBtn").addEventListener("click", undoSweep);
+$("selAll").addEventListener("click", selectAllEligible);
+$("selNone").addEventListener("click", selectNone);
+$("winRange").addEventListener("input", onSlider);
+$("modal").addEventListener("keydown", onModalKeydown);
+$("scrim").addEventListener("click", closeModal);
+
+renderRail();
+renderLedger();
+</script>
+</body>
+</html>

@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<!--
+  event-cursor.html -- KingMode standalone mockup for BETA feature #31
+  "Durable session event cursor -- resume monitoring across browser refreshes".
+
+  PURPOSE: operator-approval gate BEFORE any code is written (directive #2).
+  This is a STATIC PREVIEW of the ResumeBadge.svelte placement in the header
+  connection cluster + the "resume from earlier" popover + the BETA on/off gate.
+  Self-contained: inline <style> + inline <script>, system font stack, no CDN.
+
+  Token VALUES below are lifted verbatim from dashboard/ui-next/src/styles/
+  theme.css (obsidian theme) + calm.css so the mockup previews the REAL palette.
+  The paired label+dot badge contract mirrors Badge.svelte (M4): color is NEVER
+  the sole signal -- every state carries its WORD.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- is the dash), no
+  box-drawing. Domain-agnostic: session/project identity is rendered FROM DATA,
+  never hard-coded monitored-project vocabulary.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BETA event-cursor -- durable session event cursor (mockup)</title>
+<style>
+  /* ===================================================================
+     TOKENS -- obsidian theme, lifted verbatim from theme.css + calm.css.
+     =================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* obsidian base surfaces / ink / accent (theme.css) */
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    /* fixed badge tokens (theme-invariant, M4) */
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --c-allow:     #22c55e;
+    --c-block:     #ef4444;
+
+    /* calm spine aliases */
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-accent:         var(--accent);
+
+    /* spacing / radius / type scale */
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+    --fs-chrome: 11px; --fs-meta: 13px; --fs-body: 14px; --fs-badge: 12px;
+    --t-calm: 180ms ease;
+
+    /* M17 focus ring contract (focus.css) -- theme-invariant amber */
+    --focus-ring-color:  #d97706;
+    --focus-ring-width:  2px;
+    --focus-ring-offset: 2px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: var(--fs-body);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* M17 focus ring -- restated on every interactive element here. */
+  a:focus-visible,
+  button:focus-visible,
+  [tabindex]:focus-visible,
+  [role="button"]:focus-visible,
+  [role="switch"]:focus-visible,
+  [role="option"]:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+    border-radius: var(--radius-soft);
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-6) var(--space-8);
+  }
+
+  /* ===================================================================
+     MOCKUP SCAFFOLD STRIP -- the feature title + BETA pill + on/off gate.
+     This strip is the mockup's own framing chrome (NOT part of the real
+     product header); it lets the operator SEE the gated on/off behavior.
+     =================================================================== */
+  .scaffold {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    margin-bottom: var(--space-6);
+    background: linear-gradient(180deg, var(--bg-card), var(--bg));
+    border: var(--hairline) solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-soft);
+  }
+  .scaffold__title {
+    font-size: 15px;
+    font-weight: 680;
+    letter-spacing: 0.01em;
+    color: var(--text-bright);
+    margin: 0;
+  }
+  .scaffold__key {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--accent);
+    letter-spacing: 0.06em;
+  }
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: var(--hairline) solid var(--border-hi);
+    padding: 3px 8px;
+    border-radius: var(--radius-sharp);
+    white-space: nowrap;
+  }
+  .beta-pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    flex: 0 0 auto;
+  }
+  .scaffold__spacer { flex: 1 1 auto; }
+
+  /* the on/off switch (paired label + control) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .gate__label {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    white-space: nowrap;
+  }
+  .gate__state {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    min-width: 3ch;
+    text-align: center;
+  }
+  .gate__state[data-on="true"]  { color: var(--accent); }
+  .gate__state[data-on="false"] { color: var(--text-dim); }
+  .switch {
+    position: relative;
+    width: 44px;
+    height: 22px;
+    border-radius: 12px;
+    border: var(--hairline) solid var(--border);
+    background: var(--bg-row-alt);
+    cursor: pointer;
+    padding: 0;
+    transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .switch[aria-checked="true"] {
+    background: var(--accent-dim);
+    border-color: var(--border-hi);
+  }
+  .switch__knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch[aria-checked="true"] .switch__knob {
+    transform: translateX(22px);
+    background: var(--accent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch, .switch__knob { transition: none; }
+  }
+
+  /* ===================================================================
+     PRODUCT HEADER (faithful preview of HeaderBar.svelte chrome).
+     This is where the ResumeBadge LIVES -- in the connection cluster
+     of the existing live-status spine. Still-water; no glow.
+     =================================================================== */
+  .hb {
+    display: grid;
+    grid-template-columns: auto auto 1fr auto auto;
+    align-items: center;
+    gap: var(--space-5);
+    padding: var(--space-3) var(--space-6);
+    background: var(--calm-surface);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-bottom-width: var(--hairline);
+    border-radius: var(--radius-soft) var(--radius-soft) 0 0;
+    min-height: 3rem;
+  }
+  .hb__brand { display: inline-flex; align-items: center; gap: var(--space-3); text-decoration: none; }
+  .hb__mark {
+    width: 22px; height: 22px; flex: 0 0 auto;
+    border: 2px solid var(--calm-accent);
+    border-radius: var(--radius-sharp);
+    position: relative; opacity: 0.92;
+  }
+  .hb__mark::after {
+    content: ''; position: absolute; right: -2px; bottom: -2px;
+    width: 40%; height: 40%; background: var(--calm-accent); border-radius: 1px;
+  }
+  .hb__word { font-size: 19px; line-height: 1; letter-spacing: 0.06em; white-space: nowrap; }
+  .hb__word-strong { font-weight: 680; color: var(--calm-ink-loud); }
+  .hb__word-soft   { font-weight: 320; color: var(--calm-ink-chrome); }
+
+  .hb__scope {
+    grid-column: 2;
+    font-family: var(--ff-mono);
+    font-size: var(--fs-meta);
+    color: var(--calm-ink-loud);
+    background: var(--bg-card);
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-soft);
+    padding: 4px 22px 4px 8px;
+    position: relative;
+    white-space: nowrap;
+  }
+  .hb__scope::after {
+    content: '\25BE'; position: absolute; right: 8px; top: 50%;
+    transform: translateY(-50%); font-size: 0.65rem; color: var(--text-ui);
+  }
+
+  .hb__cwd {
+    grid-column: 3; min-width: 0;
+    display: inline-flex; align-items: baseline; gap: var(--space-3); overflow: hidden;
+  }
+  .hb__cwd-tag {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .hb__cwd-path {
+    min-width: 0; font-family: var(--ff-mono); font-size: var(--fs-meta);
+    color: var(--calm-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* CONNECTION CLUSTER -- the live-status spine. The ResumeBadge sits here,
+     beside the throughput heartbeat. */
+  .hb__cluster {
+    grid-column: 4;
+    display: inline-flex; align-items: center; gap: var(--space-4);
+    justify-self: end;
+  }
+  .hb__pulse {
+    width: 96px; height: 18px;
+    display: inline-flex; align-items: flex-end; gap: 2px;
+    opacity: 0.8;
+  }
+  .hb__pulse i {
+    flex: 1 1 auto; background: var(--text-ui); border-radius: 1px;
+    opacity: 0.55;
+  }
+
+  .hb__theme {
+    grid-column: 5;
+    display: inline-flex; align-items: center; gap: var(--space-3);
+  }
+  .hb__theme-label {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .hb__theme-select {
+    appearance: none; -webkit-appearance: none;
+    background: var(--calm-surface-raised); color: var(--calm-ink-loud);
+    border: var(--hairline) solid var(--calm-hairline); border-radius: var(--radius-soft);
+    font-size: var(--fs-meta); padding: 4px 1.4rem 4px 8px; cursor: pointer;
+    position: relative;
+  }
+
+  /* ===================================================================
+     RESUME BADGE -- the bespoke micro-instrument. A 2px monospace tick
+     glyph + tight tracking, distinct from the theme select + CWD readout.
+     It is a BUTTON. Paired label + dot. Color is never the sole signal.
+     =================================================================== */
+  .resume {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .resume__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-meta);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: var(--bg-card);
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-sharp);
+    padding: 3px 8px 3px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--calm-ink-loud);
+    transition: border-color var(--t-calm);
+  }
+  .resume__btn:hover { border-color: var(--border-hi); }
+  /* the bespoke 2px tick-mark glyph -- the badge's signature, not a pill */
+  .resume__tick {
+    width: 2px; height: 11px;
+    background: currentColor;
+    display: inline-block;
+    flex: 0 0 auto;
+    opacity: 0.85;
+  }
+  .resume__dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    flex: 0 0 auto;
+  }
+  .resume__label { color: var(--calm-ink-loud); }
+  .resume__time  { color: var(--calm-ink-quiet); font-weight: 500; }
+  .resume__chev  { font-size: 0.6rem; color: var(--text-ui); margin-left: 1px; }
+
+  /* paired label+dot STATE styling -- color ALWAYS rides with the word.
+     RESUMED = hollow slate dot (calm/non-alarm, like OBSERVING).
+     LIVE     = filled accent-tick dot (fresh seed).
+     RESEEDED = WARN slate-amber dot (silently-truncated resume surfaced). */
+  .resume[data-state="resumed"] .resume__dot {
+    background: transparent;
+    border: 2px solid var(--badge-obs-fg);
+  }
+  .resume[data-state="live"] .resume__dot {
+    background: var(--accent);
+    border: 2px solid var(--accent);
+  }
+  .resume[data-state="reseeded"] .resume__dot {
+    background: var(--badge-warn-fg);
+    border: 2px solid var(--badge-warn-border);
+  }
+  .resume[data-state="reseeded"] .resume__btn {
+    border-color: var(--badge-warn-border);
+  }
+  .resume[data-state="reseeded"] .resume__label { color: var(--badge-warn-fg); }
+
+  /* the tiny "BETA -- default OFF" annotation that whispers beside the badge */
+  .resume__beta {
+    font-family: var(--ff-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  /* ===================================================================
+     RESUME-FROM-EARLIER POPOVER -- the click affordance (audit review).
+     Lists the last few cursor checkpoints; selecting one issues
+     GET ...?since=<older>&full=1 to load the digest at that point.
+     Keyboard: Enter/Space opens, Esc closes, arrows navigate.
+     =================================================================== */
+  .pop {
+    position: absolute;
+    top: calc(100% + var(--space-3));
+    right: 0;
+    width: 290px;
+    background: var(--bg-card);
+    border: var(--hairline) solid var(--border-hi);
+    border-radius: var(--radius-soft);
+    box-shadow: 0 14px 40px rgba(0,0,0,0.55);
+    padding: var(--space-4);
+    z-index: 40;
+  }
+  .pop[hidden] { display: none; }
+  .pop__head {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 var(--space-2);
+  }
+  .pop__sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin: 0 0 var(--space-4);
+    line-height: 1.4;
+  }
+  .pop__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  .pop__item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-3);
+    background: var(--bg-row);
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-sharp);
+    cursor: pointer;
+  }
+  .pop__item:hover, .pop__item.is-active { border-color: var(--border-hi); background: var(--bg-row-hover); }
+  .pop__item-when { font-size: var(--fs-meta); color: var(--calm-ink-loud); font-weight: 600; }
+  .pop__item-cursor { font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); }
+  .pop__foot {
+    margin-top: var(--space-4);
+    font-size: 10px;
+    color: var(--text-dim);
+    border-top: var(--hairline) solid var(--border);
+    padding-top: var(--space-3);
+    line-height: 1.4;
+  }
+  .pop__foot code { color: var(--accent); font-size: 10px; }
+
+  /* ===================================================================
+     CONSOLE BODY -- a compact preview of the surfaces the cursor rehydrates
+     (the feed, the footer tallies, the rail lanes). Enough to show the
+     before/after of a refresh, not a full console.
+     =================================================================== */
+  .console {
+    border: var(--hairline) solid var(--border);
+    border-top: 0;
+    border-radius: 0 0 var(--radius-soft) var(--radius-soft);
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 360px;
+  }
+
+  /* SessionRail (left column) -- lane tallies that the cursor rehydrates. */
+  .rail {
+    border-right: var(--hairline) solid var(--border);
+    padding: var(--space-5) var(--space-4);
+  }
+  .rail__h {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-ui);
+    margin: 0 0 var(--space-4);
+  }
+  .lane {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-3);
+    margin-bottom: var(--space-2);
+    background: var(--bg-card);
+    border: var(--hairline) solid var(--border);
+    border-left: 2px solid var(--border);
+    border-radius: var(--radius-sharp);
+  }
+  .lane.is-live { border-left-color: var(--accent); }
+  .lane__name { font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--calm-ink); }
+  .lane__tally { font-family: var(--ff-mono); font-size: var(--fs-meta); font-weight: 700; color: var(--calm-ink-loud); font-variant-numeric: tabular-nums; }
+
+  .main { padding: var(--space-5) var(--space-5); display: flex; flex-direction: column; }
+
+  /* feed */
+  .feed { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-5); }
+  .feed__h {
+    display: flex; align-items: baseline; gap: var(--space-3);
+    margin: 0 0 var(--space-3);
+  }
+  .feed__h-title {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .feed__h-note { font-size: 11px; color: var(--text-dim); }
+  .row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center; gap: var(--space-4);
+    padding: var(--space-3) var(--space-3);
+    background: var(--bg-row);
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-sharp);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-meta);
+  }
+  .row.row--restored { border-left: 2px solid var(--badge-obs-fg); }
+  .row__time { color: var(--text-dim); }
+  .row__cur  { color: var(--text-ui); font-size: 11px; }
+  .row__conf { color: var(--calm-ink); font-variant-numeric: tabular-nums; }
+
+  /* the M4 action badge (mirrors Badge.svelte .ar-* contract) */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--ff-system);
+    font-size: var(--fs-badge); font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: var(--radius-sharp);
+    line-height: 1; white-space: nowrap;
+  }
+  .badge .bdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .badge--allow   { color: #16a34a; background: #dcfce7; border: 1px solid #86efac; }
+  .badge--block   { color: #dc2626; background: #fee2e2; border: 2px solid #dc2626; font-weight: 700; }
+  .badge--observing { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .badge--queued  { color: #7c3aed; background: #ede9fe; border: 1px solid #c4b5fd; }
+
+  /* footer tallies (the counts the cursor rehydrates) */
+  .foot {
+    margin-top: auto;
+    display: flex; flex-wrap: wrap; gap: var(--space-6);
+    padding-top: var(--space-5);
+    border-top: var(--hairline) solid var(--border);
+  }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat__k {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .stat__v {
+    font-family: var(--ff-mono); font-size: 22px; font-weight: 700;
+    color: var(--calm-ink-loud); font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .stat__v.is-cold { color: var(--text-dim); }
+
+  /* ===================================================================
+     EXPLAINER PANELS + AMENDMENT FOOTNOTE
+     =================================================================== */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); margin-top: var(--space-6); }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--bg-card); border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-soft); padding: var(--space-5);
+  }
+  .card h3 {
+    margin: 0 0 var(--space-3); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+  }
+  .card p { margin: 0 0 var(--space-3); font-size: var(--fs-meta); color: var(--text); }
+  .card p:last-child { margin-bottom: 0; }
+  .card code { font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright); background: var(--bg-row); padding: 1px 4px; border-radius: 2px; }
+  .legend { display: flex; flex-direction: column; gap: var(--space-3); }
+  .legend__row { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: var(--space-4); }
+
+  .footnote {
+    margin-top: var(--space-6);
+    display: flex; align-items: flex-start; gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    background: var(--badge-warn-bg);
+    border: var(--hairline) solid var(--badge-warn-border);
+    border-left: 3px solid var(--badge-warn-border);
+    border-radius: var(--radius-soft);
+  }
+  .footnote__icon {
+    flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px;
+    border: 2px solid var(--badge-warn-fg); border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 800; color: var(--badge-warn-fg);
+  }
+  .footnote__body { font-size: var(--fs-meta); color: #6a3410; }
+  .footnote__body strong { color: var(--badge-warn-fg); }
+  .footnote__body code { font-family: var(--ff-mono); font-size: 11px; background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 2px; color: #5a2c0c; }
+
+  .meta {
+    margin-top: var(--space-6); padding-top: var(--space-4);
+    border-top: var(--hairline) solid var(--border);
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); line-height: 1.6;
+  }
+  .meta code { color: var(--text-ui); }
+
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================================================= -->
+  <!-- MOCKUP SCAFFOLD: title + BETA pill + the on/off gate           -->
+  <!-- ============================================================= -->
+  <div class="scaffold">
+    <div>
+      <h1 class="scaffold__title">Durable session event cursor</h1>
+      <span class="scaffold__key">#31 -- event-cursor</span>
+    </div>
+    <span class="beta-pill"><span class="dot"></span>BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    <span class="scaffold__spacer"></span>
+    <div class="gate">
+      <span class="gate__label" id="gate-label">Feature</span>
+      <button
+        class="switch"
+        id="betaSwitch"
+        role="switch"
+        aria-checked="true"
+        aria-labelledby="gate-label"
+      ><span class="switch__knob"></span></button>
+      <span class="gate__state" id="gateState" data-on="true">ON</span>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- PRODUCT HEADER (faithful preview) -- ResumeBadge in cluster    -->
+  <!-- ============================================================= -->
+  <header class="hb" role="banner">
+    <a class="hb__brand" href="#" aria-label="StreamManager -- operator console" onclick="return false;">
+      <span class="hb__mark" aria-hidden="true"></span>
+      <span class="hb__word"><span class="hb__word-strong">Stream</span><span class="hb__word-soft">Manager</span></span>
+    </a>
+
+    <!-- SCOPE: session picker (identity rendered FROM DATA, domain-agnostic) -->
+    <div class="hb__scope" aria-label="Session scope">sess-mock-0001</div>
+
+    <!-- CWD readout (calm chrome) -->
+    <div class="hb__cwd">
+      <span class="hb__cwd-tag">CWD</span>
+      <span class="hb__cwd-path">/home/op/work/governed-target-a</span>
+    </div>
+
+    <!-- CONNECTION CLUSTER: throughput heartbeat + the ResumeBadge -->
+    <div class="hb__cluster">
+      <div class="hb__pulse" aria-hidden="true">
+        <i style="height:40%"></i><i style="height:65%"></i><i style="height:35%"></i>
+        <i style="height:80%"></i><i style="height:50%"></i><i style="height:70%"></i>
+        <i style="height:30%"></i><i style="height:60%"></i>
+      </div>
+
+      <!-- ====== RESUME BADGE (the bespoke micro-instrument) ====== -->
+      <div class="resume" id="resume" data-state="resumed">
+        <button
+          class="resume__btn"
+          id="resumeBtn"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          aria-controls="resumePop"
+          aria-label="Monitoring resumed from saved cursor at 14:32. Activate to resume from an earlier checkpoint."
+          title="Monitoring resumed from saved cursor at 14:32"
+        >
+          <span class="resume__tick" aria-hidden="true"></span>
+          <span class="resume__dot" aria-hidden="true"></span>
+          <span class="resume__label" id="resumeLabel">RESUMED</span>
+          <span class="resume__time" id="resumeTime">14:32</span>
+          <span class="resume__chev" aria-hidden="true">&#9662;</span>
+        </button>
+        <span class="resume__beta">BETA -- default OFF</span>
+
+        <!-- ====== resume-from-earlier popover ====== -->
+        <div class="pop" id="resumePop" role="dialog" aria-label="Resume from an earlier checkpoint" hidden>
+          <p class="pop__head">Resume from earlier</p>
+          <p class="pop__sub">Load the full session digest at a past watermark, then stream forward. For quick audit review -- the default refresh path needs no click.</p>
+          <ul class="pop__list" id="popList" role="listbox" aria-label="Cursor checkpoints" tabindex="-1">
+            <li class="pop__item is-active" role="option" tabindex="-1" data-cursor="d21129:m48817" aria-selected="true">
+              <span class="pop__item-when">Now (last seen)</span>
+              <span class="pop__item-cursor">d21129:m48817</span>
+            </li>
+            <li class="pop__item" role="option" tabindex="-1" data-cursor="d21088:m48740" aria-selected="false">
+              <span class="pop__item-when">5 min ago</span>
+              <span class="pop__item-cursor">d21088:m48740</span>
+            </li>
+            <li class="pop__item" role="option" tabindex="-1" data-cursor="d20950:m48402" aria-selected="false">
+              <span class="pop__item-when">30 min ago</span>
+              <span class="pop__item-cursor">d20950:m48402</span>
+            </li>
+            <li class="pop__item" role="option" tabindex="-1" data-cursor="d18004:m41100" aria-selected="false">
+              <span class="pop__item-when">Session start</span>
+              <span class="pop__item-cursor">d18004:m41100</span>
+            </li>
+          </ul>
+          <p class="pop__foot">Issues <code>GET /api/sessions/sess-mock-0001/events?since=&lt;cursor&gt;&amp;full=1</code> -- loads the accumulated digest AT the cursor, then opens <code>/events</code> from that watermark.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- THEME SWITCH (static preview) -->
+    <div class="hb__theme">
+      <span class="hb__theme-label">Theme</span>
+      <span class="hb__theme-select" aria-hidden="true">Obsidian &#9662;</span>
+    </div>
+  </header>
+
+  <!-- ============================================================= -->
+  <!-- CONSOLE BODY -- the surfaces the cursor rehydrates             -->
+  <!-- ============================================================= -->
+  <div class="console">
+
+    <!-- SessionRail (left) -- lane tallies -->
+    <aside class="rail" aria-label="Session rail">
+      <h2 class="rail__h">Sessions</h2>
+      <div class="lane is-live">
+        <span class="lane__name">sess-mock-0001</span>
+        <span class="lane__tally" data-cold="0" data-warm="68">68</span>
+      </div>
+      <div class="lane">
+        <span class="lane__name">sess-mock-0002</span>
+        <span class="lane__tally" data-cold="0" data-warm="12">12</span>
+      </div>
+      <div class="lane">
+        <span class="lane__name">sess-mock-0003</span>
+        <span class="lane__tally" data-cold="0" data-warm="5">5</span>
+      </div>
+    </aside>
+
+    <!-- main: feed + footer -->
+    <section class="main" aria-label="Verdict feed and tallies">
+      <div class="feed">
+        <div class="feed__h">
+          <span class="feed__h-title">Verdict feed</span>
+          <span class="feed__h-note" id="feedNote">rehydrated from cursor d21129:m48817 -- continuity held</span>
+        </div>
+
+        <!-- rows accumulated from digest_delta on resume (the gap the operator
+             would otherwise have lost). Mirrors mockDataSpec event shapes. -->
+        <div class="row row--restored">
+          <span class="badge badge--allow"><span class="bdot" aria-hidden="true"></span>ALLOW</span>
+          <span class="row__cur">d21130:m0</span>
+          <span class="row__conf">conf 0.94 / L2</span>
+          <span class="row__time">14:31:52</span>
+        </div>
+        <div class="row row--restored">
+          <span class="badge badge--block"><span class="bdot" aria-hidden="true"></span>BLOCK</span>
+          <span class="row__cur">d21131:m0</span>
+          <span class="row__conf">conf 0.99 / L0</span>
+          <span class="row__time">14:32:11</span>
+        </div>
+        <div class="row row--restored">
+          <span class="badge badge--queued"><span class="bdot" aria-hidden="true"></span>HITL QUEUED</span>
+          <span class="row__cur">d0:m48819</span>
+          <span class="row__conf">pending review</span>
+          <span class="row__time">14:32:20</span>
+        </div>
+        <div class="row row--restored">
+          <span class="badge badge--observing"><span class="bdot" aria-hidden="true"></span>OBSERVING</span>
+          <span class="row__cur">d0:m48820</span>
+          <span class="row__conf">tool_call</span>
+          <span class="row__time">14:32:21</span>
+        </div>
+      </div>
+
+      <!-- FOOTER TALLIES -- the counts the cursor restores at the watermark -->
+      <div class="foot">
+        <div class="stat">
+          <span class="stat__k">Decisions</span>
+          <span class="stat__v" id="statDecisions" data-cold="25" data-warm="21134">21,134</span>
+        </div>
+        <div class="stat">
+          <span class="stat__k">Blocks</span>
+          <span class="stat__v" id="statBlocks" data-cold="1" data-warm="412">412</span>
+        </div>
+        <div class="stat">
+          <span class="stat__k">Pending HITL</span>
+          <span class="stat__v" id="statHitl" data-cold="0" data-warm="1">1</span>
+        </div>
+        <div class="stat">
+          <span class="stat__k">Latest action</span>
+          <span class="stat__v" id="statLatest" data-cold="--" data-warm="BLOCK" style="font-size:15px;">BLOCK</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- EXPLAINER -- the three states + what happens on the gate       -->
+  <!-- ============================================================= -->
+  <div class="grid2">
+    <div class="card">
+      <h3>Paired label + color states (M4)</h3>
+      <div class="legend">
+        <div class="legend__row">
+          <span class="resume" data-state="resumed" style="position:static;">
+            <span class="resume__btn" style="pointer-events:none;">
+              <span class="resume__tick" aria-hidden="true"></span>
+              <span class="resume__dot" aria-hidden="true"></span>
+              <span class="resume__label">RESUMED</span><span class="resume__time">14:32</span>
+            </span>
+          </span>
+          <p style="margin:0;font-size:12px;color:var(--text-dim);">Hollow slate dot. Cursor resume held -- continuity is invisible by design. <code>aria</code>: "Monitoring resumed from saved cursor at &lt;time&gt;".</p>
+        </div>
+        <div class="legend__row">
+          <span class="resume" data-state="live" style="position:static;">
+            <span class="resume__btn" style="pointer-events:none;">
+              <span class="resume__tick" aria-hidden="true"></span>
+              <span class="resume__dot" aria-hidden="true"></span>
+              <span class="resume__label">LIVE</span>
+            </span>
+          </span>
+          <p style="margin:0;font-size:12px;color:var(--text-dim);">Filled accent-tick dot. A cold fresh seed -- no saved cursor for this tab. <code>aria</code>: "Live stream, fresh seed".</p>
+        </div>
+        <div class="legend__row">
+          <span class="resume" data-state="reseeded" style="position:static;">
+            <span class="resume__btn" style="pointer-events:none;">
+              <span class="resume__tick" aria-hidden="true"></span>
+              <span class="resume__dot" aria-hidden="true"></span>
+              <span class="resume__label">RESEEDED</span>
+            </span>
+          </span>
+          <p style="margin:0;font-size:12px;color:var(--text-dim);">WARN slate-amber dot. Saved position too old; server returned a gap -- reseeded from latest, surfaced never hidden. <code>aria</code>: "Saved position too old; reseeded from latest".</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>What the gate does</h3>
+      <p><strong style="color:var(--accent);">ON</strong> (shown): on boot, if <code>sessionStorage</code> holds a cursor for (session_id, origin), the client calls <code>GET /api/sessions/{id}/events?since=&lt;cursor&gt;&amp;full=1</code>, accumulates <code>digest_delta</code> into the same stores the SSE feeds, then opens <code>/events</code> from the persisted <code>Last-Event-ID</code>. The feed/footer/rail re-materialize at the prior watermark; the badge reads <code>RESUMED</code>.</p>
+      <p><strong>OFF</strong> (default): the refresh discards the in-memory cursor. The feed re-seeds the last 25 decisions and the tallies rebuild from scratch -- the badge reads <code>LIVE</code> and the console briefly looks emptier than reality. Toggle the switch above to preview both.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- AMENDMENT FOOTNOTE -- UI approvable, BUILD gated               -->
+  <!-- ============================================================= -->
+  <div class="footnote" role="note">
+    <span class="footnote__icon" aria-hidden="true">!</span>
+    <div class="footnote__body">
+      <strong>Build gated on ADR-18 amendment.</strong>
+      This UI is approvable now, but the build is held pending two items.
+      <strong>Amendment A (surface classification):</strong> the read uses <strong>Option B</strong> -- compute <code>digest_delta</code> entirely in <code>server.py</code> via the public <code>bus.fetch_rows()</code> seam + a UNION over <code>decisions</code> + <code>messages</code> + Python accumulation, with <strong>NO new method on the frozen <code>message_bus.py</code></strong> (<code>frozenTouch=false</code>); this avoids the frozen-touch justification burden of Option A's <code>events_since()</code>.
+      <strong>Amendment B (prerequisite):</strong> depends on Task #5 (BETA feature-flag foundation: <code>registry.js</code> + <code>betaFlags</code> store + <code>BetaToggles</code> + backend <code>beta_flags</code> table) landing first.
+      No new bus envelope (read-only HTTP view over existing rows, so no <code>cassette_record.py</code> / <code>soak_driver.py</code> coverage required). Polarity floor inherited: the new endpoint rejects the SM's own session with HTTP 400, mirroring <code>_reject_sm_own</code>.
+    </div>
+  </div>
+
+  <div class="meta">
+    surfaces: <code>src/lib/components/ResumeBadge.svelte</code> (new) + boot/resume logic threaded through <code>sse.js</code> + <code>stores/session.js</code> + a typed <code>getSessionEvents</code> wrapper in <code>api.js</code><br/>
+    backend: additive read endpoint in <code>dashboard/server.py</code> -- <code>GET /api/sessions/{session_id}/events?since=&lt;cursor&gt;&amp;full=0|1</code> (no schema change; data already in gov.db messages + decisions)<br/>
+    footprint: kind=new-read-api / frozenTouch=false / newEnvelope=false / newTable=false<br/>
+    cursor shape: compound watermark <code>d{decisions.rowid}:m{messages.rowid}</code> -- reuses the existing <code>/events</code> SSE <code>id:</code> / <code>Last-Event-ID</code> contract; persisted to <code>sessionStorage</code> (tab-scoped), keyed on (session_id, origin)<br/>
+    a11y: M17 2px amber focus ring (Tab to the badge, Enter/Space opens the popover, Esc closes, Up/Down navigate, Enter selects); WCAG AAA chrome contrast; reduced-motion safe (the badge never animates)
+  </div>
+
+</div>
+
+<script>
+  // =====================================================================
+  // Client-side wiring so the operator can CLICK THROUGH the gated feature.
+  // This mockup mirrors the intended ResumeBadge.svelte behavior; it does NOT
+  // hit any endpoint. ASCII-only; no framework.
+  // =====================================================================
+  (function () {
+    var sw       = document.getElementById('betaSwitch');
+    var gateState= document.getElementById('gateState');
+    var resume   = document.getElementById('resume');
+    var resumeBtn= document.getElementById('resumeBtn');
+    var label    = document.getElementById('resumeLabel');
+    var timeEl   = document.getElementById('resumeTime');
+    var feedNote = document.getElementById('feedNote');
+    var pop      = document.getElementById('resumePop');
+    var popList  = document.getElementById('popList');
+    var items    = Array.prototype.slice.call(popList.querySelectorAll('.pop__item'));
+
+    // ---- BETA on/off gate ------------------------------------------------
+    // ON  => durable resume: badge RESUMED, warm tallies, restored feed.
+    // OFF => cold seed: badge LIVE, cold tallies, the console looks emptier.
+    function applyTallies(warm) {
+      var nodes = document.querySelectorAll('[data-warm]');
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        n.textContent = warm ? n.getAttribute('data-warm') : n.getAttribute('data-cold');
+        if (n.classList.contains('stat__v')) {
+          n.classList.toggle('is-cold', !warm);
+        }
+        if (n.classList.contains('lane__tally')) {
+          var lane = n.closest('.lane');
+          if (lane) lane.classList.toggle('is-live', warm && n.getAttribute('data-warm') !== '0');
+        }
+      }
+    }
+
+    function setOn(on) {
+      sw.setAttribute('aria-checked', on ? 'true' : 'false');
+      gateState.textContent = on ? 'ON' : 'OFF';
+      gateState.setAttribute('data-on', on ? 'true' : 'false');
+
+      if (on) {
+        // durable cursor present -> RESUMED at the saved watermark
+        resume.setAttribute('data-state', 'resumed');
+        label.textContent = 'RESUMED';
+        timeEl.style.display = '';
+        timeEl.textContent = '14:32';
+        resumeBtn.setAttribute('aria-label',
+          'Monitoring resumed from saved cursor at 14:32. Activate to resume from an earlier checkpoint.');
+        resumeBtn.setAttribute('title', 'Monitoring resumed from saved cursor at 14:32');
+        feedNote.textContent = 'rehydrated from cursor d21129:m48817 -- continuity held';
+        applyTallies(true);
+      } else {
+        // no durable cursor -> cold fresh seed, LIVE
+        resume.setAttribute('data-state', 'live');
+        label.textContent = 'LIVE';
+        timeEl.style.display = 'none';
+        resumeBtn.setAttribute('aria-label', 'Live stream, fresh seed');
+        resumeBtn.setAttribute('title', 'Live stream, fresh seed');
+        feedNote.textContent = 'cold re-seed -- last 25 decisions, tallies rebuilding from scratch';
+        closePop();
+        applyTallies(false);
+      }
+    }
+
+    sw.addEventListener('click', function () {
+      setOn(sw.getAttribute('aria-checked') !== 'true');
+    });
+
+    // ---- resume-from-earlier popover ------------------------------------
+    function openPop() {
+      if (sw.getAttribute('aria-checked') !== 'true') return; // gated OFF -> no popover
+      pop.hidden = false;
+      resumeBtn.setAttribute('aria-expanded', 'true');
+      var active = popList.querySelector('.pop__item.is-active') || items[0];
+      focusItem(items.indexOf(active));
+    }
+    function closePop() {
+      pop.hidden = true;
+      resumeBtn.setAttribute('aria-expanded', 'false');
+    }
+    function togglePop() { pop.hidden ? openPop() : closePop(); }
+
+    function focusItem(idx) {
+      if (idx < 0) idx = 0;
+      if (idx > items.length - 1) idx = items.length - 1;
+      items.forEach(function (it, i) {
+        it.classList.toggle('is-active', i === idx);
+        it.setAttribute('aria-selected', i === idx ? 'true' : 'false');
+      });
+      items[idx].focus();
+    }
+
+    function chooseItem(it) {
+      // mirror: GET ...?since=<cursor>&full=1 then stream forward.
+      var when = it.querySelector('.pop__item-when').textContent;
+      var cur  = it.getAttribute('data-cursor');
+      feedNote.textContent = 'resumed from "' + when + '" -- loaded full digest at ' + cur + ', streaming forward';
+      timeEl.textContent = '14:32';
+      closePop();
+      resumeBtn.focus();
+    }
+
+    resumeBtn.addEventListener('click', togglePop);
+    resumeBtn.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        openPop();
+      }
+    });
+
+    // keyboard nav within the popover list
+    popList.addEventListener('keydown', function (e) {
+      var current = items.findIndex(function (it) { return it.classList.contains('is-active'); });
+      if (e.key === 'ArrowDown') { e.preventDefault(); focusItem(current + 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); focusItem(current - 1); }
+      else if (e.key === 'Home') { e.preventDefault(); focusItem(0); }
+      else if (e.key === 'End') { e.preventDefault(); focusItem(items.length - 1); }
+      else if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        if (current >= 0) chooseItem(items[current]);
+      } else if (e.key === 'Escape') {
+        e.preventDefault(); closePop(); resumeBtn.focus();
+      }
+    });
+
+    items.forEach(function (it, i) {
+      it.addEventListener('click', function () { chooseItem(it); });
+      it.addEventListener('mouseenter', function () { focusItem(i); });
+    });
+
+    // Esc closes from anywhere in the dialog; click-away closes.
+    pop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); closePop(); resumeBtn.focus(); }
+    });
+    document.addEventListener('click', function (e) {
+      if (!pop.hidden && !resume.contains(e.target)) closePop();
+    });
+
+    // boot: feature ON, RESUMED at the saved cursor (the happy path).
+    setOn(true);
+  })();
+</script>
+</body>
+</html>

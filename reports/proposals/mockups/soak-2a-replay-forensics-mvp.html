@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<!--
+  soak-2a-replay-forensics-mvp.html -- KingMode mockup for BETA feature
+  "soak-replay-forensics" (#41): Live-soak replay forensics (MVP tier).
+
+  PURPOSE: let the operator confirm the UI APPROACH before any code is written.
+  Self-contained: inline <style> + inline <script>, NO external assets / CDNs /
+  fonts (system stack only). Reuses the REAL ui-next obsidian theme tokens from
+  dashboard/ui-next/src/styles/theme.css and the SoakPanel.svelte Frame-D drawer
+  idiom (footer affordance -> right-anchored role=dialog drawer, focus trap,
+  Esc-to-close, paired label+color badges, visible self-exclusion footer).
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- used), no
+  box-drawing chars. Domain-agnostic invented slugs only; one SM-self row is
+  carried in the source set to prove the self-exclude path even on mock data.
+
+  NEEDS-AMENDMENT: a small amber footnote states the UI is approvable but the
+  BUILD is gated on an ADR-18 amendment (read-only diff MVP = frozenTouch=false;
+  engine-replay variant = SOAK-2b, amendment-gated).
+-->
+<html lang="en" data-theme="obsidian" data-motion="reduce">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SOAK Replay Forensics (MVP) -- KingMode mockup</title>
+<style>
+  /* =========================================================================
+     THEME TOKENS -- lifted verbatim from ui-next theme.css (obsidian) so the
+     mockup previews the REAL palette. These are tokens only; the component
+     layer always pairs color with a literal text label (M4).
+  ========================================================================= */
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    /* governance action palette */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+  }
+
+  /* fixed paired-badge tokens (theme-invariant; color ALWAYS with a label) */
+  :root {
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:      #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border:     #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg:    #ffedd5;  --badge-warn-border:    #ea580c;
+    --badge-timeout-fg: #7c3aed;  --badge-timeout-bg: #ede9fe;  --badge-timeout-border: #c4b5fd;
+
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --focus-ring-width: 2px; --focus-ring-color: #d97706; --focus-ring-offset: 2px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 520px at 78% -10%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* =========================================================================
+     MOCKUP CHROME -- a faux dashboard shell so the drawer reads in context.
+  ========================================================================= */
+  .shell { max-width: 1180px; margin: 0 auto; padding: 28px 26px 120px; }
+
+  .sf-doc-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 18px; flex-wrap: wrap; margin-bottom: 22px;
+  }
+  .sf-doc-title {
+    margin: 0; font-size: 20px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-bright); font-weight: 800;
+  }
+  .sf-doc-sub { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); max-width: 64ch; line-height: 1.55; }
+
+  .sf-pillrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sf-beta-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.05em;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border); border-radius: 999px;
+    padding: 4px 11px; font-weight: 700;
+  }
+  .sf-beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* the inline on/off toggle (client-side, mirrors BetaToggles) */
+  .sf-toggle {
+    display: inline-flex; align-items: center; gap: 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-card); padding: 7px 12px;
+  }
+  .sf-toggle__label { font-size: 11px; letter-spacing: 0.04em; color: var(--text-dim); text-transform: uppercase; font-weight: 600; }
+  .sf-switch {
+    position: relative; width: 44px; height: 22px; border-radius: 999px; cursor: pointer;
+    background: var(--bg-row); border: 1px solid var(--border);
+    transition: background 160ms ease, border-color 160ms ease; appearance: none; flex: 0 0 auto;
+  }
+  .sf-switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--text-ui); transition: transform 160ms ease, background 160ms ease;
+  }
+  .sf-switch[aria-checked="true"] { background: var(--accent-dim); border-color: var(--border-hi); }
+  .sf-switch[aria-checked="true"]::after { transform: translateX(22px); background: var(--accent); }
+  .sf-switch:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+  .sf-switch__state {
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    min-width: 26px; text-align: left;
+  }
+  .sf-switch__state[data-on="true"] { color: var(--badge-decided-fg); }
+  .sf-switch__state[data-on="false"] { color: var(--text-dim); }
+
+  /* amendment footnote (amber, glanceable) */
+  .sf-amend {
+    margin: 18px 0 0; display: flex; align-items: flex-start; gap: 10px;
+    border: 1px dashed var(--badge-ar-border); border-radius: 6px;
+    background: var(--accent-dim); padding: 11px 14px; max-width: 86ch;
+  }
+  .sf-amend__tag {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 9px; font-weight: 800;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border); border-radius: 999px; padding: 3px 8px; white-space: nowrap;
+  }
+  .sf-amend__text { font-size: 11.5px; line-height: 1.55; color: var(--text); }
+  .sf-amend__text code { font-family: var(--ff-mono); color: var(--accent); }
+
+  /* faux footer strip carrying the FORENSICS chrome affordance */
+  .sf-footer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 22px; background: rgba(8, 10, 12, 0.92);
+    border-top: 1px solid var(--border); backdrop-filter: blur(2px);
+  }
+  .sf-footer__meta {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);
+    letter-spacing: 0.03em; font-variant-numeric: tabular-nums;
+  }
+  .sf-footer__spacer { flex: 1 1 auto; }
+  .sf-footer__hint { font-size: 11px; color: var(--text-ui); }
+
+  /* the quiet FORENSICS footer affordance (mirrors SoakPanel .sp-trigger) */
+  .sf-trigger {
+    appearance: none; display: inline-flex; align-items: center; gap: 6px;
+    background: transparent; border: 1px solid var(--border); border-radius: 2px;
+    color: var(--text-ui); font-family: var(--ff-system);
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 0.3rem 0.7rem; line-height: 1; cursor: pointer;
+    transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+  }
+  .sf-trigger:hover:not([disabled]) {
+    color: var(--accent); border-color: var(--border-hi); background: var(--accent-dim);
+  }
+  .sf-trigger:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+  .sf-trigger[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .sf-trigger__dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .sf-trigger[disabled] .sf-trigger__dot { background: var(--text-ui); }
+
+  .sf-offnote {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--text-dim);
+    letter-spacing: 0.03em; font-style: italic;
+  }
+
+  /* =========================================================================
+     THE DRAWER (Frame-D idiom) -- scrim + right-anchored role=dialog.
+  ========================================================================= */
+  .sf-scrim {
+    position: fixed; inset: 0; background: rgba(8, 10, 12, 0.55);
+    backdrop-filter: blur(1px); z-index: 80;
+  }
+  .sf-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(940px, 97vw); z-index: 81;
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border-hi);
+    box-shadow: -18px 0 48px -24px rgba(0, 0, 0, 0.7);
+    color: var(--text); font-family: var(--ff-system); overflow: hidden;
+  }
+  [hidden] { display: none !important; }
+
+  /* header */
+  .sf-head {
+    flex: 0 0 auto; display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 14px 22px 12px; border-bottom: 1px solid var(--border);
+  }
+  .sf-head__titlewrap { min-width: 0; }
+  .sf-head__title {
+    margin: 0; font-size: 17px; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-bright); font-weight: 800;
+  }
+  .sf-head__sub { margin: 3px 0 0; font-size: 11px; letter-spacing: 0.03em; color: var(--text-dim); }
+  .sf-beta {
+    display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 9px;
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.03em; color: var(--text-dim);
+  }
+  .sf-beta__src { font-weight: 700; }
+  .sf-beta__src[data-mock="true"] { color: var(--badge-ar-fg); }
+  .sf-beta__src[data-mock="false"] { color: var(--badge-decided-fg); }
+  .sf-close {
+    appearance: none; background: transparent; border: 1px solid var(--border); border-radius: 2px;
+    color: var(--text-ui); width: 28px; height: 28px; line-height: 1; font-size: 14px; cursor: pointer;
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    transition: color 180ms ease, border-color 180ms ease;
+  }
+  .sf-close:hover { color: var(--accent); border-color: var(--border-hi); }
+  .sf-close:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+
+  /* session-meta strip (project_slug FROM DATA, frame counts, self-exclude) */
+  .sf-meta {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap;
+    padding: 10px 22px; border-bottom: 1px solid var(--border);
+    background: var(--bg-row-alt); font-family: var(--ff-mono); font-size: 11px;
+    color: var(--text-dim); font-variant-numeric: tabular-nums;
+  }
+  .sf-meta__k { color: var(--text-ui); letter-spacing: 0.04em; text-transform: uppercase; font-size: 9px; }
+  .sf-meta__v { color: var(--text-bright); font-weight: 700; }
+  .sf-meta__sep { color: var(--border); }
+  .sf-meta__excl {
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border); border-radius: 999px;
+    padding: 2px 9px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em;
+  }
+
+  /* the TWO-PANE body: left frame-index rail + right 3-column delta */
+  .sf-body { flex: 1 1 auto; display: grid; grid-template-columns: 232px 1fr; min-height: 0; }
+
+  /* -- LEFT: vertical frame index rail -- */
+  .sf-rail {
+    border-right: 1px solid var(--border); overflow-y: auto; min-height: 0;
+    background: var(--bg-row-alt); padding: 12px 0 24px;
+  }
+  .sf-rail__head {
+    padding: 0 16px 10px; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-dim); display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  }
+  .sf-rail__hint { font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--text-ui); }
+  .sf-rail__legend {
+    display: flex; gap: 12px; flex-wrap: wrap; padding: 0 16px 12px;
+    border-bottom: 1px dashed var(--border); margin-bottom: 8px;
+  }
+  .sf-legend__item { display: inline-flex; align-items: center; gap: 6px; font-size: 9.5px; color: var(--text-dim); letter-spacing: 0.02em; }
+  .sf-legend__sw { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+  .sf-legend__sw--delta { background: var(--badge-ar-bg); border: 2px solid var(--badge-ar-border); }
+  .sf-legend__sw--same { background: transparent; border: 1px solid var(--border-hi); }
+
+  .sf-rowbtn {
+    appearance: none; width: 100%; text-align: left; cursor: pointer;
+    display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 10px;
+    background: transparent; border: 0; border-left: 3px solid transparent;
+    padding: 8px 16px; color: var(--text); font-family: var(--ff-mono); font-size: 12px;
+    transition: background 140ms ease, border-color 140ms ease;
+  }
+  .sf-rowbtn:hover { background: var(--bg-row-hover); }
+  .sf-rowbtn:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; }
+  .sf-rowbtn[aria-current="true"] { background: var(--bg-row-hover); border-left-color: var(--accent); }
+  .sf-rowbtn__tick { width: 8px; height: 8px; border-radius: 2px; }
+  .sf-rowbtn[data-changed="false"] .sf-rowbtn__tick { background: transparent; border: 1px solid var(--border-hi); }
+  .sf-rowbtn[data-changed="true"] .sf-rowbtn__tick { background: var(--badge-ar-bg); border: 2px solid var(--badge-ar-border); width: 9px; height: 9px; }
+  .sf-rowbtn__idx { font-variant-numeric: tabular-nums; color: var(--text-dim); }
+  .sf-rowbtn[data-changed="true"] .sf-rowbtn__idx { color: var(--text-bright); font-weight: 700; }
+  /* the paired label+color DELTA chip on the index (M4 -- amber + literal text) */
+  .sf-chip {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 999px; line-height: 1; white-space: nowrap;
+  }
+  .sf-chip--delta { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border); }
+  .sf-chip--same  { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+
+  /* -- RIGHT: focused frame, 3-column diff. Asymmetric: delta column is loud -- */
+  .sf-focus { overflow-y: auto; min-height: 0; padding: 18px 22px 32px; }
+  .sf-focus__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .sf-focus__frame { margin: 0; font-size: 15px; letter-spacing: 0.03em; color: var(--text-bright); font-weight: 800; }
+  .sf-focus__frame b { font-family: var(--ff-mono); color: var(--accent); }
+  .sf-focus__ts { font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .sf-focus__answer {
+    margin: 8px 0 16px; font-size: 12.5px; line-height: 1.5; color: var(--text);
+    border-left: 2px solid var(--border-hi); padding-left: 12px; max-width: 78ch;
+  }
+  .sf-focus__answer b { color: var(--text-bright); }
+
+  .sf-cols { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 12px; }
+  .sf-col {
+    border: 1px solid var(--border); border-radius: 4px; background: var(--bg-row);
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .sf-col--delta { border-color: var(--border-hi); background: var(--bg-row-alt); }
+  .sf-col__head {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .sf-col--delta .sf-col__head { color: var(--badge-ar-fg); border-bottom-color: var(--border-hi); }
+  .sf-col__body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* verdict (action) badge -- paired action label + governance color */
+  .sf-actionbadge {
+    display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+    font-size: 13px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 6px 11px; border-radius: 2px; line-height: 1;
+    border: 2px solid currentColor; font-family: var(--ff-system);
+  }
+  .sf-actionbadge__dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .sf-actionbadge[data-action="ALLOW"]     { color: var(--c-allow); }
+  .sf-actionbadge[data-action="SUGGEST"]   { color: var(--c-suggest); }
+  .sf-actionbadge[data-action="GUIDE"]     { color: var(--c-guide); }
+  .sf-actionbadge[data-action="INTERVENE"] { color: var(--c-intervene); }
+  .sf-actionbadge[data-action="BLOCK"]     { color: var(--c-block); }
+  /* delta column action badge is LARGER (it is the operator's destination) */
+  .sf-col--delta .sf-actionbadge { font-size: 16px; padding: 8px 13px; }
+
+  .sf-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--ff-mono); font-size: 11.5px; }
+  .sf-kv dt { color: var(--text-dim); letter-spacing: 0.03em; }
+  .sf-kv dd { margin: 0; color: var(--text-bright); font-variant-numeric: tabular-nums; word-break: break-all; }
+  .sf-reason {
+    font-family: var(--ff-system); font-size: 12px; line-height: 1.5; color: var(--text);
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; padding: 9px 11px;
+  }
+  .sf-reason__cap { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); display: block; margin-bottom: 5px; }
+
+  /* the loud DELTA column: explicit moved fields + escalation-direction badge */
+  .sf-delta-row { display: flex; flex-direction: column; gap: 4px; }
+  .sf-delta-row__k { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); }
+  .sf-delta-row__v {
+    font-family: var(--ff-mono); font-size: 13px; font-weight: 700; color: var(--text-bright);
+    font-variant-numeric: tabular-nums; word-break: break-all;
+  }
+  .sf-delta-row__v--moved { color: var(--accent); }
+  .sf-delta-row__v--nil { color: var(--text-dim); font-weight: 400; font-style: italic; }
+  .sf-delta-sep { height: 1px; background: var(--border); margin: 2px 0; }
+
+  /* escalation-direction badge -- SECONDARY color channel; verdict text is primary */
+  .sf-dir {
+    display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 2px; line-height: 1;
+  }
+  .sf-dir__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .sf-dir--escalated { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); }
+  .sf-dir--relaxed   { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .sf-dir--unchanged { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+
+  /* token-level reasoning diff (added / removed) -- not a wall of prose */
+  .sf-rdiff { font-family: var(--ff-system); font-size: 12px; line-height: 1.55; }
+  .sf-rdiff__line { display: block; padding: 1px 0; }
+  .sf-rdiff ins { text-decoration: none; color: var(--badge-decided-fg); background: rgba(22, 163, 74, 0.12); border-radius: 2px; padding: 0 2px; }
+  .sf-rdiff del { text-decoration: line-through; color: var(--badge-blocked-fg); background: rgba(220, 38, 38, 0.12); border-radius: 2px; padding: 0 2px; }
+  .sf-rdiff__mark { font-family: var(--ff-mono); font-weight: 700; margin-right: 6px; }
+  .sf-rdiff__mark--add { color: var(--badge-decided-fg); }
+  .sf-rdiff__mark--del { color: var(--badge-blocked-fg); }
+
+  .sf-unchanged-note {
+    font-size: 11.5px; font-style: italic; color: var(--text-dim);
+    border: 1px dashed var(--border); border-radius: 3px; padding: 9px 11px; background: var(--bg-card);
+  }
+
+  /* keyboard cheat-strip pinned to the drawer foot */
+  .sf-keys {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 9px 22px; border-top: 1px solid var(--border); background: var(--bg-row-alt);
+    font-size: 10.5px; color: var(--text-dim);
+  }
+  .sf-keys kbd {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--text-bright);
+    background: var(--bg-row); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 3px; padding: 1px 6px; margin-right: 4px;
+  }
+  .sf-keys__grp { display: inline-flex; align-items: center; gap: 4px; }
+
+  .sf-sr-only {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+    clip: rect(0 0 0 0); overflow: hidden; white-space: nowrap;
+  }
+
+  @media (max-width: 720px) {
+    .sf-body { grid-template-columns: 1fr; }
+    .sf-rail { max-height: 32vh; border-right: 0; border-bottom: 1px solid var(--border); }
+    .sf-cols { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <main class="shell">
+    <div class="sf-doc-head">
+      <div>
+        <h1 class="sf-doc-title">SOAK Replay Forensics -- MVP</h1>
+        <p class="sf-doc-sub">
+          A side-by-side decision-delta drawer for root-causing a governance
+          surprise. Answer "which frame in this recorded session changed, and
+          what exactly differs between what was originally decided and what the
+          engine logic yields on replay?" in one glance + one click -- no log
+          archaeology, no soak re-run, no model cost.
+        </p>
+      </div>
+      <div class="sf-pillrow">
+        <span class="sf-beta-pill"><span class="sf-beta-pill__dot" aria-hidden="true"></span>BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+        <div class="sf-toggle">
+          <span class="sf-toggle__label" id="sf-toggle-label">Replay Forensics</span>
+          <button id="sf-switch" class="sf-switch" role="switch" aria-checked="true"
+                  aria-labelledby="sf-toggle-label" type="button"></button>
+          <span class="sf-switch__state" id="sf-switch-state" data-on="true">ON</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="sf-amend">
+      <span class="sf-amend__tag">build gated on ADR-18 amendment</span>
+      <span class="sf-amend__text">
+        UI is approvable now. The <b>build</b> is gated: this MVP ships as a
+        READ-ONLY diff of two already-persisted decision snapshots from gov.db
+        (<code>frozenTouch=false</code>, amendment-free). The full engine-replay
+        variant -- re-streaming through <code>governance.py EngineRegistry.evaluate()</code>,
+        a FROZEN surface (ADR-18 Rule 1, no new caller paths) -- is deferred to
+        SOAK-2b and requires an ADR-18 amendment permitting a replay-audit caller
+        path. Approve the approach; the read-only build is unblocked, engine
+        replay waits on the amendment.
+      </span>
+    </p>
+
+    <p class="sf-doc-sub" style="margin-top:22px;">
+      The drawer is a forensics tool, not an ambient pane -- it stays dark until
+      you deliberately open it. Toggle OFF above to see the affordance disable
+      (zero runtime cost: nothing renders, no fetch / timer / SSE registers).
+      Click <b>FORENSICS</b> in the footer below to open it.
+    </p>
+  </main>
+
+  <!-- ===== faux dashboard footer carrying the FORENSICS affordance ===== -->
+  <footer class="sf-footer">
+    <span class="sf-footer__meta" id="sf-foot-meta">gov.db: 21065 decisions &middot; scope rendered FROM DATA</span>
+    <span class="sf-footer__spacer"></span>
+    <span class="sf-footer__hint" id="sf-foot-hint">recorded session ready for forensics</span>
+    <button id="sf-trigger" class="sf-trigger" type="button" aria-haspopup="dialog"
+            aria-label="Open Replay Forensics (Frame-D drawer)">
+      <span class="sf-trigger__dot" aria-hidden="true"></span>FORENSICS
+    </button>
+    <span id="sf-offnote" class="sf-offnote" hidden>FORENSICS OFF -- enable in Settings &gt; BETA features</span>
+  </footer>
+
+  <!-- ===== the drawer ===== -->
+  <div id="sf-scrim" class="sf-scrim" hidden></div>
+  <aside id="sf-panel" class="sf-panel" role="dialog" aria-modal="true"
+         aria-labelledby="sf-title" tabindex="-1" hidden>
+
+    <div class="sf-sr-only" aria-live="polite" id="sf-live"></div>
+
+    <header class="sf-head">
+      <div class="sf-head__titlewrap">
+        <h2 id="sf-title" class="sf-head__title">Replay Forensics -- Decision Delta</h2>
+        <p class="sf-head__sub">Original (recorded) vs replayed decision, per frame -- read-only gov.db diff</p>
+        <span class="sf-beta">
+          BETA -- default OFF, toggled in Settings &gt; BETA features
+          <span class="sf-beta__src" id="sf-srclabel" data-mock="true">-- SAMPLE DATA</span>
+        </span>
+      </div>
+      <button id="sf-close" class="sf-close" type="button" aria-label="Close Replay Forensics (Esc)">
+        <span aria-hidden="true">x</span>
+      </button>
+    </header>
+
+    <!-- session-meta strip: identity FROM DATA + visible self-exclusion -->
+    <div class="sf-meta">
+      <span><span class="sf-meta__k">recorded</span> <span class="sf-meta__v" id="sf-rec">rec-20260611T0915-7f3a</span></span>
+      <span class="sf-meta__sep" aria-hidden="true">|</span>
+      <span><span class="sf-meta__k">project</span> <span class="sf-meta__v" id="sf-slug">webapp-frontend</span></span>
+      <span class="sf-meta__sep" aria-hidden="true">|</span>
+      <span><span class="sf-meta__k">session</span> <span class="sf-meta__v" id="sf-sid">a1b2c3d4-0001</span></span>
+      <span class="sf-meta__sep" aria-hidden="true">|</span>
+      <span><span class="sf-meta__k">frames</span> <span class="sf-meta__v" id="sf-fcount">56</span></span>
+      <span class="sf-meta__sep" aria-hidden="true">|</span>
+      <span><span class="sf-meta__k">changed</span> <span class="sf-meta__v" id="sf-ccount">2</span></span>
+      <span class="sf-meta__sep" aria-hidden="true">|</span>
+      <span class="sf-meta__excl" id="sf-excl" title="SM-self rows excluded at the SQL WHERE (project_slug NOT IN streamManager AND session_id != self)">excluded: 1 self</span>
+    </div>
+
+    <div class="sf-body">
+      <!-- LEFT: frame index rail. CHANGED frames pre-elevated; quiet rows are hairline ticks. -->
+      <nav class="sf-rail" aria-label="Frame index -- changed frames are badged">
+        <div class="sf-rail__head">
+          <span>Frame index</span>
+          <span class="sf-rail__hint">56 frames</span>
+        </div>
+        <div class="sf-rail__legend" aria-hidden="true">
+          <span class="sf-legend__item"><span class="sf-legend__sw sf-legend__sw--delta"></span>DELTA (changed)</span>
+          <span class="sf-legend__item"><span class="sf-legend__sw sf-legend__sw--same"></span>same</span>
+        </div>
+        <div id="sf-railrows" role="listbox" aria-label="Recorded session frames"></div>
+      </nav>
+
+      <!-- RIGHT: focused frame, three-column diff -->
+      <section class="sf-focus" aria-label="Focused frame delta" id="sf-focus"></section>
+    </div>
+
+    <div class="sf-keys" aria-hidden="true">
+      <span class="sf-keys__grp"><kbd>up</kbd><kbd>down</kbd> / <kbd>j</kbd><kbd>k</kbd> move frame</span>
+      <span class="sf-keys__grp"><kbd>n</kbd><kbd>p</kbd> next / prev CHANGED frame</span>
+      <span class="sf-keys__grp"><kbd>Enter</kbd> focus diff</span>
+      <span class="sf-keys__grp"><kbd>Esc</kbd> close</span>
+    </div>
+  </aside>
+
+<script>
+  "use strict";
+
+  /* =========================================================================
+     MOCK DATA -- the GET /api/soak/replay/{recorded_session_uuid} contract the
+     UI consumes. usedMockData=true -> "SAMPLE DATA" label. Domain-agnostic
+     invented slugs only; one SM-self row is carried in the SOURCE set below to
+     prove the self-exclude path (it never reaches the frame list).
+  ========================================================================= */
+
+  // SOURCE rows the read SQL sweeps; the SM-self row is excluded at the WHERE
+  // (project_slug NOT IN {streamManager} AND session_id != self). Shown only to
+  // make the self-exclusion a VISIBLE feature, not a silent filter.
+  var SOURCE_ROWS = [
+    { session_id: "a1b2c3d4-0001", project_slug: "webapp-frontend", self: false },
+    { session_id: "a1b2c3d4-self", project_slug: "streamManager",   self: true  } // EXCLUDED (G2)
+  ];
+  var EXCLUDED_SELF = SOURCE_ROWS.filter(function (r) { return r.self; }).length;
+
+  var REPLAY = {
+    recorded_session_uuid: "rec-20260611T0915-7f3a",
+    session_id: "a1b2c3d4-0001",
+    project_slug: "webapp-frontend",   // rendered FROM DATA (M16)
+    excluded_self: EXCLUDED_SELF,      // VISIBLE self-exclusion count
+    frame_count: 56,
+    changed_count: 2,
+    usedMockData: true,
+    frames: buildFrames()
+  };
+
+  // Build 56 frames; only frame 11 and frame 34 actually moved (the scarce
+  // signal). The rest are unchanged ticks so the index demonstrates "2 of 56".
+  function buildFrames() {
+    var frames = [];
+    var baseTs = Date.UTC(2026, 5, 11, 9, 15, 0) / 1000;
+    for (var i = 0; i < 56; i++) {
+      if (i === 11) {
+        frames.push({
+          frame_idx: 11, changed: true, ts: baseTs + 11 * 4,
+          original: { action: "SUGGEST", layer: 0, confidence: 0.91, matched_hash: "9f2a1c00",
+                      reasoning: "routine edit; known-safe pattern" },
+          replayed: { action: "GUIDE", layer: 2, confidence: 0.62, matched_hash: "be07d4a1",
+                      reasoning: "learn-mode bias raised caution; pattern demoted" },
+          delta: { action_delta: "SUGGEST -> GUIDE", layer_delta: "L0 -> L2",
+                   confidence_delta: -0.29, matched_hash_delta: "9f2a1c00 -> be07d4a1",
+                   reasoning_changed: true, direction: "escalated" }
+        });
+      } else if (i === 34) {
+        frames.push({
+          frame_idx: 34, changed: true, ts: baseTs + 34 * 4,
+          original: { action: "INTERVENE", layer: 3, confidence: 0.55, matched_hash: "44cc88de",
+                      reasoning: "ambiguous shell write; held for review" },
+          replayed: { action: "GUIDE", layer: 2, confidence: 0.78, matched_hash: "44cc88de",
+                      reasoning: "allow-pattern graduated; ambiguity resolved to guidance" },
+          delta: { action_delta: "INTERVENE -> GUIDE", layer_delta: "L3 -> L2",
+                   confidence_delta: 0.23, matched_hash_delta: null,
+                   reasoning_changed: true, direction: "relaxed" }
+        });
+      } else {
+        var actions = ["ALLOW", "ALLOW", "ALLOW", "SUGGEST"];
+        var a = actions[i % actions.length];
+        var conf = a === "ALLOW" ? 0.97 : 0.9;
+        var hash = ("00" + ((i * 2654435761) >>> 0).toString(16)).slice(-8);
+        var reason = a === "ALLOW" ? "no-op read" : "routine edit; known-safe pattern";
+        frames.push({
+          frame_idx: i, changed: false, ts: baseTs + i * 4,
+          original: { action: a, layer: 0, confidence: conf, matched_hash: hash, reasoning: reason },
+          replayed: { action: a, layer: 0, confidence: conf, matched_hash: hash, reasoning: reason },
+          delta: { action_delta: null, layer_delta: null, confidence_delta: 0.0,
+                   matched_hash_delta: null, reasoning_changed: false, direction: "unchanged" }
+        });
+      }
+    }
+    return frames;
+  }
+
+  /* ========================== DOM refs + state ============================ */
+  var $ = function (id) { return document.getElementById(id); };
+  var panel = $("sf-panel"), scrim = $("sf-scrim"), trigger = $("sf-trigger");
+  var closeBtn = $("sf-close"), railRows = $("sf-railrows"), focusEl = $("sf-focus");
+  var live = $("sf-live");
+  var sw = $("sf-switch"), swState = $("sf-switch-state"), offNote = $("sf-offnote");
+
+  var flagOn = true;       // BETA flag (client-side, default ON in the mockup to show populated)
+  var open = false;
+  var lastFocused = null;
+  var selectedIdx = 11;    // auto-focus the FIRST CHANGED frame, not frame 0
+
+  function changedIndices() {
+    return REPLAY.frames.filter(function (f) { return f.changed; }).map(function (f) { return f.frame_idx; });
+  }
+
+  /* ============================ BETA toggle ============================== */
+  function applyFlag() {
+    sw.setAttribute("aria-checked", flagOn ? "true" : "false");
+    swState.textContent = flagOn ? "ON" : "OFF";
+    swState.setAttribute("data-on", flagOn ? "true" : "false");
+    trigger.disabled = !flagOn;
+    offNote.hidden = flagOn;
+    if (!flagOn && open) closeDrawer();
+  }
+  sw.addEventListener("click", function () { flagOn = !flagOn; applyFlag(); });
+
+  /* ===================== render the frame-index rail ===================== */
+  function renderRail() {
+    railRows.innerHTML = "";
+    REPLAY.frames.forEach(function (f) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "sf-rowbtn";
+      b.setAttribute("role", "option");
+      b.setAttribute("data-changed", f.changed ? "true" : "false");
+      b.setAttribute("data-idx", String(f.frame_idx));
+      b.setAttribute("aria-current", f.frame_idx === selectedIdx ? "true" : "false");
+      b.setAttribute("aria-selected", f.frame_idx === selectedIdx ? "true" : "false");
+
+      var tick = document.createElement("span");
+      tick.className = "sf-rowbtn__tick";
+      tick.setAttribute("aria-hidden", "true");
+
+      var idx = document.createElement("span");
+      idx.className = "sf-rowbtn__idx";
+      idx.textContent = "frame " + String(f.frame_idx).padStart(2, "0");
+
+      var chip = document.createElement("span");
+      chip.className = "sf-chip " + (f.changed ? "sf-chip--delta" : "sf-chip--same");
+      chip.textContent = f.changed ? "DELTA" : "same";
+
+      b.appendChild(tick); b.appendChild(idx); b.appendChild(chip);
+      b.addEventListener("click", function () { selectFrame(f.frame_idx); });
+      railRows.appendChild(b);
+    });
+  }
+
+  /* ===================== render the focused 3-column diff ===================== */
+  function actionBadge(action, big) {
+    return '<span class="sf-actionbadge" data-action="' + action + '">'
+         + '<span class="sf-actionbadge__dot" aria-hidden="true"></span>' + action + "</span>";
+  }
+  function frameColumn(title, d) {
+    return ''
+      + '<div class="sf-col">'
+      +   '<div class="sf-col__head"><span>' + title + '</span></div>'
+      +   '<div class="sf-col__body">'
+      +     actionBadge(d.action)
+      +     '<dl class="sf-kv">'
+      +       '<dt>layer</dt><dd>L' + d.layer + '</dd>'
+      +       '<dt>confidence</dt><dd>' + d.confidence.toFixed(2) + '</dd>'
+      +       '<dt>matched_hash</dt><dd>' + d.matched_hash + '</dd>'
+      +     '</dl>'
+      +     '<div class="sf-reason"><span class="sf-reason__cap">reasoning</span>' + escapeHtml(d.reasoning) + '</div>'
+      +   '</div>'
+      + '</div>';
+  }
+  function dirBadge(dir) {
+    var label = dir === "escalated" ? "ESCALATED" : dir === "relaxed" ? "RELAXED" : "UNCHANGED";
+    return '<span class="sf-dir sf-dir--' + dir + '"><span class="sf-dir__dot" aria-hidden="true"></span>' + label + "</span>";
+  }
+  function deltaCell(label, value, moved) {
+    var cls = value == null ? "sf-delta-row__v sf-delta-row__v--nil"
+            : moved ? "sf-delta-row__v sf-delta-row__v--moved" : "sf-delta-row__v";
+    var v = value == null ? "no change" : value;
+    return '<div class="sf-delta-row"><span class="sf-delta-row__k">' + label + '</span>'
+         + '<span class="' + cls + '">' + escapeHtml(String(v)) + '</span></div>';
+  }
+  function reasoningDiff(f) {
+    if (!f.delta.reasoning_changed) {
+      return '<div class="sf-unchanged-note">reasoning unchanged on replay</div>';
+    }
+    return ''
+      + '<div class="sf-rdiff">'
+      +   '<span class="sf-rdiff__line"><span class="sf-rdiff__mark sf-rdiff__mark--del" aria-hidden="true">-</span>'
+      +     '<del>' + escapeHtml(f.original.reasoning) + '</del></span>'
+      +   '<span class="sf-rdiff__line"><span class="sf-rdiff__mark sf-rdiff__mark--add" aria-hidden="true">+</span>'
+      +     '<ins>' + escapeHtml(f.replayed.reasoning) + '</ins></span>'
+      + '</div>';
+  }
+  function deltaColumn(f) {
+    var d = f.delta;
+    if (!f.changed) {
+      return ''
+        + '<div class="sf-col sf-col--delta">'
+        +   '<div class="sf-col__head"><span>Delta</span></div>'
+        +   '<div class="sf-col__body">'
+        +     dirBadge("unchanged")
+        +     '<div class="sf-unchanged-note">No replay delta. action / layer / matched_hash / reasoning all match the recorded decision. This frame is a quiet tick in the index.</div>'
+        +   '</div>'
+        + '</div>';
+    }
+    var confStr = (d.confidence_delta > 0 ? "+" : "") + d.confidence_delta.toFixed(2);
+    return ''
+      + '<div class="sf-col sf-col--delta">'
+      +   '<div class="sf-col__head"><span>Delta -- what moved</span>' + dirBadge(d.direction) + '</div>'
+      +   '<div class="sf-col__body">'
+      +     deltaCell("action_delta", d.action_delta, true)
+      +     '<div class="sf-delta-sep" aria-hidden="true"></div>'
+      +     deltaCell("layer_delta", d.layer_delta, true)
+      +     '<div class="sf-delta-sep" aria-hidden="true"></div>'
+      +     deltaCell("confidence_delta", confStr, d.confidence_delta !== 0)
+      +     '<div class="sf-delta-sep" aria-hidden="true"></div>'
+      +     deltaCell("matched_hash_delta", d.matched_hash_delta, d.matched_hash_delta != null)
+      +     '<div class="sf-delta-sep" aria-hidden="true"></div>'
+      +     '<div class="sf-delta-row"><span class="sf-delta-row__k">reasoning_delta</span></div>'
+      +     reasoningDiff(f)
+      +   '</div>'
+      + '</div>';
+  }
+
+  function renderFocus() {
+    var f = frameByIdx(selectedIdx);
+    if (!f) { focusEl.innerHTML = ""; return; }
+    var tsIso = new Date(f.ts * 1000).toISOString().replace("T", " ").replace(".000Z", "Z");
+    var answer = f.changed
+      ? '<b>This frame changed.</b> The recorded verdict was <b>' + f.original.action
+        + '</b>; replay yields <b>' + f.replayed.action + '</b>. The delta column (right) names exactly what moved.'
+      : '<b>This frame is unchanged.</b> Original and replayed decisions match -- nothing to root-cause here.';
+    focusEl.innerHTML = ''
+      + '<div class="sf-focus__head">'
+      +   '<h3 class="sf-focus__frame">Frame <b>' + String(f.frame_idx).padStart(2, "0") + '</b>'
+      +     (f.changed ? ' <span class="sf-chip sf-chip--delta">DELTA</span>' : ' <span class="sf-chip sf-chip--same">same</span>') + '</h3>'
+      +   '<span class="sf-focus__ts">' + tsIso + '</span>'
+      + '</div>'
+      + '<p class="sf-focus__answer">' + answer + '</p>'
+      + '<div class="sf-cols">'
+      +   frameColumn("Original -- recorded", f.original)
+      +   frameColumn("Replayed", f.replayed)
+      +   deltaColumn(f)
+      + '</div>';
+  }
+
+  function frameByIdx(idx) {
+    for (var i = 0; i < REPLAY.frames.length; i++) if (REPLAY.frames[i].frame_idx === idx) return REPLAY.frames[i];
+    return null;
+  }
+
+  function selectFrame(idx) {
+    selectedIdx = idx;
+    var rows = railRows.querySelectorAll(".sf-rowbtn");
+    rows.forEach(function (r) {
+      var on = Number(r.getAttribute("data-idx")) === idx;
+      r.setAttribute("aria-current", on ? "true" : "false");
+      r.setAttribute("aria-selected", on ? "true" : "false");
+      if (on) r.scrollIntoView({ block: "nearest" });
+    });
+    renderFocus();
+    var f = frameByIdx(idx);
+    if (f) {
+      live.textContent = f.changed
+        ? "Frame " + idx + " -- " + f.original.action + " changed to " + f.replayed.action + "."
+        : "Frame " + idx + " -- unchanged.";
+    }
+  }
+
+  /* ===================== drawer open / close + focus trap ===================== */
+  function openDrawer() {
+    if (!flagOn || open) return;
+    lastFocused = document.activeElement;
+    open = true;
+    scrim.hidden = false; panel.hidden = false;
+    // refresh source label (LIVE vs SAMPLE DATA)
+    $("sf-srclabel").textContent = REPLAY.usedMockData ? "-- SAMPLE DATA" : "-- LIVE";
+    $("sf-srclabel").setAttribute("data-mock", REPLAY.usedMockData ? "true" : "false");
+    renderRail();
+    selectFrame(selectedIdx);
+    panel.focus();
+  }
+  function closeDrawer() {
+    if (!open) return;
+    open = false;
+    scrim.hidden = true; panel.hidden = true;
+    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  }
+
+  function focusables() {
+    return Array.prototype.slice.call(
+      panel.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])')
+    ).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  }
+
+  panel.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+    if (e.key === "Tab") {
+      var f = focusables(); if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      return;
+    }
+    var idxs = REPLAY.frames.map(function (f2) { return f2.frame_idx; });
+    var pos = idxs.indexOf(selectedIdx);
+    if (e.key === "ArrowDown" || e.key === "j") {
+      e.preventDefault(); if (pos < idxs.length - 1) selectFrame(idxs[pos + 1]);
+    } else if (e.key === "ArrowUp" || e.key === "k") {
+      e.preventDefault(); if (pos > 0) selectFrame(idxs[pos - 1]);
+    } else if (e.key === "n") {
+      e.preventDefault(); jumpChanged(1);
+    } else if (e.key === "p") {
+      e.preventDefault(); jumpChanged(-1);
+    } else if (e.key === "Enter") {
+      e.preventDefault(); focusEl.setAttribute("tabindex", "-1"); focusEl.focus();
+    }
+  });
+
+  // n / p -- the forensics shortcut: jump to next / prev CHANGED frame, skip noise
+  function jumpChanged(dir) {
+    var ch = changedIndices();
+    if (!ch.length) return;
+    var target = null;
+    if (dir > 0) {
+      for (var i = 0; i < ch.length; i++) if (ch[i] > selectedIdx) { target = ch[i]; break; }
+      if (target == null) target = ch[0];
+    } else {
+      for (var j = ch.length - 1; j >= 0; j--) if (ch[j] < selectedIdx) { target = ch[j]; break; }
+      if (target == null) target = ch[ch.length - 1];
+    }
+    selectFrame(target);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+    });
+  }
+
+  /* ============================== wire-up ================================ */
+  trigger.addEventListener("click", openDrawer);
+  closeBtn.addEventListener("click", closeDrawer);
+  scrim.addEventListener("click", closeDrawer);
+  applyFlag();
+</script>
+</body>
+</html>

@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<!--
+  session-quick-filter-presets.html -- KingMode BETA mockup for feature #36
+  "Session Picker: Favorites + Filters + Ctrl+K Hotkey" / key
+  "session-quick-filter-presets".
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written
+  (directive #2). Self-contained: inline <style> + inline <script>, no external
+  assets / CDNs / fonts. System font stack only. ASCII-only (no smart quotes, no
+  em-dashes -- written "--", no box-drawing). The CSS variables below are lifted
+  VERBATIM from dashboard/ui-next/src/styles/theme.css + calm.css so this
+  previews the REAL tokens across obsidian / phosphor / paper.
+
+  WHAT THIS DEMONSTRATES (three integrated affordances over the EXISTING header
+  SessionPicker -- NOT a new pane, NOT a new frame):
+    1) GLANCE  -- a thin chip row above the picker: ALL / ACTIVE / OPEN ACTIONS
+       (mutually-exclusive radiogroup). 'OPEN ACTIONS' narrows the option list
+       to sessions whose actionCountsBySession value > 0 -- ZERO new backend.
+    2) CLICK   -- a favorite-star toggle per option; starred sessions sort to
+       the top of BOTH picker + rail and persist per browser-origin in
+       localStorage (sm.next.* idiom).
+    3) KEY     -- Ctrl+K (Cmd+K mac) focus-opens an inline fuzzy-match search
+       over project_slug rendered FROM DATA; type, Enter switches scope.
+
+  M4 (paired label + colour, never colour alone): every chip is TEXT-FIRST --
+  the NAME and a literal count suffix ("OPEN ACTIONS 2") are always rendered;
+  the accent fill is a SECOND channel on the active chip only. The OPEN-ACTIONS
+  chip pairs the EXISTING amber action-required identity (--badge-ar-*) with the
+  word + integer; it carries NO pulse and lives in chrome, so it can never be
+  mistaken for an M2 escalation. The favorite star pairs a filled glyph PLUS
+  aria-pressed PLUS the word 'favorite' in the aria-label; its colour is a
+  desaturated accent DELIBERATELY distinct from amber so a favorite never reads
+  as an action.
+
+  POLARITY (G2): ownSessionId is present in the mock ONLY to prove it is filtered
+  OUT -- it must never appear as an option, a favorite, or a search hit. The live
+  store (session.js setSessions) already self-excludes; this feature consumes the
+  cleaned list and never re-implements the gate. Ctrl+K Enter routes through the
+  guarded selectSession(), which refuses to resolve to the SM-self id.
+
+  M16 (domain-agnostic): project_slugs here are invented generic names
+  (aurora-ingest / borealis-api / cobalt-batch / delta-worker) -- never a
+  monitored-project's real slug. Governed-target identity is rendered FROM DATA.
+
+  BETA: default OFF, gated by the beta-flag registry under a NEW key
+  'session-quick-filter-presets' #36 in the existing 'session' group. (The key
+  'quick-filters' is ALREADY TAKEN by BETA #22 HITL-posture presets -- a DIFFERENT
+  feature; a new key avoids silently cross-gating the two.) The whole chip rail +
+  star toggles + Ctrl+K listener render nothing / attach nothing while OFF. The
+  inline header toggle here previews that gate client-side.
+-->
+<html lang="en" data-theme="obsidian" data-motion="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Session Picker: Favorites + Filters + Ctrl+K (#36)</title>
+<style>
+  /* === theme tokens lifted verbatim from theme.css ===================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+  }
+  [data-theme="obsidian"] {
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018;
+    --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,0.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,0.09);
+    --accent-glow:rgba(245,158,11,0.35);
+    /* active-chip ink: warm near-black on amber fill (8.6:1 on #f59e0b),
+       lifted verbatim from HitlModeToggle.svelte .hmt__seg.is-active. */
+    --on-accent:#1a1206;
+    /* favorite star -- a DESATURATED accent, deliberately distinct from the
+       amber action hue so a starred session never reads as an action. */
+    --fav-ink:#c8a15a;
+  }
+  [data-theme="phosphor"] {
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03;
+    --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,0.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,0.07);
+    --accent-glow:rgba(57,255,20,0.3);
+    --on-accent:#021004;
+    --fav-ink:#8fd07a;
+  }
+  [data-theme="paper"] {
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea;
+    --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,0.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,0.07);
+    --accent-glow:rgba(192,57,43,0.2);
+    --on-accent:#fffefb;
+    /* paper favorite: a darkened slate-brown so it stays AA on the cream row
+       AND stays clearly distinct from the editorial-red action hue. */
+    --fav-ink:#8a5a2a;
+  }
+  /* ACTION-REQUIRED amber badge tokens (theme-invariant, FROZEN -- M4). These
+     are the SAME tokens the SessionRail action edge uses; the OPEN-ACTIONS chip
+     reuses them so 'open actions' reads with the established amber identity --
+     no new colour is minted. The amber lives in CHROME (a chip), carries no
+     pulse, and is paired with the word + integer, so it is unambiguously NOT an
+     M2 foreground escalation. */
+  :root {
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    /* OBSERVING slate -- the ACTIVE chip dot + resting tone (HITL-off idiom). */
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+    /* paper darken precedents the sibling beta components carry */
+    --space-2:4px; --space-3:6px; --space-4:10px; --space-5:14px;
+    --radius-soft:4px; --radius-sharp:2px; --hairline:1px;
+    --fs-meta:13px; --fs-chrome:11px; --fs-badge:12px; --lh-body:1.5;
+    --t-calm:180ms ease;
+  }
+  [data-theme="paper"] {
+    /* paper amber darken-to so the chip text clears AAA on the light surface */
+    --badge-ar-fg:#9a3412;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 0 0 4rem;
+  }
+
+  /* === page chrome ===================================================== */
+  .page { max-width: 980px; margin: 0 auto; padding: 1.5rem 1.25rem; }
+
+  .titlebar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
+    padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+  }
+  .titlebar h1 {
+    margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-bright); flex: 1 1 auto; min-width: 18rem;
+  }
+  .titlebar .sub {
+    display: block; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.04em;
+    color: var(--text-dim); text-transform: none; margin-top: 0.15rem;
+  }
+
+  /* BETA pill (paired text + colour) -- uses the FROZEN amber identity. */
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border); border-radius: 3px;
+    padding: 3px 8px; white-space: nowrap;
+  }
+
+  /* theme + gate controls */
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.1rem;
+    margin: 1rem 0 1.5rem;
+  }
+  .controls .grp { display: inline-flex; align-items: center; gap: 0.45rem; }
+  .controls label.cap {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .seg { display: inline-flex; gap: 2px; }
+  .seg button {
+    appearance: none; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    background: var(--bg-row); color: var(--text-ui);
+    border: 1px solid var(--border); border-radius: var(--radius-soft);
+    padding: 4px 9px; transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .seg button[aria-pressed="true"] {
+    background: var(--accent); color: var(--on-accent);
+    border-color: var(--accent); font-weight: 800;
+  }
+
+  /* the on/off gate toggle -- previews default-OFF behaviour */
+  .gate {
+    display: inline-flex; align-items: center; gap: 0.55rem;
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .switch {
+    --w: 42px; --h: 22px;
+    appearance: none; cursor: pointer; position: relative;
+    width: var(--w); height: var(--h); border-radius: 999px;
+    background: var(--bg-row); border: 1px solid var(--border);
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--text-ui); transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch[aria-checked="true"] {
+    background: var(--accent-dim); border-color: var(--accent);
+  }
+  .switch[aria-checked="true"]::after {
+    transform: translateX(20px); background: var(--accent);
+  }
+  .gate .state {
+    min-width: 3.2em; color: var(--text-bright);
+  }
+  .gate .state[data-on="false"] { color: var(--text-dim); }
+
+  /* === the simulated header masthead (the integration site) ============ */
+  .masthead {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 1rem 1rem;
+    margin-bottom: 1.1rem;
+  }
+  .masthead__brand {
+    display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.85rem;
+    padding-bottom: 0.7rem; border-bottom: 1px solid var(--border);
+  }
+  .masthead__logo {
+    font-family: var(--ff-mono); font-size: 14px; font-weight: 800;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent);
+  }
+  .masthead__note {
+    font-size: 11px; color: var(--text-dim); letter-spacing: 0.02em;
+  }
+
+  /* the header scope cluster: chip rail (above) + native picker (below),
+     LEFT-aligned to the picker's left edge -- asymmetric by intent (NOT
+     centered); this is where the feature lives. */
+  .scope { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; }
+
+  /* --- chip rail (GLANCE) ------------------------------------------------ */
+  .chiprail {
+    display: inline-flex; align-items: stretch; gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .chip {
+    appearance: none; cursor: pointer; position: relative;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    background: var(--bg-row); color: var(--text-ui);
+    border: 1px solid var(--border); border-radius: var(--radius-soft);
+    padding: 5px 9px;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+  }
+  .chip:hover { background: var(--bg-row-hover); border-color: var(--border-hi); }
+  .chip .dot {
+    width: 0.42rem; height: 0.42rem; border-radius: 50%;
+    background: var(--badge-obs-border); flex: 0 0 auto;
+  }
+  /* the literal count suffix is load-bearing TEXT, not decoration (M4). */
+  .chip .count {
+    font-variant-numeric: tabular-nums; font-weight: 800;
+    color: var(--text-bright);
+    border-left: 1px solid var(--border); padding-left: 0.4rem; margin-left: 0.1rem;
+  }
+  /* active chip -- accent fill + on-accent ink (proven amber pairing). */
+  .chip[aria-checked="true"] {
+    background: var(--accent); color: var(--on-accent);
+    border-color: var(--accent);
+  }
+  .chip[aria-checked="true"] .dot { background: var(--on-accent); opacity: 0.85; }
+  .chip[aria-checked="true"] .count { color: var(--on-accent); border-color: rgba(0,0,0,0.25); }
+
+  /* OPEN-ACTIONS chip carries the EXISTING amber action identity (chrome, no
+     pulse) so it reads as "action required" WITHOUT being an M2 escalation. */
+  .chip[data-kind="actions"] {
+    color: var(--badge-ar-fg); border-color: var(--badge-ar-border);
+    background: var(--badge-ar-bg);
+  }
+  [data-theme="obsidian"] .chip[data-kind="actions"],
+  [data-theme="phosphor"] .chip[data-kind="actions"] {
+    /* on the dark themes keep the chip on the dark surface, amber ink + edge */
+    background: var(--accent-dim);
+  }
+  .chip[data-kind="actions"] .dot { background: var(--badge-ar-fg); }
+  .chip[data-kind="actions"] .count { color: var(--badge-ar-fg); border-color: var(--badge-ar-border); }
+  .chip[data-kind="actions"][aria-checked="true"] {
+    background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+  }
+  .chip[data-kind="actions"][aria-checked="true"] .dot { background: var(--on-accent); }
+  .chip[data-kind="actions"][aria-checked="true"] .count { color: var(--on-accent); border-color: rgba(0,0,0,0.25); }
+
+  /* --- native picker (the preserved a11y floor) ------------------------- */
+  .pickerrow { display: inline-flex; align-items: center; gap: var(--space-3); }
+  .pickerrow .pick-label {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .pickfield { position: relative; display: inline-flex; align-items: center; }
+  select.pick {
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+    min-width: 16rem; max-width: 30ch;
+    background: var(--bg-card); color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: var(--radius-soft);
+    font-family: var(--ff-system); font-size: var(--fs-meta); font-weight: 480;
+    letter-spacing: 0.01em; line-height: 1.2; padding: 6px 1.7rem 6px 9px;
+    cursor: pointer; text-overflow: ellipsis;
+    transition: border-color var(--t-calm), background var(--t-calm);
+  }
+  select.pick:hover { border-color: var(--border-hi); }
+  .pickfield .chev {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-size: 0.7rem; color: var(--text-ui); pointer-events: none;
+  }
+  .kbdhint {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--text-dim);
+    letter-spacing: 0.04em; white-space: nowrap;
+  }
+  .kbdhint kbd {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--text-bright);
+    background: var(--bg-row); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px;
+  }
+
+  /* --- inline Ctrl+K search (KEY) --------------------------------------- */
+  .search {
+    display: none; align-items: center; gap: 0.5rem;
+    background: var(--bg-row); border: 1px solid var(--border-hi);
+    border-radius: var(--radius-soft); padding: 5px 9px; min-width: 16rem;
+  }
+  .search.open { display: inline-flex; }
+  .search input {
+    appearance: none; background: transparent; border: 0; outline: none;
+    color: var(--text-bright); font-family: var(--ff-mono); font-size: 13px;
+    letter-spacing: 0.01em; width: 11rem;
+  }
+  .search input::placeholder { color: var(--text-dim); }
+  .search .tag {
+    font-family: var(--ff-mono); font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .results {
+    margin-top: var(--space-2);
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-soft); overflow: hidden;
+    max-width: 26rem; display: none;
+  }
+  .results.open { display: block; }
+  .results .opt {
+    display: flex; align-items: center; gap: 0.5rem; width: 100%;
+    appearance: none; cursor: pointer; text-align: left;
+    background: transparent; border: 0; border-bottom: 1px solid var(--border);
+    padding: 7px 10px; color: var(--text); font-size: 13px;
+  }
+  .results .opt:last-child { border-bottom: 0; }
+  .results .opt[aria-selected="true"], .results .opt:hover {
+    background: var(--bg-row-hover);
+  }
+  .results .opt .slug {
+    font-family: var(--ff-mono); color: var(--text-bright); font-weight: 600;
+  }
+  .results .opt .slug em {
+    font-style: normal; color: var(--accent); text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .results .opt .meta {
+    margin-left: auto; font-family: var(--ff-mono); font-size: 10px;
+    color: var(--text-dim); letter-spacing: 0.03em;
+  }
+  .results .none {
+    padding: 9px 10px; font-size: 12px; color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* === the body: simulated picker option list + the read-only rail ===== */
+  .grid {
+    display: grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr);
+    gap: 1.1rem; align-items: start;
+  }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.85rem 0.9rem 1rem;
+  }
+  .panel h2 {
+    margin: 0 0 0.15rem; font-size: 0.8rem; font-weight: 700;
+    letter-spacing: 0.03em; color: var(--text-bright);
+  }
+  .panel .lede {
+    margin: 0 0 0.7rem; font-size: 11px; color: var(--text-dim);
+    line-height: var(--lh-body);
+  }
+
+  /* the simulated open option list (mirrors what the <select> popup shows) */
+  .optlist { display: flex; flex-direction: column; gap: var(--space-2); }
+  .row {
+    display: flex; align-items: center; gap: 0.55rem;
+    background: var(--bg-row); border: 1px solid var(--border);
+    border-radius: var(--radius-soft); padding: 7px 9px;
+    transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .row:hover { background: var(--bg-row-hover); }
+  .row.is-scope {
+    border-color: var(--accent); background: var(--accent-dim);
+  }
+  .star {
+    appearance: none; cursor: pointer; flex: 0 0 auto;
+    width: 22px; height: 22px; line-height: 1; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid transparent; border-radius: 4px;
+    color: var(--text-ui); font-size: 14px;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .star:hover { border-color: var(--border); color: var(--fav-ink); }
+  .star[aria-pressed="true"] { color: var(--fav-ink); }
+  .row .slug {
+    font-family: var(--ff-mono); font-size: 13px; font-weight: 600;
+    color: var(--text-bright); letter-spacing: 0.01em;
+  }
+  .row .tags { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
+
+  /* paired label+colour badges on each row */
+  .badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-family: var(--ff-mono); font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 6px; white-space: nowrap;
+  }
+  .badge .bd { width: 0.4rem; height: 0.4rem; border-radius: 50%; flex: 0 0 auto; }
+  .badge--active {
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+  }
+  .badge--active .bd { background: var(--badge-obs-fg); }
+  .badge--ended {
+    color: var(--text-dim); background: transparent;
+    border: 1px dashed var(--border);
+  }
+  .badge--ended .bd { background: var(--text-dim); }
+  .badge--actions {
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+  }
+  .badge--actions .bd { background: var(--badge-ar-fg); }
+  .badge--fav {
+    color: var(--fav-ink); background: transparent;
+    border: 1px solid var(--fav-ink);
+  }
+  .badge--fav .bd { background: var(--fav-ink); }
+  .row .hide-self { display: none; } /* the SM-self row is NEVER rendered (G2) */
+
+  /* the read-only SessionRail mirror -- favorites re-order it too (glance and
+     scope agree). Consumed read-only from the shared store; no rail edit. */
+  .rail { display: flex; flex-direction: column; gap: var(--space-2); }
+  .lane {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-left: 3px solid var(--border); border-radius: var(--radius-soft);
+    padding: 6px 9px;
+  }
+  .lane.has-actions { border-left-color: var(--accent); }
+  .lane.is-fav .lane__slug { color: var(--fav-ink); }
+  .lane__star { color: var(--fav-ink); font-size: 12px; width: 1rem; flex: 0 0 auto; }
+  .lane__star.empty { color: transparent; }
+  .lane__slug {
+    font-family: var(--ff-mono); font-size: 12px; font-weight: 600;
+    color: var(--text-bright);
+  }
+  .lane__tally {
+    margin-left: auto; font-family: var(--ff-mono); font-size: 10px;
+    font-weight: 700; letter-spacing: 0.04em;
+    color: var(--badge-ar-fg);
+  }
+  .lane__tally.zero { color: var(--text-dim); }
+
+  /* live region readout (visible echo of the polite aria-live announcement) */
+  .liveecho {
+    margin-top: 0.7rem; font-family: var(--ff-mono); font-size: 11px;
+    color: var(--text-dim); letter-spacing: 0.02em; min-height: 1.2em;
+  }
+  .liveecho b { color: var(--accent); font-weight: 700; }
+
+  /* the OFF state veil -- shows the gated nothing-renders behaviour */
+  .offveil {
+    display: none; margin-top: 1.1rem; padding: 1.1rem 1rem;
+    background: var(--bg-card); border: 1px dashed var(--border);
+    border-radius: 8px; color: var(--text-dim); font-size: 12px;
+    line-height: var(--lh-body);
+  }
+  body[data-gate="off"] .offveil { display: block; }
+  body[data-gate="off"] .scope .chiprail,
+  body[data-gate="off"] .scope .kbdhint,
+  body[data-gate="off"] .scope .search,
+  body[data-gate="off"] .scope .results { display: none !important; }
+  body[data-gate="off"] .grid { opacity: 0.32; filter: grayscale(0.5); pointer-events: none; }
+  body[data-gate="off"] .star { visibility: hidden; }
+
+  /* notes block */
+  .notes {
+    margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-dim); line-height: 1.65;
+  }
+  .notes h3 {
+    margin: 0 0 0.4rem; font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .notes ul { margin: 0 0 0.9rem; padding-left: 1.1rem; }
+  .notes li { margin: 0.2rem 0; }
+  .notes code {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright);
+    background: var(--bg-row); border: 1px solid var(--border);
+    border-radius: 3px; padding: 0 4px;
+  }
+  .mockflag {
+    display: inline-block; font-family: var(--ff-mono); font-size: 10px;
+    font-weight: 700; letter-spacing: 0.05em; color: var(--badge-ar-fg);
+    border: 1px dashed var(--badge-ar-border); border-radius: 3px;
+    padding: 1px 6px; margin-left: 0.4rem;
+  }
+
+  /* shared focus ring (focus.css contract: 2px solid amber, 2px offset) */
+  .chip:focus-visible, .star:focus-visible, .seg button:focus-visible,
+  .switch:focus-visible, select.pick:focus-visible, .search input:focus-visible,
+  .results .opt:focus-visible {
+    outline: 2px solid var(--badge-ar-border); outline-offset: 2px;
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion="allow"]) * { transition: none !important; }
+  }
+</style>
+</head>
+<body data-gate="on">
+<div class="page">
+
+  <!-- === header strip: title + BETA pill ============================== -->
+  <header class="titlebar">
+    <h1>
+      Session Picker -- Favorites + Filters + Ctrl+K
+      <span class="sub">BETA #36 . session-quick-filter-presets . decorates the EXISTING header scope control (no new frame, no new pane)</span>
+    </h1>
+    <span class="beta-pill" title="Gated default-OFF in the beta-flag registry">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+  </header>
+
+  <!-- === controls: theme picker + the on/off gate ===================== -->
+  <div class="controls">
+    <div class="grp">
+      <label class="cap">Theme</label>
+      <div class="seg" role="group" aria-label="Theme preview">
+        <button type="button" data-theme-btn="obsidian" aria-pressed="true">Obsidian</button>
+        <button type="button" data-theme-btn="phosphor" aria-pressed="false">Phosphor</button>
+        <button type="button" data-theme-btn="paper" aria-pressed="false">Paper</button>
+      </div>
+    </div>
+    <div class="grp">
+      <span class="gate">
+        <span>BETA flag</span>
+        <button id="gateSwitch" class="switch" role="switch" aria-checked="true" aria-label="Toggle the session-quick-filter-presets BETA flag"></button>
+        <span class="state" id="gateState" data-on="true">ON</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- === simulated header masthead (the integration site) ============= -->
+  <div class="masthead">
+    <div class="masthead__brand">
+      <span class="masthead__logo">StreamManager</span>
+      <span class="masthead__note">operator masthead . slot=header mounts the SessionPicker -- this feature decorates AROUND + ABOVE it</span>
+    </div>
+
+    <div class="scope">
+      <!-- GLANCE: chip rail above the picker, left-aligned (asymmetric) -->
+      <div class="chiprail" role="radiogroup" aria-label="Session filter">
+        <button type="button" class="chip" data-filter="all" role="radio" aria-checked="true" tabindex="0">
+          <span class="dot" aria-hidden="true"></span>ALL
+          <span class="count" id="cntAll">0</span>
+        </button>
+        <button type="button" class="chip" data-filter="active" role="radio" aria-checked="false" tabindex="-1">
+          <span class="dot" aria-hidden="true"></span>ACTIVE
+          <span class="count" id="cntActive">0</span>
+        </button>
+        <button type="button" class="chip" data-kind="actions" data-filter="actions" role="radio" aria-checked="false" tabindex="-1">
+          <span class="dot" aria-hidden="true"></span>OPEN ACTIONS
+          <span class="count" id="cntActions">0</span>
+        </button>
+      </div>
+
+      <!-- KEY: the inline Ctrl+K fuzzy search (hidden until invoked) -->
+      <div class="search" id="searchBox" role="search">
+        <span class="tag" aria-hidden="true">Ctrl+K</span>
+        <input id="searchInput" type="text" placeholder="type 2-3 chars of a session slug -- Enter switches scope" aria-label="Fuzzy-search sessions by slug; Enter switches scope" autocomplete="off">
+      </div>
+      <div class="results" id="searchResults" role="listbox" aria-label="Matching sessions"></div>
+
+      <!-- the preserved native <select> (the a11y floor; never replaced) -->
+      <div class="pickerrow">
+        <span class="pick-label">Scope</span>
+        <div class="pickfield">
+          <select class="pick" id="picker" aria-label="Scope -- filter all panes by session">
+            <option value="__all__">All governed sessions</option>
+          </select>
+          <span class="chev" aria-hidden="true">&#9662;</span>
+        </div>
+        <span class="kbdhint">press <kbd>Ctrl</kbd> + <kbd>K</kbd> to search</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- === the body: option list (with stars) + the read-only rail ====== -->
+  <div class="grid">
+    <section class="panel" aria-labelledby="optHead">
+      <h2 id="optHead">Picker option list <span class="mockflag" id="mockFlag">usedMockData=true</span></h2>
+      <p class="lede">
+        What the picker shows under the active chip. Star toggles pin a session to
+        the TOP (persisted to <code>sm.next.session-favorites</code>); the active
+        chip narrows this list client-side. The SM-self session is filtered OUT
+        before render (G2) -- it can never appear here.
+      </p>
+      <div class="optlist" id="optList" role="list"></div>
+    </section>
+
+    <aside class="panel" aria-labelledby="railHead">
+      <h2 id="railHead">SessionRail (read-only)</h2>
+      <p class="lede">
+        The glance layer re-orders with the SAME favorites predicate (starred
+        first) so glance + scope agree. Consumed read-only from the shared store;
+        the amber left edge is the EXISTING action tally, untouched.
+      </p>
+      <div class="rail" id="rail"></div>
+    </aside>
+  </div>
+
+  <p class="liveecho" id="liveEcho" role="status" aria-live="polite">Showing all 3 non-self sessions.</p>
+
+  <!-- === OFF veil: what the operator sees when the flag is OFF ========= -->
+  <div class="offveil">
+    <b>Flag OFF.</b> The chip rail, the favorite stars, and the Ctrl+K listener
+    render nothing and attach nothing -- no poll, no listener, no extra render.
+    The native scope picker (the a11y floor) is the only control, exactly as
+    today. Flip the BETA flag ON above to preview the feature.
+  </div>
+
+  <!-- === designer notes =============================================== -->
+  <div class="notes">
+    <h3>What this confirms before any code</h3>
+    <ul>
+      <li><b>No new frame / no new pane / no new backend.</b> The feature is an additive, gated wrapper at the EXISTING <code>slot=header</code> SessionPicker. <code>OPEN ACTIONS</code> reads the <code>actionCountsBySession</code> map App.svelte already builds from the unscoped <code>/api/hitl/pending</code> poll -- zero new endpoint, zero new field.</li>
+      <li><b>Three affordances, one scope.</b> GLANCE (chips narrow the option list), CLICK (star pins favorites to the top of picker + rail, persisted in localStorage), KEY (Ctrl+K fuzzy-search over project_slug, Enter switches scope through the guarded <code>selectSession()</code>).</li>
+      <li><b>Paired label + colour everywhere (M4).</b> Every chip carries a literal count suffix as TEXT; the ACTIVE chip pairs a slate dot + the word ACTIVE + the integer; OPEN ACTIONS pairs the existing amber identity + the word + the integer (chrome, no pulse -- never an M2 escalation); a favorite pairs a filled star glyph + aria-pressed + the word "favorite" in its aria-label, in a desaturated accent deliberately distinct from amber.</li>
+      <li><b>Polarity floor (G2).</b> The SM-self session is never an option, a favorite, or a search hit -- the store self-excludes and Ctrl+K Enter routes through the guarded setter. The mock carries an <code>ownSessionId</code> only to prove it is dropped.</li>
+      <li><b>Domain-agnostic (M16).</b> Slugs (aurora-ingest / borealis-api / cobalt-batch / delta-worker) are invented generic names rendered FROM DATA -- never a monitored-project's real slug.</li>
+      <li><b>Honesty note (in the brief).</b> "ACTIVE" is scoped to <code>ended_at == null</code> (running), because <code>/api/sessions</code> carries no <code>last_msg_ts</code>; a true "active in last 5 min" predicate would need the #32 health-digest endpoint -- out of this footprint.</li>
+      <li><b>New flag key.</b> Registers as <code>session-quick-filter-presets</code> #36 in the existing <code>session</code> group; the key <code>quick-filters</code> #22 is a DIFFERENT feature (HITL posture presets) -- a new key avoids cross-gating.</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // === deterministic, DOMAIN-AGNOSTIC mock (mockDataSpec) ===============
+  // sessions are exactly the /api/sessions row shape the store consumes;
+  // openActions mirrors actionCountsBySession; ownSessionId proves G2 exclusion.
+  var MOCK = {
+    usedMockData: true,
+    sessions: [
+      { id: "mock-sess-aurora-01",   project_slug: "aurora-ingest",  pid: 41001, started_at: 1749600000, ended_at: null,       hitl_mode: "sync",  hitl_floor: 0.6 },
+      { id: "mock-sess-borealis-02", project_slug: "borealis-api",   pid: 41002, started_at: 1749599400, ended_at: null,       hitl_mode: "async", hitl_floor: 0.4 },
+      { id: "mock-sess-cobalt-03",   project_slug: "cobalt-batch",   pid: 41003, started_at: 1749598800, ended_at: null,       hitl_mode: "sync",  hitl_floor: 0.6 },
+      { id: "mock-sess-delta-04",    project_slug: "delta-worker",   pid: 41004, started_at: 1749500000, ended_at: 1749590000, hitl_mode: "sync",  hitl_floor: 0.6 }
+    ],
+    openActions: { "mock-sess-aurora-01": 3, "mock-sess-cobalt-03": 1 },
+    favorites: ["mock-sess-borealis-02"],
+    ownSessionId: "mock-sess-self-SM", // present ONLY to prove it is filtered OUT
+    now: 1749600300
+  };
+
+  // G2: drop the SM-self id BEFORE anything renders. The live store does this in
+  // session.js setSessions(); here we mirror it so self can never surface.
+  var SESSIONS = MOCK.sessions.filter(function (s) { return s.id !== MOCK.ownSessionId; });
+
+  var FAV_KEY = "sm.next.session-favorites";   // client-side only (localStorage idiom)
+  var FILTER_KEY = "sm.next.session-filter";   // active chip choice persists too
+
+  // favorites: seed from the mock, but real persistence wins if present.
+  var favorites = readLS(FAV_KEY) || MOCK.favorites.slice();
+  var activeFilter = readLS(FILTER_KEY) || "all";   // all | active | actions
+  var selectedId = "__all__";
+
+  // === predicates (mock AND live read identically) ======================
+  function isActive(s) { return s.ended_at === null || s.ended_at === undefined; }
+  function openCount(s) { return MOCK.openActions[s.id] || 0; }
+  function isFav(s) { return favorites.indexOf(s.id) !== -1; }
+
+  function passesFilter(s) {
+    if (activeFilter === "active") return isActive(s);
+    if (activeFilter === "actions") return openCount(s) > 0;
+    return true; // all
+  }
+
+  // favorites pin to the top; within a group, preserve source order (recency).
+  function ordered(list) {
+    var favs = list.filter(isFav);
+    var rest = list.filter(function (s) { return !isFav(s); });
+    return favs.concat(rest);
+  }
+
+  function visibleSessions() { return ordered(SESSIONS.filter(passesFilter)); }
+
+  // === DOM refs =========================================================
+  var $ = function (id) { return document.getElementById(id); };
+  var picker = $("picker"), optList = $("optList"), rail = $("rail");
+  var chiprail = document.querySelector(".chiprail");
+  var chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
+  var liveEcho = $("liveEcho");
+  var searchBox = $("searchBox"), searchInput = $("searchInput"), searchResults = $("searchResults");
+
+  // === render ===========================================================
+  function announce(msg) { liveEcho.innerHTML = msg; }
+
+  function badgeFor(s) {
+    var oc = openCount(s);
+    var parts = [];
+    if (isFav(s)) parts.push('<span class="badge badge--fav"><span class="bd" aria-hidden="true"></span>favorite</span>');
+    if (isActive(s)) parts.push('<span class="badge badge--active"><span class="bd" aria-hidden="true"></span>active</span>');
+    else parts.push('<span class="badge badge--ended"><span class="bd" aria-hidden="true"></span>ended</span>');
+    if (oc > 0) parts.push('<span class="badge badge--actions"><span class="bd" aria-hidden="true"></span>open actions ' + oc + '</span>');
+    return parts.join("");
+  }
+
+  function renderOptions() {
+    var vis = visibleSessions();
+    optList.innerHTML = "";
+    vis.forEach(function (s) {
+      var row = document.createElement("div");
+      row.className = "row" + (selectedId === s.id ? " is-scope" : "");
+      row.setAttribute("role", "listitem");
+      var fav = isFav(s);
+      row.innerHTML =
+        '<button type="button" class="star" role="button" aria-pressed="' + fav + '" ' +
+        'aria-label="' + (fav ? "Unstar" : "Star") + ' ' + s.project_slug + ' as a favorite session" ' +
+        'data-id="' + s.id + '" title="' + (fav ? "Remove from favorites" : "Pin to favorites") + '">' +
+        (fav ? "&#9733;" : "&#9734;") + "</button>" +
+        '<span class="slug">' + s.project_slug + "</span>" +
+        '<span class="tags">' + badgeFor(s) + "</span>";
+      optList.appendChild(row);
+    });
+    if (!vis.length) {
+      optList.innerHTML = '<div class="lede" style="margin:0;">No sessions match this filter.</div>';
+    }
+  }
+
+  function renderRail() {
+    rail.innerHTML = "";
+    // the rail mirrors favorites-first ordering (read-only from the shared store)
+    ordered(SESSIONS).forEach(function (s) {
+      var oc = openCount(s);
+      var lane = document.createElement("div");
+      lane.className = "lane" + (oc > 0 ? " has-actions" : "") + (isFav(s) ? " is-fav" : "");
+      lane.innerHTML =
+        '<span class="lane__star ' + (isFav(s) ? "" : "empty") + '" aria-hidden="true">' + (isFav(s) ? "&#9733;" : "&#9734;") + "</span>" +
+        '<span class="lane__slug">' + s.project_slug + "</span>" +
+        '<span class="lane__tally ' + (oc > 0 ? "" : "zero") + '">' + (oc > 0 ? oc + " ACTION" + (oc > 1 ? "S" : "") : "calm") + "</span>";
+      rail.appendChild(lane);
+    });
+  }
+
+  function renderPicker() {
+    // mirror the live native <select>: ALL sentinel + the (filtered, ordered) list
+    var vis = visibleSessions();
+    picker.innerHTML = '<option value="__all__">All governed sessions</option>';
+    if (vis.length) {
+      var og = document.createElement("optgroup");
+      og.label = "Sessions";
+      vis.forEach(function (s) {
+        var o = document.createElement("option");
+        o.value = s.id;
+        var label = (isFav(s) ? "* " : "") + s.project_slug + (isActive(s) ? "" : " (ended)");
+        o.textContent = label;
+        og.appendChild(o);
+      });
+      picker.appendChild(og);
+    }
+    picker.value = selectedId;
+  }
+
+  function renderCounts() {
+    var nonSelf = SESSIONS.length;
+    var active = SESSIONS.filter(isActive).length;
+    var withActions = SESSIONS.filter(function (s) { return openCount(s) > 0; }).length;
+    $("cntAll").textContent = String(nonSelf);
+    $("cntActive").textContent = String(active);
+    $("cntActions").textContent = String(withActions);
+  }
+
+  function syncChips() {
+    chips.forEach(function (c) {
+      var on = c.getAttribute("data-filter") === activeFilter;
+      c.setAttribute("aria-checked", on ? "true" : "false");
+      c.setAttribute("tabindex", on ? "0" : "-1");
+    });
+  }
+
+  function renderAll() {
+    renderCounts();
+    syncChips();
+    renderPicker();
+    renderOptions();
+    renderRail();
+  }
+
+  // === interactions =====================================================
+  // chip radiogroup: click + Arrow-roves + Space/Enter selects
+  function setFilter(f) {
+    activeFilter = f;
+    writeLS(FILTER_KEY, f);
+    selectedId = "__all__"; // a filter change resets to the un-scoped view
+    syncChips();
+    renderPicker();
+    renderOptions();
+    var n = visibleSessions().length;
+    var label = f === "active" ? "active" : f === "actions" ? "with open actions" : "governed";
+    announce("Showing <b>" + n + "</b> session" + (n === 1 ? "" : "s") + " " + label + ".");
+  }
+  chips.forEach(function (c) {
+    c.addEventListener("click", function () { setFilter(c.getAttribute("data-filter")); c.focus(); });
+  });
+  chiprail.addEventListener("keydown", function (e) {
+    var idx = chips.indexOf(document.activeElement);
+    if (idx === -1) return;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault(); chips[(idx + 1) % chips.length].focus();
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault(); chips[(idx - 1 + chips.length) % chips.length].focus();
+    } else if (e.key === " " || e.key === "Enter") {
+      e.preventDefault(); setFilter(document.activeElement.getAttribute("data-filter"));
+    }
+  });
+
+  // star toggle (favorites): re-sorts BOTH picker + rail; persists localStorage
+  optList.addEventListener("click", function (e) {
+    var btn = e.target.closest && e.target.closest(".star");
+    if (!btn) return;
+    var id = btn.getAttribute("data-id");
+    var s = SESSIONS.filter(function (x) { return x.id === id; })[0];
+    var i = favorites.indexOf(id);
+    var nowFav;
+    if (i === -1) { favorites = favorites.concat([id]); nowFav = true; }
+    else { favorites = favorites.filter(function (x) { return x !== id; }); nowFav = false; }
+    writeLS(FAV_KEY, favorites);
+    renderPicker(); renderOptions(); renderRail();
+    announce((nowFav ? "Pinned <b>" : "Unpinned ") + (s ? s.project_slug : id) + (nowFav ? "</b> to favorites." : " from favorites."));
+  });
+
+  // native picker = the a11y floor; selecting it sets scope
+  picker.addEventListener("change", function () {
+    selectedId = picker.value;
+    renderOptions();
+    if (selectedId === "__all__") { announce("Scope cleared -- all governed sessions."); return; }
+    var s = SESSIONS.filter(function (x) { return x.id === selectedId; })[0];
+    announce("Scoped to <b>" + (s ? s.project_slug : selectedId) + "</b>.");
+  });
+
+  // === Ctrl+K fuzzy search (KEY) ========================================
+  var searchOpen = false, results = [], cursor = 0, debounce = null;
+
+  function fuzzy(q, slug) {
+    // simple subsequence + contiguous-bonus; returns {hit, html}
+    q = q.toLowerCase(); slug = slug;
+    var low = slug.toLowerCase();
+    if (q && low.indexOf(q) !== -1) {
+      var at = low.indexOf(q);
+      return { hit: true, html: slug.slice(0, at) + "<em>" + slug.slice(at, at + q.length) + "</em>" + slug.slice(at + q.length) };
+    }
+    // subsequence fallback
+    var qi = 0, html = "", ok = q.length > 0;
+    for (var i = 0; i < slug.length && qi < q.length; i++) {
+      if (low[i] === q[qi]) { html += "<em>" + slug[i] + "</em>"; qi++; }
+      else { html += slug[i]; }
+    }
+    html += slug.slice(html.replace(/<\/?em>/g, "").length);
+    return { hit: ok && qi === q.length, html: html };
+  }
+
+  function openSearch() {
+    if (searchOpen) { searchInput.focus(); return; }
+    searchOpen = true;
+    searchBox.classList.add("open");
+    searchInput.value = "";
+    searchInput.focus();
+    runSearch();
+  }
+  function closeSearch() {
+    searchOpen = false;
+    searchBox.classList.remove("open");
+    searchResults.classList.remove("open");
+    searchResults.innerHTML = "";
+    picker.focus();
+  }
+  function runSearch() {
+    var q = searchInput.value.trim();
+    results = [];
+    // search the SELF-EXCLUDED list only (G2) -- self can never be a hit
+    SESSIONS.forEach(function (s) {
+      var f = fuzzy(q, s.project_slug);
+      if (!q || f.hit) results.push({ s: s, html: f.html });
+    });
+    // favorites surface first in the search too
+    results.sort(function (a, b) { return (isFav(b.s) ? 1 : 0) - (isFav(a.s) ? 1 : 0); });
+    cursor = 0;
+    renderResults(q);
+  }
+  function renderResults(q) {
+    if (!searchOpen) return;
+    searchResults.innerHTML = "";
+    if (!results.length) {
+      searchResults.classList.add("open");
+      searchResults.innerHTML = '<div class="none">No session slug matches "' + escapeHtml(q) + '".</div>';
+      return;
+    }
+    searchResults.classList.add("open");
+    results.forEach(function (r, i) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "opt";
+      b.setAttribute("role", "option");
+      b.setAttribute("aria-selected", i === cursor ? "true" : "false");
+      b.setAttribute("data-id", r.s.id);
+      var oc = openCount(r.s);
+      b.innerHTML =
+        '<span class="slug">' + (isFav(r.s) ? "&#9733; " : "") + r.html + "</span>" +
+        '<span class="meta">' + (isActive(r.s) ? "active" : "ended") + (oc > 0 ? " . " + oc + " open" : "") + "</span>";
+      b.addEventListener("click", function () { chooseResult(r.s.id); });
+      searchResults.appendChild(b);
+    });
+  }
+  function chooseResult(id) {
+    // routes through the guarded selectSession() in the live store; here we set
+    // scope directly. self can never be in `results` so this is G2-safe.
+    selectedId = id;
+    var s = SESSIONS.filter(function (x) { return x.id === id; })[0];
+    closeSearch();
+    renderPicker(); renderOptions();
+    announce("Scoped to <b>" + (s ? s.project_slug : id) + "</b> via Ctrl+K search.");
+  }
+
+  searchInput.addEventListener("input", function () {
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(runSearch, 100); // 100ms debounce (per brief)
+  });
+  searchInput.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.preventDefault(); closeSearch(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); cursor = Math.min(cursor + 1, results.length - 1); renderResults(searchInput.value.trim()); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); cursor = Math.max(cursor - 1, 0); renderResults(searchInput.value.trim()); }
+    else if (e.key === "Enter") { e.preventDefault(); if (results[cursor]) chooseResult(results[cursor].s.id); }
+  });
+
+  // global Ctrl+K / Cmd+K -- ONLY while the flag is ON (gate-aware).
+  window.addEventListener("keydown", function (e) {
+    if (document.body.getAttribute("data-gate") !== "on") return; // detached while OFF
+    var k = e.key && e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && k === "k") {
+      e.preventDefault();
+      openSearch();
+    }
+  });
+
+  // === theme preview ====================================================
+  document.querySelectorAll("[data-theme-btn]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var t = btn.getAttribute("data-theme-btn");
+      document.documentElement.setAttribute("data-theme", t);
+      document.querySelectorAll("[data-theme-btn]").forEach(function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+    });
+  });
+
+  // === the BETA gate toggle (previews default-OFF) ======================
+  var gateSwitch = $("gateSwitch"), gateState = $("gateState");
+  function setGate(on) {
+    document.body.setAttribute("data-gate", on ? "on" : "off");
+    gateSwitch.setAttribute("aria-checked", on ? "true" : "false");
+    gateState.textContent = on ? "ON" : "OFF";
+    gateState.setAttribute("data-on", on ? "true" : "false");
+    if (!on && searchOpen) closeSearch();
+  }
+  gateSwitch.addEventListener("click", function () {
+    setGate(document.body.getAttribute("data-gate") !== "on");
+  });
+
+  // === init =============================================================
+  $("mockFlag").style.display = MOCK.usedMockData ? "inline-block" : "none";
+  renderAll();
+  announce("Showing <b>" + SESSIONS.length + "</b> non-self sessions. Borealis is starred (pinned top); aurora + cobalt have open actions.");
+
+  // helpers
+  function readLS(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function writeLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+})();
+</script>
+</body>
+</html>

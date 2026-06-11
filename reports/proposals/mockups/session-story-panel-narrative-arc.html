@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<!--
+  session-story-panel-narrative-arc.html
+  KingMode BETA mockup -- Session Story: narrative-arc panel w/ bi-directional feed linking (#37)
+  ----------------------------------------------------------------------------
+  PURPOSE: a self-contained, click-through preview the operator can confirm
+  BEFORE any code is written. Previews the REAL ui-next tokens lifted verbatim
+  from dashboard/ui-next/src/styles/theme.css (obsidian / phosphor / paper) and
+  the REAL Badge.svelte paired label+color contract (color is NEVER the only
+  signal -- M4). No external assets, no CDNs, no web fonts -- system stacks only.
+  ASCII-only: no smart quotes, no em-dashes (rendered as --), no box-drawing.
+
+  WHAT IT DEMONSTRATES:
+   - A frame-sized Session Story card docked ABOVE the still-water Decision
+     stream, inside Frame A.
+   - Beta gating: a header strip with a "BETA -- default OFF, toggled in
+     Settings > BETA features" pill + a working on/off toggle that mounts /
+     unmounts the whole card (OFF renders nothing, registers no poller).
+   - The paired label+color TONE badge (CLEAN / LEARNING / TURBULENT / BLOCKED)
+     mapped onto the frozen Badge variants -- text label ALWAYS present.
+   - The bi-directional link: clicking a linked phrase scroll-highlights the
+     matching DecisionRow(s) below; hovering/focusing a row reverse-highlights
+     the sentence. Full keyboard path (Tab to phrases, Enter/Space activates,
+     focus follows the jump to the evidence).
+   - Empty state + a single calm "Compose Story" affordance -> a mock async
+     compose/poll job (status: pending -> running -> complete) with a calm
+     "composing..." tide-line shimmer (reduced-motion: static).
+
+  This is a MOCKUP. No live transport, no SM session is monitored; all data is
+  the deterministic domain-agnostic mock from the brief's mockDataSpec.
+-->
+<html lang="en" data-theme="obsidian" data-motion="auto">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Session Story -- narrative-arc panel (BETA #37) -- KingMode mockup</title>
+<style>
+  /* ==========================================================================
+     THEME TOKENS -- lifted verbatim from dashboard/ui-next/src/styles/theme.css
+     so this mockup previews the REAL token values across all three themes.
+     ========================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* shared action palette (paired with text labels in the component layer) */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* FIXED badge tokens (M4) -- theme-invariant paired label+color palette.
+       Inks darkened to AA exactly as Badge.svelte renders them. */
+    --badge-decided-fg:     #15803d; --badge-decided-bg:     #dcfce7; --badge-decided-border: #86efac;
+    --badge-obs-fg:         #475569; --badge-obs-bg:         #f1f5f9; --badge-obs-border:     #cbd5e1;
+    --badge-warn-fg:        #9a3412; --badge-warn-bg:        #ffedd5; --badge-warn-border:    #ea580c;
+    --badge-blocked-fg:     #b91c1c; --badge-blocked-bg:     #fee2e2; --badge-blocked-border: #dc2626;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+    --font-h:       var(--ff-system);
+    --font-d:       var(--ff-mono);
+  }
+  [data-theme="phosphor"] {
+    --bg:           #010602;
+    --bg-card:      #010d03;
+    --bg-row:       #021005;
+    --bg-row-alt:   #010d03;
+    --bg-row-hover: #031508;
+    --bg-row-flash: rgba(57, 255, 20, 0.07);
+    --border:       #082510;
+    --border-hi:    rgba(57, 255, 20, 0.3);
+    --text:         #5aaa60;
+    --text-dim:     #429056;
+    --text-ui:      #4ea060;
+    --text-bright:  #9de89e;
+    --accent:       #39ff14;
+    --accent-dim:   rgba(57, 255, 20, 0.07);
+    --accent-glow:  rgba(57, 255, 20, 0.3);
+    --font-h:       var(--ff-mono);
+    --font-d:       var(--ff-mono);
+    --c-allow:     #39ff14; --c-suggest: #7fff00; --c-guide: #ccff00;
+    --c-intervene: #ffaa00; --c-block:   #ff3333;
+  }
+  [data-theme="paper"] {
+    --bg:           #ede8df;
+    --bg-card:      #f8f4ee;
+    --bg-row:       #fefefc;
+    --bg-row-alt:   #f5f1ea;
+    --bg-row-hover: #f0eae0;
+    --bg-row-flash: rgba(192, 57, 43, 0.07);
+    --border:       #ccc4b4;
+    --border-hi:    rgba(192, 57, 43, 0.35);
+    --text:         #2a2018;
+    --text-dim:     #6a5040;
+    --text-ui:      #5a4030;
+    --text-bright:  #140c04;
+    --accent:       #c0392b;
+    --accent-dim:   rgba(192, 57, 43, 0.07);
+    --accent-glow:  rgba(192, 57, 43, 0.2);
+    --font-h:       Georgia, "Times New Roman", serif;
+    --font-d:       var(--ff-mono);
+    --c-allow:     #16a34a; --c-suggest: #65a30d; --c-guide: #ca8a04;
+    --c-intervene: #ea580c; --c-block:   #dc2626;
+  }
+
+  /* ==========================================================================
+     PAGE CHROME
+     ========================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 4rem;
+  }
+
+  /* -- top control bar: theme picker + the gating header strip ------------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    padding-bottom: 1.2rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.4rem;
+  }
+  .topbar__brand {
+    font-family: var(--font-d);
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .topbar__spacer { flex: 1 1 auto; }
+  .topbar__label {
+    font-family: var(--font-d);
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .theme-seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .theme-seg button {
+    appearance: none;
+    background: transparent;
+    color: var(--text-dim);
+    border: 0;
+    border-right: 1px solid var(--border);
+    font-family: var(--font-d);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.32rem 0.6rem;
+    cursor: pointer;
+  }
+  .theme-seg button:last-child { border-right: 0; }
+  .theme-seg button[aria-pressed="true"] {
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+  .theme-seg button:focus-visible,
+  .motion-seg button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .motion-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .motion-seg button {
+    appearance: none; background: transparent; color: var(--text-dim);
+    border: 0; border-right: 1px solid var(--border);
+    font-family: var(--font-d); font-size: 0.6rem; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 0.32rem 0.55rem; cursor: pointer;
+  }
+  .motion-seg button:last-child { border-right: 0; }
+  .motion-seg button[aria-pressed="true"] { background: var(--accent-dim); color: var(--accent); }
+
+  /* ==========================================================================
+     BETA GATING HEADER STRIP (feature title + BETA pill + on/off toggle)
+     ========================================================================== */
+  .feature-strip {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 0.9rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-card);
+    margin-bottom: 1.3rem;
+  }
+  .feature-strip__title-wrap { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .feature-strip__title {
+    margin: 0;
+    font-family: var(--font-h);
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text-bright);
+  }
+  .feature-strip__sub {
+    margin: 0;
+    font-size: 0.74rem;
+    color: var(--text-dim);
+  }
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-d);
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+    background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 999px;
+    padding: 0.22rem 0.6rem;
+    white-space: nowrap;
+  }
+  .beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .feature-strip__spacer { flex: 1 1 auto; }
+
+  /* the gated on/off toggle (client-side; mounts/unmounts the card) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .gate__label {
+    font-family: var(--font-d);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .switch {
+    position: relative;
+    width: 50px; height: 26px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-row-alt);
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch[aria-checked="true"] { background: var(--accent-dim); border-color: var(--accent); }
+  .switch[aria-checked="true"] .switch__knob { transform: translateX(24px); background: var(--accent); }
+  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .gate__state {
+    font-family: var(--font-d);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    min-width: 3ch;
+    color: var(--text-ui);
+  }
+
+  /* ==========================================================================
+     FRAME A (host) -- the still-water shell the card docks inside
+     ========================================================================== */
+  .frame {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-card);
+    padding: 1.1rem 1.1rem 1.25rem;
+  }
+  .frame__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.9rem;
+  }
+  .frame__name {
+    font-family: var(--font-h);
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .frame__ctx {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+  .frame__ctx-label { text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.58rem; color: var(--text-ui); }
+  .frame__ctx-name {
+    font-family: var(--font-d);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* the gated-OFF placeholder shown when the toggle is OFF */
+  .gate-off {
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    padding: 1.4rem 1.2rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+  }
+  .gate-off code {
+    font-family: var(--font-d);
+    color: var(--text-ui);
+    font-size: 0.78rem;
+  }
+
+  /* ==========================================================================
+     SESSION STORY CARD (SessionStory.svelte preview)
+     Anti-generic: a left ACCENT SPINE is the only chrome; the rest is type +
+     whitespace. Asymmetric top row, bespoke tide-line, comfortable measure.
+     ========================================================================== */
+  .story {
+    position: relative;
+    padding: 1.1rem 1.2rem 0.9rem 1.4rem;
+    margin-bottom: 1.1rem;
+    background: transparent;
+  }
+  /* left accent spine -- the only chrome (2px, full height) */
+  .story::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0.25rem; bottom: 0.25rem;
+    width: 2px;
+    background: var(--accent);
+    opacity: 0.85;
+    border-radius: 2px;
+  }
+
+  .story__top {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+  }
+  .story__label-wrap { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+  .story__eyebrow {
+    font-family: var(--font-d);
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .story__label {
+    margin: 0;
+    font-family: var(--font-h);
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.05;
+    letter-spacing: 0.005em;
+    color: var(--text-bright);
+  }
+  /* bespoke tide-line under the label (mirrors ReplStream .repl__tide) */
+  .story__tide {
+    height: 2px;
+    width: 2.5rem;
+    background: var(--accent);
+    opacity: 0.55;
+    border-radius: 2px;
+    margin-top: 0.15rem;
+  }
+  .story__tone { margin-left: auto; flex: 0 0 auto; }
+
+  /* sub-header caption: the gated-nature reminder, visible even when ON */
+  .story__beta-caption {
+    margin-top: 0.55rem;
+    font-family: var(--font-d);
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  /* the rendered narrative -- comfortable measure, calm resting weight */
+  .story__body {
+    max-width: 62ch;
+    margin: 0.9rem 0 0;
+  }
+  .story__body p {
+    margin: 0 0 0.7rem;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: var(--text-bright);
+  }
+  .story__body p:last-child { margin-bottom: 0; }
+
+  /* a linked phrase: a real <button>, dotted underline (non-color affordance) */
+  .nlink {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 0 0.05em;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--accent);
+    border-radius: 2px;
+  }
+  .nlink:hover { color: var(--accent); }
+  .nlink:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  /* reverse-highlight: a row hover/focus underlines the referencing sentence */
+  .nlink.is-reverse {
+    background: var(--accent-dim);
+    color: var(--accent);
+    text-decoration-style: solid;
+  }
+  /* the "no evidence" phrase (decision_ids: []) reads as plain, not a link */
+  .nlink--noevidence {
+    cursor: default;
+    text-decoration-style: dashed;
+    text-decoration-color: var(--text-dim);
+    color: var(--text-dim);
+  }
+  .nlink--noevidence:hover { color: var(--text-dim); }
+
+  /* whisper-quiet meta line at the bottom (composed-at / model / count) */
+  .story__meta {
+    margin-top: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.1rem;
+    font-family: var(--font-d);
+    font-size: 0.64rem;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+  .story__meta b { color: var(--text-ui); font-weight: 600; }
+
+  /* -- EMPTY state ("still unwritten") + single calm Compose affordance ----- */
+  .story__empty {
+    margin: 0.7rem 0 0;
+    font-size: 0.92rem;
+    font-style: italic;
+    color: var(--text-dim);
+    max-width: 60ch;
+  }
+  .compose-btn {
+    appearance: none;
+    margin-top: 0.9rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-d);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.5rem 0.95rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.18s ease, border-color 0.18s ease;
+  }
+  .compose-btn:hover:not([disabled]) { color: var(--accent); border-color: var(--accent); }
+  .compose-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .compose-btn[disabled] { cursor: progress; color: var(--text-dim); }
+
+  /* composing state -- the tide-line animates a slow accent shimmer */
+  .story__tide.is-composing {
+    width: 100%;
+    max-width: 18rem;
+    background: linear-gradient(90deg,
+      transparent 0%, var(--accent) 50%, transparent 100%);
+    background-size: 200% 100%;
+    opacity: 0.7;
+    animation: tideShimmer 1.8s linear infinite;
+  }
+  @keyframes tideShimmer {
+    from { background-position: 200% 0; }
+    to   { background-position: -200% 0; }
+  }
+  .composing-note {
+    margin: 0.75rem 0 0;
+    font-size: 0.86rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+  /* reduced-motion: the shimmer is static (no animation), a steady accent bar.
+     Operator force-reduce (data-motion="reduce") always kills the shimmer; the
+     OS-level reduce preference kills it too unless force-allowed via
+     data-motion="allow" (mirrors Badge.svelte's motion contract). */
+  html[data-motion="reduce"] .story__tide.is-composing {
+    animation: none;
+    background: var(--accent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion="allow"]) .story__tide.is-composing {
+      animation: none;
+      background: var(--accent);
+    }
+  }
+
+  /* aria-live status region -- visually present but quiet */
+  .story__status {
+    margin-top: 0.6rem;
+    font-family: var(--font-d);
+    font-size: 0.64rem;
+    letter-spacing: 0.05em;
+    color: var(--text-ui);
+    min-height: 1em;
+  }
+
+  /* ==========================================================================
+     DECISION STREAM (ReplStream + DecisionRow preview) -- the evidence below
+     ========================================================================== */
+  .repl__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+    padding-bottom: 0.3rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+    margin-top: 0.5rem;
+  }
+  .repl__title-wrap { display: inline-flex; flex-direction: column; gap: 0.2rem; }
+  .repl__title {
+    margin: 0;
+    font-family: var(--font-h);
+    font-weight: 460;
+    font-size: 0.9rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+  .repl__tide { height: 1px; width: 2.5rem; background: var(--accent); opacity: 0.5; }
+  .repl__scope { margin: 0; font-size: 0.72rem; color: var(--text-dim); letter-spacing: 0.02em; }
+  .repl__scope-em { color: var(--text-ui); font-weight: 600; }
+  .repl__conn {
+    display: inline-flex; align-items: center; gap: 0.35rem; margin-left: auto;
+    font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+  }
+  .repl__conn-dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--c-allow); }
+
+  .repl__list { list-style: none; margin: 0.7rem 0 0; padding: 0; }
+  .repl__item + .repl__item { margin-top: 0.4rem; }
+
+  /* DecisionRow */
+  .drow {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+    padding: 0.55rem 0.7rem 0.5rem;
+    border: 1px solid var(--border);
+    border-left-width: 2px;
+    border-left-color: transparent;
+    border-radius: 7px;
+    background: var(--bg-row);
+    transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    scroll-margin: 90px;
+  }
+  .drow:hover { background: var(--bg-row-hover); }
+  .drow--escalation { border-left-color: #d97706; background: var(--bg-row-flash); }
+
+  /* the bi-directional jump target: 1.2s flash pulse (reduced-motion: static ring) */
+  .drow.is-flash {
+    background: var(--bg-row-flash);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+    animation: rowFlash 1.2s ease-out 1;
+  }
+  @keyframes rowFlash {
+    0%   { box-shadow: 0 0 0 2px var(--accent) inset; }
+    100% { box-shadow: 0 0 0 1px var(--accent) inset; }
+  }
+  html[data-motion="reduce"] .drow.is-flash { animation: none; box-shadow: 0 0 0 1px var(--accent) inset; }
+  /* the persistent "linked set" highlight while a phrase is active */
+  .drow.is-linked { border-left-color: var(--accent); }
+
+  .drow__head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.65rem; }
+  .drow__ts {
+    font-family: var(--font-d); font-size: 0.7rem; font-variant-numeric: tabular-nums;
+    color: var(--text-dim); flex: 0 0 auto;
+  }
+  .drow__action {
+    font-family: var(--font-d); font-size: 0.72rem; letter-spacing: 0.09em;
+    text-transform: uppercase; flex: 0 0 auto; color: var(--text-dim);
+  }
+  .drow__action[data-weight="calm"]   { font-weight: 400; }
+  .drow__action[data-weight="notice"] { font-weight: 500; }
+  .drow__action[data-weight="signal"] { font-weight: 600; }
+  .drow__action[data-weight="urgent"] { font-weight: 700; }
+  .drow__action--ALLOW     { color: var(--c-allow); }
+  .drow__action--GUIDE     { color: var(--c-guide); }
+  .drow__action--INTERVENE { color: var(--c-intervene); }
+  .drow__action--BLOCK     { color: var(--c-block); }
+
+  .drow__layer {
+    font-family: var(--font-d); font-size: 0.66rem; letter-spacing: 0.04em;
+    color: var(--text-ui); border: 1px solid var(--border); border-radius: 3px;
+    padding: 0.05rem 0.3rem; flex: 0 0 auto;
+  }
+  .drow__conf { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: auto; flex: 0 0 auto; }
+  .drow__conf-bar { width: 3.5rem; height: 0.32rem; border-radius: 999px; background: var(--border); overflow: hidden; }
+  .drow__conf-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .drow__conf-num {
+    font-family: var(--font-d); font-size: 0.68rem; font-variant-numeric: tabular-nums;
+    color: var(--text-dim); min-width: 2.6ch; text-align: right;
+  }
+  .drow__body { min-width: 0; }
+  .drow__content { margin: 0; font-size: 0.82rem; line-height: 1.35; color: var(--text); }
+  .drow__reason { margin: 0.15rem 0 0; font-size: 0.72rem; line-height: 1.3; color: var(--text-dim); }
+  .drow__foot { display: flex; align-items: center; gap: 0.6rem; }
+  .drow__agent-chip {
+    font-family: var(--font-d); font-size: 0.66rem; letter-spacing: 0.03em; color: var(--text-ui);
+    border: 1px solid var(--border); border-radius: 3px; padding: 0.05rem 0.35rem; display: inline-block;
+  }
+  .drow__sess { font-family: var(--font-d); font-size: 0.66rem; color: var(--text-dim); }
+  .drow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ==========================================================================
+     BADGE (Badge.svelte preview) -- paired label+color. Text label is the
+     load-bearing signal; color alone is NEVER a signal (M4). Inks are the
+     AA-darkened values from Badge.svelte.
+     ========================================================================== */
+  .ar-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--ff-system);
+    font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 3px 8px; white-space: nowrap;
+    border-radius: 2px; line-height: 1; vertical-align: middle;
+  }
+  .ar-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .ar-decided  { color: var(--badge-decided-fg);  background: var(--badge-decided-bg);  border: 1px solid var(--badge-decided-border); }
+  .ar-observing{ color: var(--badge-obs-fg);      background: var(--badge-obs-bg);      border: 1px solid var(--badge-obs-border);     font-weight: 600; }
+  .ar-warn     { color: var(--badge-warn-fg);     background: var(--badge-warn-bg);     border: 1px dashed var(--badge-warn-border); }
+  .ar-blocked  { color: var(--badge-blocked-fg);  background: var(--badge-blocked-bg);  border: 2px solid var(--badge-blocked-border); font-weight: 700; }
+  /* the TONE badge is larger -- it is the at-a-glance hero of the card */
+  .story__tone .ar-badge { font-size: 12.5px; padding: 5px 11px; }
+
+  /* visually-hidden utility for the live-region label */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* footnote */
+  .foot {
+    margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--border);
+    font-size: 0.7rem; color: var(--text-dim); line-height: 1.6;
+  }
+  .foot code { font-family: var(--font-d); color: var(--text-ui); }
+
+  /* scenario switch chips (mockup-only affordance to preview both states) */
+  .scenarios {
+    display: inline-flex; gap: 0.4rem; margin-left: auto; flex-wrap: wrap;
+  }
+  .scenarios button {
+    appearance: none; background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-family: var(--font-d); font-size: 0.6rem; letter-spacing: 0.05em;
+    text-transform: uppercase; padding: 0.3rem 0.55rem; cursor: pointer;
+  }
+  .scenarios button[aria-pressed="true"] { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+  .scenarios button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ===================== TOP CONTROL BAR ===================== -->
+  <div class="topbar">
+    <span class="topbar__brand">streamManager // ui-next // KingMode mockup</span>
+    <span class="topbar__spacer"></span>
+    <span class="topbar__label">theme</span>
+    <div class="theme-seg" role="group" aria-label="Theme">
+      <button type="button" data-theme-pick="obsidian" aria-pressed="true">obsidian</button>
+      <button type="button" data-theme-pick="phosphor" aria-pressed="false">phosphor</button>
+      <button type="button" data-theme-pick="paper" aria-pressed="false">paper</button>
+    </div>
+    <span class="topbar__label">motion</span>
+    <div class="motion-seg" role="group" aria-label="Motion preference">
+      <button type="button" data-motion-pick="auto" aria-pressed="true">auto</button>
+      <button type="button" data-motion-pick="reduce" aria-pressed="false">reduce</button>
+    </div>
+  </div>
+
+  <!-- ===================== BETA GATING HEADER STRIP ===================== -->
+  <div class="feature-strip">
+    <div class="feature-strip__title-wrap">
+      <h1 class="feature-strip__title">Session Story</h1>
+      <p class="feature-strip__sub">Narrative-arc panel with bi-directional feed linking</p>
+    </div>
+    <span class="beta-pill">
+      <span class="beta-pill__dot" aria-hidden="true"></span>
+      BETA -- default OFF, toggled in Settings &gt; BETA features
+    </span>
+    <span class="feature-strip__spacer"></span>
+    <div class="gate">
+      <span class="gate__label" id="gate-label">Feature</span>
+      <button
+        type="button"
+        class="switch"
+        id="gateSwitch"
+        role="switch"
+        aria-checked="true"
+        aria-labelledby="gate-label gate-state"
+      ><span class="switch__knob" aria-hidden="true"></span></button>
+      <span class="gate__state" id="gate-state">ON</span>
+    </div>
+  </div>
+
+  <!-- ===================== FRAME A HOST ===================== -->
+  <section class="frame" aria-label="Frame A -- Interactive decision stream">
+    <div class="frame__head">
+      <span class="frame__name">Frame A</span>
+      <span class="frame__ctx">
+        <span class="frame__ctx-label">scope</span>
+        <span class="frame__ctx-name" id="scopeName">node-worker-04</span>
+      </span>
+      <div class="scenarios" role="group" aria-label="Mockup scenario (preview both states)">
+        <button type="button" data-scenario="story" aria-pressed="true">composed story</button>
+        <button type="button" data-scenario="empty" aria-pressed="false">empty -- compose</button>
+      </div>
+    </div>
+
+    <!-- ----- gated-OFF placeholder (shown only when the toggle is OFF) ----- -->
+    <div class="gate-off" id="gateOff" hidden>
+      Session Story is <b>OFF</b>. Nothing mounts, no poller is registered.
+      <br />Turn it ON in <code>Settings &gt; BETA features</code> (group "monitor")
+      to see a session's narrative arc above the decision stream.
+    </div>
+
+    <!-- ----- gated-ON region: the whole card + the stream below ----- -->
+    <div id="gateOn">
+
+      <!-- ===== SESSION STORY CARD (SessionStory.svelte) ===== -->
+      <section class="story" id="storyCard" aria-label="Session story">
+
+        <div class="story__top">
+          <div class="story__label-wrap">
+            <span class="story__eyebrow">Session story</span>
+            <h2 class="story__label" id="storyLabel">node-worker-04</h2>
+            <span class="story__tide" id="storyTide"></span>
+          </div>
+          <div class="story__tone" id="storyTone">
+            <!-- TONE badge injected by script (paired label+color, M4) -->
+          </div>
+        </div>
+
+        <p class="story__beta-caption">BETA -- default OFF, toggled in Settings</p>
+
+        <!-- ===== STORY BODY: rendered narrative (or empty/composing state) ===== -->
+        <div id="storyContent"><!-- injected by script --></div>
+
+        <!-- aria-live: announces the tone the moment a story lands -->
+        <p class="story__status" id="storyStatus" aria-live="polite"></p>
+
+      </section>
+
+      <!-- ===== DECISION STREAM (ReplStream + DecisionRow) = the evidence ===== -->
+      <header class="repl__head">
+        <div class="repl__title-wrap">
+          <h3 class="repl__title">Decision stream</h3>
+          <span class="repl__tide" aria-hidden="true"></span>
+        </div>
+        <p class="repl__scope">observing <span class="repl__scope-em">session node-wor</span></p>
+        <span class="repl__conn"><span class="repl__conn-dot" aria-hidden="true"></span>live</span>
+      </header>
+
+      <ol class="repl__list" id="replList" aria-label="Decisions in session node-worker-04, newest first">
+        <!-- DecisionRows injected by script -->
+      </ol>
+
+    </div><!-- /gateOn -->
+  </section>
+
+  <!-- ===================== FOOTNOTE ===================== -->
+  <p class="foot">
+    Mockup only -- no live transport, no SM session is monitored. Data is the deterministic
+    domain-agnostic mock from the brief (<code>story-result</code> / <code>compose-story</code>),
+    rendered FROM DATA: the governed-target identity (<code>node-worker-04</code>) is a placeholder
+    slug, never hard-coded vocabulary. The compose POST refuses SM-self (<code>session_id ==
+    SM_OWN_SESSION_ID</code> -&gt; HTTP 400) and excludes the SM project slug -- polarity (G2) holds.
+    Endpoints previewed: <code>POST /api/sessions/{id}/compose-story</code> +
+    <code>GET /api/sessions/{id}/story-result</code> (additive, EVOLVING surface).
+    Paired label+color badges throughout (M4); axe target 0 serious.
+  </p>
+
+</div>
+
+<script>
+/* ============================================================================
+   MOCK DATA -- the deterministic story-result + decision rows from the brief.
+   Domain-agnostic: the slug "node-worker-04" is a placeholder; no monitored-
+   project vocabulary. The narrative is split into segments so linked phrases
+   render as real <button>s carrying their decision_ids (bi-directional anchors).
+   ============================================================================ */
+
+  // story-result payload (GET /api/sessions/{id}/story-result?job_id=...)
+  var STORY = {
+    session_id: "sess-mock-0001",
+    job_id: "story-job-mock-77",
+    status: "complete",
+    narrative_composed_at: 1749700000.0,
+    narrative_model: "claude-sonnet-4-5",
+    tone: "clean",                 // clean | learning | turbulent | blocked
+    decision_count: 80,
+    mock: true,
+    // narrative broken into segments; {anchor} segments become linked buttons.
+    paragraphs: [
+      [
+        { t: "Session opened 2:43pm; apparent goal: refactor an auth module. The agent issued " },
+        { anchor: "n1", phrase: "7 file edits", ids: [101,102,103,104,105,106,107] },
+        { t: ", all governed under GUIDE -- no blocks, no interventions." }
+      ],
+      [
+        { t: "Governance learned " },
+        { anchor: "n2", phrase: "two patterns", ids: [104,106] },
+        { t: " during the run: a conditional-import check (+3 confidence) and an async-function-safety check (+2 confidence)." }
+      ],
+      [
+        { t: "The session closed cleanly with " },
+        { anchor: "n3", phrase: "no negative regression signal", ids: [], noevidence: true },
+        { t: "." }
+      ]
+    ]
+  };
+
+  // TONE -> Badge variant (paired label+color, M4) + the one-line tone reason.
+  var TONE_MAP = {
+    clean:     { variant: "decided",   label: "CLEAN",     reason: "clean -- no blocks, no interventions" },
+    learning:  { variant: "observing", label: "LEARNING",  reason: "learning -- patterns reinforced, no blocks" },
+    turbulent: { variant: "warn",      label: "TURBULENT", reason: "turbulent -- repeated interventions / nudges" },
+    blocked:   { variant: "blocked",   label: "BLOCKED",   reason: "blocked -- one or more governance blocks fired" }
+  };
+
+  // The decision rows that the narrative links into (last-100 from /api/decisions).
+  // ids match the link decision_ids above. Newest-first.
+  var ROWS = [
+    { id: 107, ts: "16:08:55.114", action: "GUIDE",     layer: 3, conf: 91, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit src/auth/session.py -- tighten token TTL", reason: "conditional-import check satisfied; proceeding under GUIDE" },
+    { id: 106, ts: "16:07:31.880", action: "GUIDE",     layer: 3, conf: 88, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit src/auth/refresh.py -- add async-safety guard", reason: "async-function-safety pattern reinforced (+2)" },
+    { id: 105, ts: "16:05:12.402", action: "ALLOW",     layer: 1, conf: 97, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit tests/test_auth.py -- cover refresh path", reason: "static allow -- test-only file edit" },
+    { id: 104, ts: "16:03:48.991", action: "GUIDE",     layer: 3, conf: 84, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit src/auth/__init__.py -- reorder imports", reason: "conditional-import pattern reinforced (+3)" },
+    { id: 103, ts: "16:01:20.557", action: "ALLOW",     layer: 1, conf: 95, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit src/auth/errors.py -- new exception type", reason: "static allow -- additive change" },
+    { id: 102, ts: "15:58:04.310", action: "GUIDE",     layer: 2, conf: 86, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit src/auth/middleware.py -- wrap handler", reason: "guide nudge -- confirm error propagation" },
+    { id: 101, ts: "15:55:41.002", action: "ALLOW",     layer: 1, conf: 98, agent: "node-worker-04", sess: "node-wor",
+      content: "Edit src/auth/config.py -- read TTL from env", reason: "static allow -- config read" }
+  ];
+
+  /* ---- action -> weight + badge variant (mirrors DecisionRow.svelte) ---- */
+  function weightForAction(a){ return a==="BLOCK"?"urgent":a==="INTERVENE"?"signal":a==="GUIDE"?"notice":"calm"; }
+  function badgeForAction(a){ return a==="BLOCK"?{v:"blocked",l:"BLOCKED"}:a==="INTERVENE"?{v:"decided",l:"DECIDED"}:{v:"observing",l:"OBSERVING"}; }
+
+  function fmtComposed(epoch){
+    var d = new Date(epoch*1000);
+    var pad=function(n){return String(n).padStart(2,"0");};
+    return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+" "+pad(d.getHours())+":"+pad(d.getMinutes());
+  }
+
+  /* ---- escape text for safe injection ---- */
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+
+  /* ============================================================================
+     RENDER: the TONE badge (Badge.svelte preview) -- text label ALWAYS present.
+     ============================================================================ */
+  function renderTone(tone){
+    var m = TONE_MAP[tone] || TONE_MAP.clean;
+    var el = document.getElementById("storyTone");
+    el.innerHTML =
+      '<span class="ar-badge ar-'+m.variant+'" role="status" title="'+esc(m.reason)+'" aria-label="'+esc(m.reason)+'">' +
+        '<span class="ar-dot" aria-hidden="true"></span>' +
+        '<span class="ar-text">'+esc(m.label)+'</span>' +
+      '</span>';
+    return m;
+  }
+
+  /* ============================================================================
+     RENDER: the narrative body, with linked phrases as real <button>s.
+     ============================================================================ */
+  function renderNarrative(){
+    var html = "";
+    STORY.paragraphs.forEach(function(para){
+      html += "<p>";
+      para.forEach(function(seg){
+        if (seg.t) { html += esc(seg.t); return; }
+        if (seg.anchor){
+          if (seg.noevidence){
+            // no decision evidence -> not a jump button; reads plain + dashed.
+            html += '<span class="nlink nlink--noevidence" title="no decision evidence -- nothing to jump to">'+esc(seg.phrase)+'</span>';
+          } else {
+            html += '<button type="button" class="nlink" data-anchor="'+seg.anchor+'" ' +
+                    'data-ids="'+seg.ids.join(",")+'" ' +
+                    'aria-label="'+esc(seg.phrase)+' -- jump to the '+seg.ids.length+' matching decision rows">' +
+                    esc(seg.phrase)+'</button>';
+          }
+        }
+      });
+      html += "</p>";
+    });
+
+    var meta =
+      '<div class="story__meta">' +
+        '<span>composed <b>'+esc(fmtComposed(STORY.narrative_composed_at))+'</b></span>' +
+        '<span>model <b>'+esc(STORY.narrative_model)+'</b></span>' +
+        '<span><b>'+STORY.decision_count+'</b> decisions</span>' +
+      '</div>';
+
+    document.getElementById("storyContent").innerHTML = '<div class="story__body">'+html+'</div>'+meta;
+    wireNarrativeLinks();
+  }
+
+  /* ============================================================================
+     RENDER: the decision rows (DecisionRow.svelte preview).
+     ============================================================================ */
+  function renderRows(){
+    var ol = document.getElementById("replList");
+    ol.innerHTML = ROWS.map(function(r){
+      var b = badgeForAction(r.action);
+      var w = weightForAction(r.action);
+      var esc_edge = r.action==="BLOCK";
+      return (
+        '<li class="repl__item">' +
+        '<article class="drow'+(esc_edge?' drow--escalation':'')+'" id="row-'+r.id+'" data-id="'+r.id+'" ' +
+                 'tabindex="0" aria-label="'+esc(r.action)+' decision in session '+esc(r.sess)+'">' +
+          '<div class="drow__head">' +
+            '<span class="drow__ts">'+esc(r.ts)+'</span>' +
+            '<span class="drow__action drow__action--'+esc(r.action)+'" data-weight="'+w+'" title="Action: '+esc(r.action)+'">'+esc(r.action)+'</span>' +
+            '<span class="ar-badge ar-'+b.v+'" role="status" title="Observing -- '+esc(r.action)+' decision recorded ('+r.conf+'% confidence)" aria-label="Observing -- '+esc(r.action)+' decision recorded ('+r.conf+'% confidence)">' +
+              '<span class="ar-dot" aria-hidden="true"></span><span class="ar-text">'+esc(b.l)+'</span>' +
+            '</span>' +
+            '<span class="drow__layer">L'+r.layer+'</span>' +
+            '<span class="drow__conf">' +
+              '<span class="drow__conf-bar" aria-hidden="true"><span class="drow__conf-fill" style="width:'+r.conf+'%"></span></span>' +
+              '<span class="drow__conf-num">'+r.conf+'%</span>' +
+            '</span>' +
+          '</div>' +
+          '<div class="drow__body">' +
+            '<p class="drow__content">'+esc(r.content)+'</p>' +
+            '<p class="drow__reason">'+esc(r.reason)+'</p>' +
+          '</div>' +
+          '<div class="drow__foot">' +
+            '<span class="drow__agent-chip">'+esc(r.agent)+'</span>' +
+            '<span class="drow__sess">'+esc(r.sess)+'</span>' +
+          '</div>' +
+        '</article></li>'
+      );
+    }).join("");
+    wireRowReverseLinks();
+  }
+
+  /* ============================================================================
+     BI-DIRECTIONAL LINK -- the differentiator (NarrativeToFeed.svelte).
+     Narrative phrase click/Enter -> scroll-highlight matching rows + move focus
+     to the first matching row (focus follows the jump). Row hover/focus ->
+     reverse-underline the referencing sentence.
+     ============================================================================ */
+  function clearRowHighlights(){
+    document.querySelectorAll(".drow.is-flash, .drow.is-linked").forEach(function(el){
+      el.classList.remove("is-flash","is-linked");
+    });
+  }
+  function clearReverse(){
+    document.querySelectorAll(".nlink.is-reverse").forEach(function(el){ el.classList.remove("is-reverse"); });
+  }
+
+  function activateAnchor(btn){
+    var ids = (btn.getAttribute("data-ids")||"").split(",").filter(Boolean).map(Number);
+    clearRowHighlights();
+    if (ids.length === 0) return;
+    var first = null;
+    ids.forEach(function(id){
+      var row = document.getElementById("row-"+id);
+      if (!row) return;
+      if (!first) first = row;
+      row.classList.add("is-linked");
+      // restart the flash animation
+      row.classList.remove("is-flash");
+      void row.offsetWidth;
+      row.classList.add("is-flash");
+    });
+    if (first){
+      first.scrollIntoView({ behavior: (document.documentElement.getAttribute("data-motion")==="reduce"?"auto":"smooth"), block: "center" });
+      // focus follows the jump -- a keyboard operator lands ON the evidence.
+      first.focus({ preventScroll: true });
+    }
+    var status = document.getElementById("storyStatus");
+    status.textContent = "Jumped to " + ids.length + " linked decision row" + (ids.length===1?"":"s") + ".";
+  }
+
+  function wireNarrativeLinks(){
+    document.querySelectorAll(".nlink[data-anchor]").forEach(function(btn){
+      btn.addEventListener("click", function(){ activateAnchor(btn); });
+      // Enter/Space already activate a native <button>; keep explicit for clarity.
+      btn.addEventListener("keydown", function(e){
+        if (e.key==="Enter" || e.key===" "){ e.preventDefault(); activateAnchor(btn); }
+      });
+    });
+  }
+
+  function reverseHighlightFor(rowId){
+    clearReverse();
+    document.querySelectorAll(".nlink[data-ids]").forEach(function(btn){
+      var ids = (btn.getAttribute("data-ids")||"").split(",").filter(Boolean);
+      if (ids.indexOf(String(rowId)) !== -1){ btn.classList.add("is-reverse"); }
+    });
+  }
+  function wireRowReverseLinks(){
+    document.querySelectorAll(".drow[data-id]").forEach(function(row){
+      var id = row.getAttribute("data-id");
+      row.addEventListener("mouseenter", function(){ reverseHighlightFor(id); });
+      row.addEventListener("mouseleave", function(){ clearReverse(); });
+      row.addEventListener("focus", function(){ reverseHighlightFor(id); });
+      row.addEventListener("blur", function(){ clearReverse(); });
+    });
+  }
+
+  /* ============================================================================
+     COMPOSE FLOW -- the empty state + the mock async compose/poll job.
+     status: pending -> running -> complete. Calm tide-line shimmer while
+     composing (reduced-motion: static). On completion the narrative renders and
+     the aria-live region announces the tone.
+     ============================================================================ */
+  function renderEmpty(){
+    document.getElementById("storyTone").innerHTML = "";   // no tone until composed
+    document.getElementById("storyContent").innerHTML =
+      '<p class="story__empty">Still unwritten. Compose this session\'s story to turn 80 decision rows into a one-glance, evidence-linked arc.</p>' +
+      '<button type="button" class="compose-btn" id="composeBtn" aria-label="Compose this session\'s story">' +
+        '<span aria-hidden="true">+</span> Compose Story' +
+      '</button>';
+    document.getElementById("storyStatus").textContent = "";
+    document.getElementById("storyTide").className = "story__tide";
+    wireComposeBtn();
+  }
+
+  function wireComposeBtn(){
+    var btn = document.getElementById("composeBtn");
+    if (!btn) return;
+    btn.addEventListener("click", startCompose);
+  }
+
+  function startCompose(){
+    var content = document.getElementById("storyContent");
+    var tide = document.getElementById("storyTide");
+    var status = document.getElementById("storyStatus");
+
+    // POST /api/sessions/{id}/compose-story -> { status: "pending", job_id }
+    tide.className = "story__tide is-composing";
+    content.innerHTML =
+      '<button type="button" class="compose-btn" id="composeBtn" disabled aria-busy="true">Composing...</button>' +
+      '<p class="composing-note">Composing off the verdict hot path via the Learn-Mode Sonnet worker. ' +
+      'Keep working -- the tone badge lands here the moment it is ready.</p>';
+    status.textContent = "Compose job queued (status: pending). Polling story-result...";
+
+    // GET .../story-result poll, status walks pending -> running -> complete.
+    setTimeout(function(){
+      status.textContent = "Composing (status: running)...";
+    }, 1100);
+    setTimeout(function(){
+      // status === "complete" -> render + announce the tone (aria-live polite)
+      tide.className = "story__tide";
+      renderTone(STORY.tone);
+      renderNarrative();
+      var m = TONE_MAP[STORY.tone] || TONE_MAP.clean;
+      document.getElementById("storyStatus").textContent = "Session story composed -- tone: " + m.label.toLowerCase() + ".";
+    }, 2600);
+  }
+
+  /* ============================================================================
+     SCENARIO + GATE WIRING
+     ============================================================================ */
+  var SCENARIO = "story";   // "story" (composed) | "empty"
+
+  function paintScenario(){
+    renderRows();
+    if (SCENARIO === "story"){
+      renderTone(STORY.tone);
+      renderNarrative();
+      var m = TONE_MAP[STORY.tone] || TONE_MAP.clean;
+      document.getElementById("storyStatus").textContent = "";  // already-composed glance = no announce
+    } else {
+      renderEmpty();
+    }
+  }
+
+  // scenario chips
+  document.querySelectorAll(".scenarios button").forEach(function(b){
+    b.addEventListener("click", function(){
+      SCENARIO = b.getAttribute("data-scenario");
+      document.querySelectorAll(".scenarios button").forEach(function(x){
+        x.setAttribute("aria-pressed", x===b ? "true" : "false");
+      });
+      paintScenario();
+    });
+  });
+
+  // BETA gate switch -- mounts / unmounts the whole card (OFF = nothing mounts)
+  var gateOn = document.getElementById("gateOn");
+  var gateOff = document.getElementById("gateOff");
+  var gateState = document.getElementById("gate-state");
+  function applyGate(on){
+    var sw = document.getElementById("gateSwitch");
+    sw.setAttribute("aria-checked", on ? "true" : "false");
+    gateState.textContent = on ? "ON" : "OFF";
+    gateOn.hidden = !on;
+    gateOff.hidden = on;
+    if (on) paintScenario();
+  }
+  document.getElementById("gateSwitch").addEventListener("click", function(){
+    applyGate(this.getAttribute("aria-checked") !== "true");
+  });
+
+  // theme picker
+  document.querySelectorAll("[data-theme-pick]").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.documentElement.setAttribute("data-theme", b.getAttribute("data-theme-pick"));
+      document.querySelectorAll("[data-theme-pick]").forEach(function(x){
+        x.setAttribute("aria-pressed", x===b ? "true" : "false");
+      });
+    });
+  });
+  // motion picker
+  document.querySelectorAll("[data-motion-pick]").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.documentElement.setAttribute("data-motion", b.getAttribute("data-motion-pick"));
+      document.querySelectorAll("[data-motion-pick]").forEach(function(x){
+        x.setAttribute("aria-pressed", x===b ? "true" : "false");
+      });
+    });
+  });
+
+  // initial paint (gate defaults ON in the mockup so the operator sees the feature)
+  applyGate(true);
+</script>
+</body>
+</html>

@@ -36,6 +36,8 @@
 <script>
   import { sessions, selectedSessionId, selectSession, ownSessionId } from '../stores/session.js';
   import SessionLane from './SessionLane.svelte';
+  import { betaFlags } from '../stores/beta.js';
+  import HealthDigest from './beta/HealthDigest.svelte';
 
   /**
    * actionCounts: per-session open-ACTION-REQUIRED tallies, keyed by session_id.
@@ -132,6 +134,14 @@
       on:click={selectAll}
     >ALL</button>
   </header>
+
+  {#if $betaFlags['health-digest']}
+    <!-- BETA #32: multi-session health digest glance widget, above the lanes.
+         Reuses the rail's guarded onSelect (G2-safe session select). -->
+    <div class="rail__digest">
+      <HealthDigest on:select={onSelect} />
+    </div>
+  {/if}
 
   <!-- role="list" ONLY when lanes exist: an empty list whose sole child is the
        <p> empty-state has no listitem child and trips aria-required-children

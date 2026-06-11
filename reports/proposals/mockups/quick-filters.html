@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<!--
+  quick-filters.html -- KingMode BETA mockup for feature #22
+  "Quick-Filter Presets (FR-UI-9)" / key "quick-filter-presets".
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written
+  (directive #2). Self-contained: inline <style> + inline <script>, no external
+  assets / CDNs / fonts. System font stack only. ASCII-only (no smart quotes, no
+  em-dashes -- "--", no box-drawing). The CSS variables below are lifted VERBATIM
+  from dashboard/ui-next/src/styles/theme.css so this previews the REAL tokens
+  across obsidian / phosphor / paper.
+
+  WHAT THIS DEMONSTRATES (mockDataSpec): four built-in posture presets
+  (PARANOID / STANDARD / TRUST / AUDIT) + operator-saved custom presets, rendered
+  as a single hairline rail of monospace mode-cards ABOVE the four FR-UI-9 knobs
+  they drive (confidence floor / HITL mode / sync timeout / pause detection).
+  Click a card -> applyPreset() patches the (mock) settings store -> the four
+  DrawerFields below snap to the new values -> the header PresetPill updates to
+  the active name (or "custom" if the operator hand-tunes away from any preset).
+
+  IDIOM REUSE: the cards mirror the existing SettingsDrawer .sd-seg / HitlModeToggle
+  radiogroup pattern (active card = accent fill + heavier weight + text label) so
+  the row reads as native, not bolted-on. The active-card text uses the proven
+  #1a1206-on-amber pairing from HitlModeToggle.svelte (axe-clean, AA-documented).
+
+  M4 (paired label + colour, never colour alone): every card is TEXT-FIRST -- the
+  NAME and the literal micro-spec line ("0.95 . SYNC . 120s") are always rendered;
+  the accent fill is a SECOND channel on the active card only. The header pill
+  renders "MODE: PARANOID" (label + value text); the dot is decorative-secondary.
+
+  BETA: default OFF, gated by the beta-flag registry (key quick-filter-presets).
+  The whole preset row renders nothing + registers no handlers when OFF. The
+  inline header toggle here previews that gate client-side. Build is gated on the
+  ADR-18 amendment (use the additive sessions.settings JSON blob for custom-preset
+  persistence -- no new table, no FROZEN edit) AND on task #5 (BETA foundation).
+-->
+<html lang="en" data-theme="obsidian" data-motion="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Quick-Filter Presets (FR-UI-9)</title>
+<style>
+  /* === theme tokens lifted verbatim from theme.css ===================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+  }
+  [data-theme="obsidian"] {
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018;
+    --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,0.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,0.09);
+    --accent-glow:rgba(245,158,11,0.35);
+    /* active-card ink: warm near-black on amber fill (8.6:1 on #f59e0b),
+       lifted verbatim from HitlModeToggle.svelte .hmt__seg.is-active. */
+    --on-accent:#1a1206;
+  }
+  [data-theme="phosphor"] {
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03;
+    --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,0.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,0.07);
+    --accent-glow:rgba(57,255,20,0.3);
+    /* near-black on saturated CRT-green: ink stays dark for legibility. */
+    --on-accent:#021004;
+  }
+  [data-theme="paper"] {
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea;
+    --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,0.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,0.07);
+    --accent-glow:rgba(192,57,43,0.2);
+    /* light cream ink on the dark editorial-red fill (mirrors paper .is-active). */
+    --on-accent:#fffefb;
+  }
+  /* ACTION-REQUIRED amber badge tokens (theme-invariant, FROZEN -- M4). Present
+     here ONLY so the BETA pill + amber gate-footnote use the real escalation hue
+     deliberately OUTSIDE the masthead pill (which must never read as urgency). */
+  :root {
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    /* OBSERVING slate -- the resting "custom" pill tone (HITL-off idiom). */
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 0 0 4rem;
+  }
+
+  /* === page chrome ===================================================== */
+  .page { max-width: 940px; margin: 0 auto; padding: 1.5rem 1.25rem; }
+
+  .titlebar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
+    padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+  }
+  .titlebar h1 {
+    margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-bright); flex: 1 1 auto; min-width: 16rem;
+  }
+  .titlebar .sub {
+    display: block; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.04em;
+    color: var(--text-dim); text-transform: none; margin-top: 0.15rem;
+  }
+
+  /* BETA pill (paired text + colour) -- uses the FROZEN amber identity. */
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.55rem; border-radius: 999px;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+  }
+  .beta-pill .dot {
+    width: 0.42rem; height: 0.42rem; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline on/off toggle (real switch behaviour, client-side only) */
+  .feat-toggle {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    cursor: pointer; user-select: none;
+  }
+  .feat-toggle__text {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .feat-toggle__text[data-on="true"] { color: var(--accent); }
+  .switch { position: relative; width: 40px; height: 22px; flex: 0 0 auto; }
+  .switch input {
+    position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0;
+    cursor: pointer;
+  }
+  .switch__track {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: var(--bg-row); border: 1px solid var(--border);
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch input:checked + .switch__track {
+    background: var(--accent-dim); border-color: var(--border-hi);
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--text-dim);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch input:checked + .switch__track .switch__knob {
+    transform: translateX(18px); background: var(--accent);
+  }
+  /* global 2px amber focus ring (focus.css) on every native control. */
+  .switch input:focus-visible + .switch__track,
+  .preset-card:focus-visible,
+  .save-btn:focus-visible,
+  .del-btn:focus-visible,
+  .theme-pick:focus-visible,
+  .gear-btn:focus-visible,
+  .modal-input:focus-visible,
+  .modal-btn:focus-visible,
+  .knob-seg__btn:focus-visible,
+  .knob-range:focus-visible {
+    outline: 2px solid #d97706; outline-offset: 2px;
+  }
+
+  .settings-note {
+    margin: 0.9rem 0 0; font-size: 0.72rem; color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* === ambient masthead strip (HeaderBar idiom) -- shows the PresetPill ==
+     The masthead is "still water": never escalation-coloured (M2). The pill
+     sits between the CWD readout and the throughput pulse, exactly where the
+     brief places it. */
+  .masthead {
+    margin-top: 1.5rem;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center; gap: 0.9rem;
+    padding: 0.5rem 0.9rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px 10px 0 0;
+    border-bottom: none;
+  }
+  .mh__brand {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.95rem; letter-spacing: 0.06em; white-space: nowrap;
+  }
+  .mh__mark {
+    width: 16px; height: 16px; flex: 0 0 auto; position: relative;
+    border: 2px solid var(--accent); border-radius: 2px; opacity: 0.92;
+  }
+  .mh__mark::after {
+    content: ''; position: absolute; right: -2px; bottom: -2px;
+    width: 40%; height: 40%; background: var(--accent); border-radius: 1px;
+  }
+  .mh__word-strong { font-weight: 680; color: var(--text-bright); }
+  .mh__word-soft { font-weight: 320; color: var(--text-ui); }
+
+  .mh__cwd {
+    grid-column: 2; min-width: 0; display: inline-flex; align-items: baseline;
+    gap: 0.4rem; overflow: hidden;
+  }
+  .mh__cwd-tag {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .mh__cwd-path {
+    min-width: 0; font-family: var(--ff-mono); font-size: 0.78rem;
+    color: var(--text); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* PresetPill (the GLANCE PATH) -- "MODE: PARANOID". Calm chrome, never amber.
+     Active = accent ink on the raised surface; "custom" = muted slate (OBSERVING
+     idiom). The dot is decorative-secondary; the text is the meaning (M4). */
+  .preset-pill {
+    grid-column: 3;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-family: var(--ff-mono); font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.22rem 0.5rem; border-radius: 6px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text-ui); white-space: nowrap;
+  }
+  .preset-pill__tag { color: var(--text-ui); font-weight: 600; }
+  .preset-pill__val { color: var(--accent); }
+  .preset-pill__dot {
+    width: 0.42rem; height: 0.42rem; border-radius: 50%;
+    background: var(--accent); flex: 0 0 auto; opacity: 0.9;
+  }
+  /* "custom" resting state -- muted slate, no accent. */
+  .preset-pill[data-custom="true"] { border-color: var(--badge-obs-border); }
+  .preset-pill[data-custom="true"] .preset-pill__val { color: var(--text-dim); }
+  .preset-pill[data-custom="true"] .preset-pill__dot {
+    background: var(--text-dim); opacity: 0.7;
+  }
+
+  .mh__pulse {
+    grid-column: 4; display: inline-flex; align-items: flex-end; gap: 2px;
+    height: 18px;
+  }
+  .mh__pulse i {
+    width: 3px; background: var(--accent); opacity: 0.55; border-radius: 1px;
+    display: inline-block;
+  }
+
+  /* === the drawer surface (SettingsDrawer idiom) ====================== */
+  .drawer {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 0 0 10px 10px; overflow: hidden;
+  }
+  .drawer__head {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.8rem 1.1rem; border-bottom: 1px solid var(--border);
+  }
+  .gear-btn {
+    appearance: none; width: 28px; height: 28px; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid var(--border); border-radius: 2px;
+    color: var(--text-ui); cursor: pointer; line-height: 1;
+  }
+  .gear-btn:hover { color: var(--accent); border-color: var(--border-hi); }
+  .drawer__title {
+    margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text-bright);
+  }
+
+  .drawer__body { padding: 1.1rem 1.1rem 1.4rem; }
+
+  /* === the PRESET ROW (the BETA feature) ============================== */
+  .preset-section { margin-bottom: 1.5rem; }
+  .preset-section__head {
+    display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+  }
+  .preset-section__label {
+    font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-bright);
+  }
+  .inline-beta-chip {
+    font-size: 0.56rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border);
+    border-radius: 4px; padding: 0.08rem 0.35rem;
+  }
+  .preset-section__desc {
+    margin: 0 0 0.7rem; font-size: 0.72rem; color: var(--text-dim);
+    max-width: 62ch;
+  }
+
+  /* the carousel: one horizontal hairline rail of monospace mode-cards.
+     NOT an equal-width button strip -- the cards size to content, the active
+     one carries the accent fill (mirrors .sd-seg.is-active). */
+  .carousel {
+    display: flex; align-items: stretch; flex-wrap: wrap; gap: 0.5rem;
+  }
+  .preset-card {
+    appearance: none; text-align: left; cursor: pointer;
+    display: flex; flex-direction: column; gap: 0.25rem;
+    min-width: 9.5rem;
+    padding: 0.55rem 0.7rem;
+    background: var(--bg-row); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text);
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  }
+  .preset-card:hover { background: var(--bg-row-hover); border-color: var(--border-hi); }
+  .preset-card__name {
+    font-family: var(--ff-mono); font-size: 0.82rem; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-bright); font-variant-numeric: tabular-nums;
+  }
+  /* the literal micro-spec -- load-bearing text (NOT decoration), kept >=7:1.
+     This is the M4 second-channel: the posture is readable in WORDS even with
+     all colour stripped. */
+  .preset-card__spec {
+    font-family: var(--ff-mono); font-size: 0.68rem; line-height: 1.35;
+    color: var(--text-dim); font-variant-numeric: tabular-nums;
+  }
+  /* ACTIVE card: accent fill + heavier weight + the proven on-accent ink. */
+  .preset-card.is-active {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .preset-card.is-active .preset-card__name { color: var(--on-accent); font-weight: 800; }
+  .preset-card.is-active .preset-card__spec { color: var(--on-accent); opacity: 0.9; }
+
+  /* vertical hairline separating built-ins from operator custom presets */
+  .carousel__divider {
+    width: 1px; align-self: stretch; background: var(--border); flex: 0 0 auto;
+    margin: 0 0.1rem;
+  }
+  .carousel__custom-label {
+    flex-basis: 100%; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-dim); margin-top: 0.35rem;
+  }
+
+  /* a custom preset card carries a tiny "x" delete affordance */
+  .preset-card--custom { position: relative; padding-right: 1.5rem; }
+  .del-btn {
+    appearance: none; position: absolute; top: 0.35rem; right: 0.35rem;
+    width: 16px; height: 16px; line-height: 1; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid transparent; border-radius: 3px;
+    color: var(--text-ui); cursor: pointer; font-size: 0.7rem;
+  }
+  .del-btn:hover { color: var(--badge-blocked-fg, #dc2626); border-color: var(--border); }
+  .preset-card--custom.is-active .del-btn { color: var(--on-accent); }
+
+  /* "Save as preset" -- a quiet bordered ghost button at the rail tail
+     (mirrors the drawer's .sd-reset idiom). */
+  .save-btn {
+    appearance: none; align-self: stretch;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+    min-width: 9.5rem;
+    background: transparent; border: 1px dashed var(--border-hi);
+    border-radius: 6px; color: var(--text-bright);
+    font-family: var(--ff-system); font-size: 0.74rem; font-weight: 600;
+    letter-spacing: 0.02em; padding: 0.55rem 0.7rem; cursor: pointer;
+    transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  }
+  .save-btn:hover {
+    background: var(--accent-dim); border-color: var(--accent); color: var(--accent);
+  }
+  .save-btn__plus { font-family: var(--ff-mono); font-weight: 800; }
+
+  /* === the four FR-UI-9 knobs the preset row DRIVES =================== */
+  .knobs {
+    border-top: 1px solid var(--border); padding-top: 1.1rem;
+    display: flex; flex-direction: column; gap: 1.1rem;
+  }
+  .knob__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 0.6rem;
+  }
+  .knob__label {
+    font-size: 0.8rem; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--text-bright);
+  }
+  .knob__value {
+    font-family: var(--ff-mono); font-size: 0.8rem; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    transition: color 0.18s ease;
+  }
+  /* a brief flash when a preset cascades into a knob (suppressed under reduce) */
+  .knob__value.flash {
+    color: var(--text-bright); background: var(--accent-dim);
+    border-radius: 3px; padding: 0 0.25rem;
+  }
+  .knob__desc {
+    margin: 0.25rem 0 0.5rem; font-size: 0.68rem; color: var(--text-dim);
+    max-width: 58ch;
+  }
+  .knob-range { width: 100%; accent-color: var(--accent); cursor: pointer; }
+
+  /* HITL-mode two-state segmented control (HitlModeToggle idiom) */
+  .knob-seg {
+    display: inline-flex; border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; align-self: flex-start;
+  }
+  .knob-seg__btn {
+    appearance: none; background: transparent; border: none;
+    color: var(--text-ui); font-family: var(--ff-system); font-size: 0.72rem;
+    font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.3rem 0.7rem; cursor: pointer; line-height: 1;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    transition: background 0.18s ease, color 0.18s ease;
+  }
+  .knob-seg__btn + .knob-seg__btn { border-left: 1px solid var(--border); }
+  .knob-seg__btn:hover { background: var(--bg-row-hover); }
+  .knob-seg__btn.is-active { background: var(--accent); color: var(--on-accent); font-weight: 800; }
+  .knob-seg__dot {
+    width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+    opacity: 0.55; flex: 0 0 auto;
+  }
+  .knob-seg__btn.is-active .knob-seg__dot { opacity: 1; }
+
+  /* pause-detection toggle row */
+  .knob-toggle-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  }
+  .knob-switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+  .knob-switch__text {
+    min-width: 3ch; font-family: var(--ff-mono); font-size: 0.78rem;
+    letter-spacing: 0.06em; color: var(--text-dim);
+  }
+  .knob-switch__text[data-on="true"] { color: var(--accent); }
+
+  /* === BETA-OFF gate: the whole preset section is a pure no-op ========= */
+  body[data-beta="off"] .preset-section { display: none; }
+  /* and the masthead pill disappears when the flag is OFF (no posture name to
+     surface -- the operator reads the four knobs directly, as today). */
+  body[data-beta="off"] .preset-pill { display: none; }
+
+  /* === amber "build gated on ADR-18 amendment" footnote =============== */
+  .gate-foot {
+    margin-top: 1.5rem; display: flex; gap: 0.6rem; align-items: flex-start;
+    padding: 0.7rem 0.9rem; border-radius: 8px;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    font-size: 0.72rem; line-height: 1.5;
+  }
+  .gate-foot__tag {
+    flex: 0 0 auto; font-weight: 800; letter-spacing: 0.08em;
+    text-transform: uppercase; font-size: 0.62rem;
+    border: 1px solid var(--badge-ar-border); border-radius: 4px;
+    padding: 0.12rem 0.4rem; margin-top: 0.05rem;
+  }
+  .gate-foot strong { font-weight: 700; }
+  .gate-foot code {
+    font-family: var(--ff-mono); font-size: 0.68rem;
+    background: rgba(0,0,0,0.06); padding: 0 0.2rem; border-radius: 2px;
+  }
+
+  /* === legend + theme picker (mock chrome, not part of the feature) ==== */
+  .footnote {
+    margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 1.25rem 2rem; align-items: flex-start;
+  }
+  .legend { font-size: 0.72rem; color: var(--text-dim); max-width: 30rem; }
+  .legend h2 {
+    margin: 0 0 0.5rem; font-size: 0.64rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .legend ul { margin: 0; padding-left: 1rem; }
+  .legend li { margin: 0.25rem 0; }
+  .legend code { font-family: var(--ff-mono); font-size: 0.68rem; color: var(--text-bright); }
+  .swatch {
+    display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px;
+    vertical-align: -1px; margin-right: 0.3rem; border: 1px solid var(--border);
+  }
+  .swatch--active { background: var(--accent); }
+  .swatch--custom { background: var(--badge-obs-fg); }
+
+  .themes { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .theme-pick {
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; cursor: pointer;
+    padding: 0.3rem 0.55rem; border-radius: 6px;
+    background: var(--bg-row); color: var(--text-dim); border: 1px solid var(--border);
+  }
+  .theme-pick[aria-pressed="true"] {
+    color: var(--accent); border-color: var(--border-hi); background: var(--accent-dim);
+  }
+
+  /* === save-as-preset modal (focus-trapped dialog idiom) ============== */
+  .modal-scrim {
+    position: fixed; inset: 0; background: rgba(8,10,12,0.55);
+    backdrop-filter: blur(1px); z-index: 80; display: none;
+  }
+  .modal-scrim[data-open="true"] { display: block; }
+  .modal {
+    position: fixed; z-index: 81; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(360px, 92vw);
+    background: var(--bg-card); border: 1px solid var(--border-hi);
+    border-radius: 10px; padding: 1.1rem; display: none;
+    box-shadow: 0 18px 48px -24px rgba(0,0,0,0.7);
+  }
+  .modal[data-open="true"] { display: block; }
+  .modal h3 {
+    margin: 0 0 0.3rem; font-size: 0.9rem; font-weight: 700;
+    letter-spacing: 0.02em; color: var(--text-bright);
+  }
+  .modal p { margin: 0 0 0.7rem; font-size: 0.7rem; color: var(--text-dim); }
+  .modal-input {
+    width: 100%; font-family: var(--ff-mono); font-size: 0.82rem;
+    color: var(--text-bright); background: var(--bg-row);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.45rem 0.55rem; margin-bottom: 0.8rem;
+  }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+  .modal-btn {
+    appearance: none; font-family: var(--ff-system); font-size: 0.74rem;
+    font-weight: 600; letter-spacing: 0.02em; padding: 0.4rem 0.8rem;
+    border-radius: 4px; cursor: pointer;
+  }
+  .modal-btn--ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+  }
+  .modal-btn--primary {
+    background: var(--accent); border: 1px solid var(--accent); color: var(--on-accent);
+    font-weight: 700;
+  }
+
+  /* visually-hidden live region */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion='allow']) * { transition: none !important; }
+  }
+</style>
+</head>
+<body data-beta="on">
+  <div class="page">
+
+    <!-- header strip: title + BETA pill + inline on/off toggle -->
+    <header class="titlebar">
+      <h1>
+        Quick-Filter Presets (FR-UI-9)
+        <span class="sub">Named operator-mode shortcuts -- switch the whole posture in one click, not four slider edits</span>
+      </h1>
+
+      <span class="beta-pill"><span class="dot" aria-hidden="true"></span>BETA</span>
+
+      <label class="feat-toggle" title="Toggle the BETA feature (client-side mock of the Settings gate)">
+        <span class="switch">
+          <input id="betaSwitch" type="checkbox" checked
+                 aria-label="Enable Quick-Filter Presets BETA feature">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        </span>
+        <span class="feat-toggle__text" id="betaText" data-on="true">ON</span>
+      </label>
+    </header>
+
+    <p class="settings-note">
+      BETA -- default OFF, toggled in Settings &gt; BETA features ("Quick-filter presets").
+      This toggle previews the gate; in the real build the flag lives in the beta-flag
+      registry (key <code style="font-style:normal">quick-filter-presets</code>) and the SettingsDrawer.
+      When OFF the preset row renders nothing and registers no handlers.
+    </p>
+
+    <!-- ===================== ambient masthead (PresetPill) ===================== -->
+    <section class="masthead" aria-label="Masthead -- ambient operator chrome">
+      <span class="mh__brand">
+        <span class="mh__mark" aria-hidden="true"></span>
+        <span><span class="mh__word-strong">Stream</span><span class="mh__word-soft">Manager</span></span>
+      </span>
+      <span class="mh__cwd">
+        <span class="mh__cwd-tag">CWD</span>
+        <span class="mh__cwd-path" title="active session working directory">~/work/observed-session-04</span>
+      </span>
+      <!-- GLANCE PATH: the active posture name, at a glance. Never amber (M2). -->
+      <span class="preset-pill" id="presetPill" data-custom="false"
+            title="Active posture preset -- one glance tells you which mode is live">
+        <span class="preset-pill__dot" aria-hidden="true"></span>
+        <span class="preset-pill__tag">MODE:</span>
+        <span class="preset-pill__val" id="presetPillVal">STANDARD</span>
+      </span>
+      <span class="mh__pulse" aria-hidden="true">
+        <i style="height:6px"></i><i style="height:11px"></i><i style="height:8px"></i>
+        <i style="height:14px"></i><i style="height:9px"></i><i style="height:12px"></i>
+      </span>
+    </section>
+
+    <!-- ===================== the drawer surface ===================== -->
+    <section class="drawer" aria-label="Settings drawer -- FR-UI-9">
+      <div class="drawer__head">
+        <button class="gear-btn" type="button" aria-label="Settings (already open in this preview)" title="Settings">
+          <span aria-hidden="true">&#9881;</span>
+        </button>
+        <h2 class="drawer__title">Operator settings</h2>
+      </div>
+
+      <div class="drawer__body">
+
+        <!-- ===== THE BETA FEATURE: preset row, ABOVE the four knobs ===== -->
+        <section class="preset-section" aria-labelledby="ps-label">
+          <div class="preset-section__head">
+            <span class="preset-section__label" id="ps-label">Quick-filter presets</span>
+            <span class="inline-beta-chip">BETA -- default OFF, toggled in Settings</span>
+          </div>
+          <p class="preset-section__desc">
+            One named click sets all four knobs below. Cause sits above effect --
+            clicking a card cascades DOWN into confidence / HITL mode / timeout /
+            pause. Every knob stays fully mutable; a preset is a shortcut, never a
+            constraint. Hand-tune any knob and the active mode flips to "custom".
+          </p>
+
+          <div class="carousel" id="carousel" role="radiogroup" aria-label="Posture presets">
+            <!-- built-in + custom cards + Save-as-preset are rendered by the script -->
+          </div>
+        </section>
+
+        <!-- ===== the four FR-UI-9 knobs the preset row DRIVES ===== -->
+        <section class="knobs" aria-label="FR-UI-9 settings the preset drives">
+
+          <!-- 1. CONFIDENCE FLOOR -->
+          <div class="knob">
+            <div class="knob__head">
+              <span class="knob__label">Confidence floor</span>
+              <span class="knob__value" id="floorVal">60%</span>
+            </div>
+            <p class="knob__desc">
+              Advisory threshold below which a decision is flagged low-confidence
+              in place (badge only -- never auto-foreground).
+            </p>
+            <input class="knob-range" type="range" id="floorRange" min="0" max="1" step="0.01"
+                   value="0.60" aria-label="Confidence floor" aria-valuetext="60 percent">
+          </div>
+
+          <!-- 2. HITL MODE -->
+          <div class="knob">
+            <div class="knob__head">
+              <span class="knob__label">HITL mode</span>
+              <span class="knob__value" id="modeVal">SYNC</span>
+            </div>
+            <p class="knob__desc">
+              SYNC holds the message until you decide; ASYNC lets you decide and
+              annotate without holding. There is no off state (M5).
+            </p>
+            <div class="knob-seg" id="modeSeg" role="radiogroup" aria-label="HITL mode">
+              <button type="button" class="knob-seg__btn is-active" data-mode="sync"
+                      role="radio" aria-checked="true" tabindex="0">
+                <span class="knob-seg__dot" aria-hidden="true"></span>SYNC
+              </button>
+              <button type="button" class="knob-seg__btn" data-mode="async"
+                      role="radio" aria-checked="false" tabindex="-1">
+                <span class="knob-seg__dot" aria-hidden="true"></span>ASYNC
+              </button>
+            </div>
+          </div>
+
+          <!-- 3. SYNC TIMEOUT -->
+          <div class="knob">
+            <div class="knob__head">
+              <span class="knob__label">Sync timeout</span>
+              <span class="knob__value" id="timeoutVal">60s</span>
+            </div>
+            <p class="knob__desc">
+              How long a SYNC HITL hold waits for an operator decision before it
+              times out. Drives the pending-row countdown.
+            </p>
+            <input class="knob-range" type="range" id="timeoutRange" min="1" max="300" step="1"
+                   value="60" aria-label="Sync timeout seconds" aria-valuetext="60 seconds">
+          </div>
+
+          <!-- 4. PAUSE DETECTION -->
+          <div class="knob">
+            <div class="knob-toggle-row">
+              <span class="knob__label">Pause detection</span>
+              <label class="knob-switch" title="Desktop pause detection">
+                <span class="switch">
+                  <input id="pauseSwitch" type="checkbox" checked
+                         aria-label="Desktop pause detection">
+                  <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+                </span>
+                <span class="knob-switch__text" id="pauseText" data-on="true">ON</span>
+              </label>
+            </div>
+            <p class="knob__desc">
+              When on, a detected desktop-orchestration pause auto-foregrounds a
+              frame (one of the three true escalation triggers).
+            </p>
+          </div>
+
+        </section>
+      </div>
+    </section>
+
+    <!-- aria-live region: announces preset apply / custom-flip / save / delete -->
+    <div class="sr-only" aria-live="polite" id="liveRegion"></div>
+
+    <!-- ===================== amber gate footnote ===================== -->
+    <div class="gate-foot" role="note">
+      <span class="gate-foot__tag">Build gated</span>
+      <span>
+        <strong>UI is approvable; the BUILD is gated on an ADR-18 amendment.</strong>
+        Custom presets persist client-side in <code>localStorage</code> (key
+        <code>sm.next.presets</code>) for the minimal BETA. The cross-session
+        upgrade path uses the EXISTING additive <code>sessions.settings</code> JSON
+        blob -- no new table, no FROZEN schema edit. The feature also inherits the
+        BETA foundation from task #5 (registry + BetaToggles + flag gate). No new
+        bus envelope -&gt; no <code>cassette_record.py</code> / <code>soak_driver.py</code> change required.
+      </span>
+    </div>
+
+    <!-- ===================== legend + theme picker ===================== -->
+    <div class="footnote">
+      <div class="legend">
+        <h2>Paired label + colour (colour is never alone -- ADR-18 M4)</h2>
+        <ul>
+          <li><span class="swatch swatch--active"></span><strong>active card</strong> --
+            accent fill <code>--accent</code> + heavier weight. The NAME and the literal
+            micro-spec (<code>0.95 . SYNC . 120s</code>) are ALWAYS text, so the live
+            posture reads with all colour stripped.</li>
+          <li><span class="swatch swatch--custom"></span><strong>custom</strong> --
+            muted slate. Shown when the operator hand-tunes away from any preset; the
+            header pill reads "MODE: custom" (label text, never colour alone).</li>
+        </ul>
+      </div>
+      <div class="legend">
+        <h2>How the preset behaves</h2>
+        <ul>
+          <li>Click a card (or Arrow + Space/Enter) -&gt; all four knobs below snap;
+            the header pill updates. One click, zero reload (M1/M18).</li>
+          <li>Hand-move ANY knob -&gt; the active card clears + the pill flips to "custom"
+            (the config no longer equals a preset).</li>
+          <li>"Save as preset" -&gt; name it, Enter -&gt; it joins the rail after the
+            divider, persisted in <code>localStorage</code> (<code>sm.next.presets</code>).</li>
+          <li>Custom cards carry an "x" delete; built-ins do not.</li>
+          <li>radiogroup keyboard a11y; the global 2px amber focus ring lands on every card.</li>
+        </ul>
+      </div>
+      <div class="legend">
+        <h2>Preview theme</h2>
+        <div class="themes" role="group" aria-label="Preview theme">
+          <button class="theme-pick" data-theme-set="obsidian" aria-pressed="true">obsidian</button>
+          <button class="theme-pick" data-theme-set="phosphor" aria-pressed="false">phosphor</button>
+          <button class="theme-pick" data-theme-set="paper" aria-pressed="false">paper</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===================== save-as-preset modal ===================== -->
+  <div class="modal-scrim" id="modalScrim" data-open="false" aria-hidden="true"></div>
+  <div class="modal" id="saveModal" data-open="false" role="dialog" aria-modal="true"
+       aria-labelledby="saveModalTitle">
+    <h3 id="saveModalTitle">Save current posture as a preset</h3>
+    <p>Names the four current knob values so you can recall this posture in one click.</p>
+    <input class="modal-input" id="modalInput" type="text" maxlength="40"
+           placeholder="e.g. my-strict-ml-review" aria-label="Preset name">
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn--ghost" id="modalCancel" type="button">Cancel</button>
+      <button class="modal-btn modal-btn--primary" id="modalSave" type="button">Save preset</button>
+    </div>
+  </div>
+
+<script>
+  "use strict";
+
+  // ===================================================================
+  // MOCK DATA -- the four-tuple operator-settings presets. Domain-agnostic,
+  // ASCII-only, ZERO monitored-project vocabulary (M16). config keys are
+  // EXACTLY the four SmSettings keys settings.js coerce() owns, so applyPreset
+  // is just patch(config) in the real build.
+  // ===================================================================
+  var BUILTINS = [
+    { name:"PARANOID", config:{ confidenceFloor:0.95, hitlMode:"sync",  syncTimeoutSec:120, pauseDetection:true  }, hint:"Clamp down: high floor, every decision held SYNC, long read window." },
+    { name:"STANDARD", config:{ confidenceFloor:0.60, hitlMode:"sync",  syncTimeoutSec:60,  pauseDetection:true  }, hint:"Day-to-day triage posture." },
+    { name:"TRUST",    config:{ confidenceFloor:0.35, hitlMode:"async", syncTimeoutSec:30,  pauseDetection:false }, hint:"Fast prototyping: low floor, async, no holds." },
+    { name:"AUDIT",    config:{ confidenceFloor:0.99, hitlMode:"sync",  syncTimeoutSec:300, pauseDetection:true  }, hint:"Pre-ship: maximal floor, very long hold." }
+  ];
+
+  var LS_PRESETS = "sm.next.presets";
+
+  // custom presets persist in localStorage (NOT a server table). Seeded with
+  // one mock custom preset to show the divider + the "x" delete affordance.
+  function loadCustom() {
+    try {
+      var raw = window.localStorage.getItem(LS_PRESETS);
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* private mode / quota -- fall through to the seed */ }
+    return [
+      { name:"my-strict-ml-review", config:{ confidenceFloor:0.90, hitlMode:"sync", syncTimeoutSec:90, pauseDetection:true }, createdAt:"2026-06-11T05:40:00Z" }
+    ];
+  }
+  function saveCustom(list) {
+    try { window.localStorage.setItem(LS_PRESETS, JSON.stringify(list)); }
+    catch (e) { /* non-fatal in mock */ }
+  }
+  var customPresets = loadCustom();
+
+  // --- the (mock) settings store -- the live build's settings.js -------
+  // Active config starts at STANDARD to match the mockDataSpec activePresetName.
+  var current = { confidenceFloor:0.60, hitlMode:"sync", syncTimeoutSec:60, pauseDetection:true };
+
+  // --- DOM handles -----------------------------------------------------
+  var carousel    = document.getElementById("carousel");
+  var presetPill  = document.getElementById("presetPill");
+  var pillVal     = document.getElementById("presetPillVal");
+  var floorVal    = document.getElementById("floorVal");
+  var floorRange  = document.getElementById("floorRange");
+  var modeVal     = document.getElementById("modeVal");
+  var modeSeg     = document.getElementById("modeSeg");
+  var timeoutVal  = document.getElementById("timeoutVal");
+  var timeoutRange= document.getElementById("timeoutRange");
+  var pauseSwitch = document.getElementById("pauseSwitch");
+  var pauseText   = document.getElementById("pauseText");
+  var liveRegion  = document.getElementById("liveRegion");
+
+  function announce(msg) {
+    liveRegion.textContent = "";
+    setTimeout(function () { liveRegion.textContent = msg; }, 30);
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c];
+    });
+  }
+
+  // --- config equality (active-vs-custom detection) --------------------
+  function eqConfig(a, b) {
+    return a.confidenceFloor === b.confidenceFloor &&
+           a.hitlMode === b.hitlMode &&
+           a.syncTimeoutSec === b.syncTimeoutSec &&
+           a.pauseDetection === b.pauseDetection;
+  }
+  // Returns the matching preset NAME for the current config, or null (=custom).
+  function activePresetName() {
+    var all = BUILTINS.concat(customPresets);
+    for (var i = 0; i < all.length; i++) {
+      if (eqConfig(all[i].config, current)) return all[i].name;
+    }
+    return null;
+  }
+
+  // --- the literal micro-spec line ("0.95 . SYNC . 120s . pause ON") ----
+  function specLine(cfg) {
+    var floor = Math.round(cfg.confidenceFloor * 100) + "%";
+    var mode  = cfg.hitlMode === "sync" ? "SYNC" : "ASYNC";
+    var to    = cfg.syncTimeoutSec + "s";
+    var pause = cfg.pauseDetection ? "pause ON" : "pause OFF";
+    return floor + " . " + mode + " . " + to + " . " + pause;
+  }
+
+  // --- render the four knobs from `current` (the cascade target) -------
+  function flash(el) {
+    var reduce = document.documentElement.getAttribute("data-motion") === "reduce";
+    if (reduce) return;
+    el.classList.add("flash");
+    setTimeout(function () { el.classList.remove("flash"); }, 360);
+  }
+  function renderKnobs(doFlash) {
+    // confidence floor
+    var pct = Math.round(current.confidenceFloor * 100);
+    floorVal.textContent = pct + "%";
+    floorRange.value = current.confidenceFloor;
+    floorRange.setAttribute("aria-valuetext", pct + " percent");
+    // HITL mode segmented
+    modeVal.textContent = current.hitlMode === "sync" ? "SYNC" : "ASYNC";
+    Array.prototype.forEach.call(modeSeg.querySelectorAll(".knob-seg__btn"), function (b) {
+      var on = b.getAttribute("data-mode") === current.hitlMode;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-checked", on ? "true" : "false");
+      b.setAttribute("tabindex", on ? "0" : "-1");
+    });
+    // sync timeout
+    timeoutVal.textContent = current.syncTimeoutSec + "s";
+    timeoutRange.value = current.syncTimeoutSec;
+    timeoutRange.setAttribute("aria-valuetext", current.syncTimeoutSec + " seconds");
+    // pause detection
+    pauseSwitch.checked = current.pauseDetection;
+    pauseText.textContent = current.pauseDetection ? "ON" : "OFF";
+    pauseText.setAttribute("data-on", current.pauseDetection ? "true" : "false");
+    if (doFlash) { flash(floorVal); flash(modeVal); flash(timeoutVal); }
+  }
+
+  // --- render the header pill + carousel active state ------------------
+  function renderPill() {
+    var name = activePresetName();
+    if (name) {
+      presetPill.setAttribute("data-custom", "false");
+      pillVal.textContent = name;
+    } else {
+      presetPill.setAttribute("data-custom", "true");
+      pillVal.textContent = "custom";
+    }
+  }
+
+  function cardHtml(p, isCustom) {
+    var active = eqConfig(p.config, current);
+    var cls = "preset-card" + (isCustom ? " preset-card--custom" : "") + (active ? " is-active" : "");
+    var del = isCustom
+      ? '<button class="del-btn" type="button" data-del="' + escapeHtml(p.name) + '" ' +
+        'aria-label="Delete preset ' + escapeHtml(p.name) + '" title="Delete preset">x</button>'
+      : "";
+    return '<button class="' + cls + '" type="button" role="radio" ' +
+             'aria-checked="' + (active ? "true" : "false") + '" ' +
+             'tabindex="' + (active ? "0" : "-1") + '" ' +
+             'data-preset="' + escapeHtml(p.name) + '" ' +
+             'title="' + escapeHtml(p.hint || (p.name + " preset")) + '">' +
+             del +
+             '<span class="preset-card__name">' + escapeHtml(p.name) + '</span>' +
+             '<span class="preset-card__spec">' + escapeHtml(specLine(p.config)) + '</span>' +
+           '</button>';
+  }
+
+  function renderCarousel() {
+    var html = "";
+    BUILTINS.forEach(function (p) { html += cardHtml(p, false); });
+    // vertical hairline + custom group label only when custom presets exist
+    if (customPresets.length) {
+      html += '<span class="carousel__divider" aria-hidden="true"></span>';
+      html += '<span class="carousel__custom-label">Your presets</span>';
+      customPresets.forEach(function (p) { html += cardHtml(p, true); });
+    }
+    // Save-as-preset ghost button (always present, even with zero custom presets)
+    html += '<button class="save-btn" type="button" id="saveBtn" ' +
+            'aria-label="Save the current posture as a named preset">' +
+            '<span class="save-btn__plus" aria-hidden="true">+</span> Save as preset</button>';
+    carousel.innerHTML = html;
+    // ensure exactly one roving tabindex=0 in the radiogroup (the active card,
+    // else the first card so the group is keyboard-reachable).
+    var cards = carousel.querySelectorAll(".preset-card");
+    var anyActive = carousel.querySelector('.preset-card[aria-checked="true"]');
+    if (!anyActive && cards.length) cards[0].setAttribute("tabindex", "0");
+  }
+
+  function renderAll(cascadeFlash) {
+    renderKnobs(cascadeFlash);
+    renderCarousel();
+    renderPill();
+  }
+
+  // --- applyPreset(name): the KEY INTERACTION --------------------------
+  function applyPreset(name) {
+    var all = BUILTINS.concat(customPresets);
+    var p = null;
+    for (var i = 0; i < all.length; i++) { if (all[i].name === name) { p = all[i]; break; } }
+    if (!p) return;
+    // one atomic patch -> in the real build this is settings.js patch(config),
+    // which coerces + persists + emits dashboard_settings_changed; the four
+    // DrawerFields re-render + the best-effort POST /api/hitl/settings fires.
+    current = {
+      confidenceFloor: p.config.confidenceFloor,
+      hitlMode: p.config.hitlMode,
+      syncTimeoutSec: p.config.syncTimeoutSec,
+      pauseDetection: p.config.pauseDetection
+    };
+    renderAll(true);
+    announce("Preset " + name + " applied -- floor " + Math.round(current.confidenceFloor*100) +
+             " percent, " + current.hitlMode.toUpperCase() + ", " + current.syncTimeoutSec +
+             " second timeout, pause " + (current.pauseDetection ? "on" : "off"));
+    // focus stays on the just-applied card so several can be tried in a row
+    var card = carousel.querySelector('.preset-card[data-preset="' + cssEscape(name) + '"]');
+    if (card) card.focus();
+  }
+  function cssEscape(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+
+  // --- carousel events: apply / delete / keyboard ----------------------
+  carousel.addEventListener("click", function (e) {
+    var del = e.target.closest(".del-btn");
+    if (del) {
+      e.stopPropagation();
+      var dname = del.getAttribute("data-del");
+      customPresets = customPresets.filter(function (p) { return p.name !== dname; });
+      saveCustom(customPresets);
+      renderAll(false);
+      announce("Deleted preset " + dname);
+      return;
+    }
+    var save = e.target.closest("#saveBtn");
+    if (save) { openModal(); return; }
+    var card = e.target.closest(".preset-card");
+    if (card) applyPreset(card.getAttribute("data-preset"));
+  });
+
+  // radiogroup keyboard: Arrow moves focus, Space/Enter applies.
+  carousel.addEventListener("keydown", function (e) {
+    var card = e.target.closest(".preset-card");
+    if (!card) return;
+    var cards = Array.prototype.slice.call(carousel.querySelectorAll(".preset-card"));
+    var idx = cards.indexOf(card);
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      var n = cards[(idx + 1) % cards.length]; n.focus();
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      var p = cards[(idx - 1 + cards.length) % cards.length]; p.focus();
+    } else if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      applyPreset(card.getAttribute("data-preset"));
+    }
+  });
+
+  // --- the four knobs are FULLY MUTABLE -> hand-tuning flips to "custom" -
+  floorRange.addEventListener("input", function () {
+    current.confidenceFloor = Math.round(Number(floorRange.value) * 100) / 100;
+    renderKnobs(false); renderCarousel(); renderPill();
+    if (!activePresetName()) announce("Custom posture -- hand-tuned away from any preset");
+  });
+  timeoutRange.addEventListener("input", function () {
+    current.syncTimeoutSec = Math.round(Number(timeoutRange.value));
+    renderKnobs(false); renderCarousel(); renderPill();
+    if (!activePresetName()) announce("Custom posture -- hand-tuned away from any preset");
+  });
+  modeSeg.addEventListener("click", function (e) {
+    var btn = e.target.closest(".knob-seg__btn");
+    if (!btn) return;
+    current.hitlMode = btn.getAttribute("data-mode");
+    renderKnobs(false); renderCarousel(); renderPill();
+    if (!activePresetName()) announce("Custom posture -- hand-tuned away from any preset");
+  });
+  pauseSwitch.addEventListener("change", function () {
+    current.pauseDetection = pauseSwitch.checked;
+    renderKnobs(false); renderCarousel(); renderPill();
+    if (!activePresetName()) announce("Custom posture -- hand-tuned away from any preset");
+  });
+
+  // --- save-as-preset modal (focus-trapped dialog) ---------------------
+  var modalScrim = document.getElementById("modalScrim");
+  var saveModal  = document.getElementById("saveModal");
+  var modalInput = document.getElementById("modalInput");
+  var modalSave  = document.getElementById("modalSave");
+  var modalCancel= document.getElementById("modalCancel");
+  var prevFocus  = null;
+
+  function openModal() {
+    prevFocus = document.activeElement;
+    modalInput.value = "";
+    modalScrim.setAttribute("data-open", "true");
+    saveModal.setAttribute("data-open", "true");
+    modalInput.focus();
+  }
+  function closeModal() {
+    modalScrim.setAttribute("data-open", "false");
+    saveModal.setAttribute("data-open", "false");
+    if (prevFocus && prevFocus.focus) prevFocus.focus();
+  }
+  function commitSave() {
+    var name = modalInput.value.trim();
+    if (!name) { modalInput.focus(); return; }
+    // de-dup: replace an existing custom preset of the same name
+    customPresets = customPresets.filter(function (p) { return p.name !== name; });
+    customPresets.push({
+      name: name,
+      config: {
+        confidenceFloor: current.confidenceFloor,
+        hitlMode: current.hitlMode,
+        syncTimeoutSec: current.syncTimeoutSec,
+        pauseDetection: current.pauseDetection
+      },
+      createdAt: new Date().toISOString()
+    });
+    saveCustom(customPresets);
+    closeModal();
+    renderAll(false);
+    announce("Saved preset " + name + " -- it now lives in the rail and is the active mode");
+  }
+  modalSave.addEventListener("click", commitSave);
+  modalCancel.addEventListener("click", closeModal);
+  modalScrim.addEventListener("click", closeModal);
+  saveModal.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.preventDefault(); closeModal(); }
+    else if (e.key === "Enter") { e.preventDefault(); commitSave(); }
+    else if (e.key === "Tab") {
+      // simple two-stop focus trap (input <-> the two buttons)
+      var f = [modalInput, modalCancel, modalSave];
+      var i = f.indexOf(document.activeElement);
+      if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length-1].focus(); }
+      else if (!e.shiftKey && document.activeElement === f[f.length-1]) { e.preventDefault(); f[0].focus(); }
+    }
+  });
+
+  // --- BETA gate toggle (client-side mock of the Settings flag) --------
+  var betaSwitch = document.getElementById("betaSwitch");
+  var betaText = document.getElementById("betaText");
+  betaSwitch.addEventListener("change", function () {
+    var on = betaSwitch.checked;
+    document.body.setAttribute("data-beta", on ? "on" : "off");
+    betaText.textContent = on ? "ON" : "OFF";
+    betaText.setAttribute("data-on", on ? "true" : "false");
+    announce(on
+      ? "Quick-filter presets enabled -- the preset row and header pill are live"
+      : "Quick-filter presets disabled (default) -- row renders nothing, no handlers");
+  });
+
+  // --- theme picker (preview the REAL tokens across all three) ---------
+  document.querySelectorAll(".theme-pick").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var t = b.getAttribute("data-theme-set");
+      document.documentElement.setAttribute("data-theme", t);
+      document.querySelectorAll(".theme-pick").forEach(function (o) {
+        o.setAttribute("aria-pressed", o === b ? "true" : "false");
+      });
+    });
+  });
+
+  // initial paint
+  renderAll(false);
+</script>
+</body>
+</html>

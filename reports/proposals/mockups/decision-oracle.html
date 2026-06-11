@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<!--
+  decision-oracle.html -- KingMode mockup for BETA feature "decision-oracle"
+  (#12: Decision Oracle: inline pattern pedigree + ancestral replay).
+
+  PURPOSE: a static, self-contained preview the operator clicks through to
+  confirm the UI approach BEFORE any Svelte/backend code is written. Not a
+  build artefact -- a design gate (directive #2).
+
+  REUSES THE REAL TOKENS: the :root + [data-theme="obsidian"] block below is
+  lifted verbatim from dashboard/ui-next/src/styles/theme.css so this previews
+  the actual obsidian palette (amber accent #f59e0b, AA-documented dim values),
+  the M4 fixed badge tokens, and the --sm-* compatibility bridge.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- written as two
+  hyphens), no box-drawing. System font stack only -- no external assets.
+
+  WHAT IS MOCKED (vs real build):
+    - The decision feed rows are static sample data (domain-agnostic).
+    - The whisper pane content is the GET /api/decisions/{id}/oracle mock
+      payload from the vetted mockDataSpec (decision dec_8a31).
+    - Polarity (G2) is illustrated: one SM-self row carries NO oracle glyph.
+    - The BETA toggle is wired client-side so the operator SEES the gated
+      default-OFF -> ON behaviour (glyphs appear/disappear).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decision Oracle -- KingMode mockup (BETA)</title>
+<style>
+  /* ===================================================================
+     TOKEN LAYER -- lifted from dashboard/ui-next/src/styles/theme.css
+     (obsidian theme + M4 fixed badge tokens + --sm-* bridge). Verbatim
+     values so this mockup previews the REAL palette.
+     =================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* M4 fixed badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-decided-fg:     #16a34a;
+    --badge-decided-bg:     #dcfce7;
+    --badge-decided-border: #86efac;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;   /* AA 5.37:1 on #0c1118 */
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* --sm-* compatibility bridge (one place, resolves at active theme) */
+  :root {
+    --sm-bg:          var(--bg);
+    --sm-bg-card:     var(--bg-card);
+    --sm-text:        var(--text-bright);
+    --sm-text-dim:    var(--text-dim);
+    --sm-text-bright: var(--text-bright);
+    --sm-border:      var(--border);
+    --sm-accent:      var(--accent);
+    --sm-font-mono:   var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* M17: global 2px solid amber focus ring at 2px offset on every focusable. */
+  :focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+  }
+
+  /* ===================================================================
+     PAGE SHELL
+     =================================================================== */
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 4rem;
+  }
+
+  /* --- compact feature header strip --- */
+  .hdr {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.1rem;
+    padding-bottom: 1.1rem;
+    margin-bottom: 1.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .hdr__id {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.25rem;
+  }
+  .hdr__title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-bright);
+    margin: 0;
+    line-height: 1.15;
+  }
+  .hdr__sub {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    margin: 0.4rem 0 0;
+    max-width: 56ch;
+    line-height: 1.45;
+  }
+  .hdr__right {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.6rem;
+  }
+
+  /* BETA pill -- paired text + tint, never tint alone. */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--ff-mono);
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 999px;
+    padding: 0.22rem 0.6rem;
+    white-space: nowrap;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline on/off toggle (client-wired -- shows the gate) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .gate__label {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+  .switch__track {
+    width: 40px; height: 22px;
+    border-radius: 999px;
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch[aria-pressed="true"] .switch__track {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .switch[aria-pressed="true"] .switch__knob {
+    transform: translateX(18px);
+    background: var(--accent);
+  }
+  .switch__state {
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    min-width: 3ch;
+    color: var(--text-dim);
+  }
+  .switch[aria-pressed="true"] .switch__state { color: var(--accent); }
+
+  /* amber gating footnote -- build is gated on the ADR-18 amendment. */
+  .amendment {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    margin: 0 0 1.4rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 6px;
+    background: rgba(234, 88, 12, 0.06);
+  }
+  .amendment__tag {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+    border: 1px solid var(--badge-warn-border);
+    border-radius: 3px;
+    padding: 0.12rem 0.4rem;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .amendment__txt {
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--text-dim);
+    margin: 0;
+  }
+
+  /* ===================================================================
+     DECISION FEED (Frame A) -- static sample rows
+     =================================================================== */
+  .feed-cap {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin: 0 0 0.7rem;
+  }
+  .feed-cap__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .feed-cap__hint {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  .feed { display: flex; flex-direction: column; gap: 0.4rem; }
+
+  .drow {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.55rem 0.7rem 0.5rem;
+    border: 1px solid var(--border);
+    border-left-width: 2px;
+    border-left-color: transparent;
+    border-radius: 7px;
+    background: var(--bg-row);
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+  .drow:hover { background: var(--bg-row-hover); }
+  .drow--escalation {
+    border-left-color: #d97706;
+    background: var(--bg-row-flash);
+  }
+
+  .drow__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.6rem;
+    min-width: 0;
+  }
+  .drow__ts {
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+  }
+  .drow__action {
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  .drow__action--ALLOW     { color: var(--c-allow); font-weight: 400; }
+  .drow__action--GUIDE     { color: var(--c-guide); font-weight: 500; }
+  .drow__action--INTERVENE { color: var(--c-intervene); font-weight: 600; }
+  .drow__action--BLOCK     { color: var(--c-block); font-weight: 700; }
+
+  /* M4 paired badge (inline copy of Badge.svelte's .ar-* contract) */
+  .ar-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-system);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    line-height: 1;
+  }
+  .ar-badge .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+  .ar-observing { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .ar-decided   { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .ar-blocked   { color: #dc2626; background: #fee2e2; border: 2px solid #dc2626; font-weight: 700; }
+
+  .drow__layer {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.05rem 0.3rem;
+  }
+
+  /* ---- THE ORACLE GLYPH: a single hairline chip in the row header. ----
+     Painted ONLY when the beta flag is ON and the row is a non-SM session.
+     Rendered ASCII-safe as a small star inside a 1px-bordered chip. It is a
+     real <button> -- Tab-reachable, Enter/Space opens the pane. */
+  .oracle-glyph {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem; height: 1.25rem;
+    padding: 0;
+    border: 1px solid var(--border-hi);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease;
+  }
+  .oracle-glyph:hover {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .feed[data-oracle="off"] .oracle-glyph { display: none; } /* gated OFF -> no glyph */
+
+  .drow__conf {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: auto;
+  }
+  .drow__conf-bar {
+    width: 3.5rem; height: 0.32rem;
+    border-radius: 999px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .drow__conf-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .drow__conf-num {
+    font-family: var(--ff-mono);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+    min-width: 3.4ch;
+    text-align: right;
+  }
+  .drow__body { min-width: 0; }
+  .drow__content {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    color: var(--text);
+  }
+  .drow__foot {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-ui);
+  }
+  .drow__agent-chip {
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.05rem 0.35rem;
+  }
+  .drow__sess { color: var(--text-dim); }
+  .drow__self-note {
+    margin-left: auto;
+    font-style: italic;
+    color: var(--text-ui);
+    opacity: 0.8;
+  }
+
+  /* ===================================================================
+     WHISPER PANE -- non-modal right-edge side-sheet (SettingsDrawer idiom,
+     deliberately LIGHTER: a thin scrim that does NOT dim the feed, so the
+     monitor stays visible behind it -- calm-ambient M1).
+     =================================================================== */
+  .wp-scrim {
+    position: fixed; inset: 0;
+    background: transparent;       /* no full dim -- feed stays visible */
+    z-index: 40;
+    display: none;
+  }
+  .wp-scrim.is-open { display: block; }
+
+  .whisper {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(360px, 90vw);
+    z-index: 50;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border-hi);
+    box-shadow: -18px 0 48px rgba(0, 0, 0, 0.45);
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .whisper.is-open { transform: translateX(0); }
+
+  .wp-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem 1.1rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .wp-eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.3rem;
+  }
+  .wp-hash-row { display: flex; align-items: center; gap: 0.5rem; }
+  .wp-hash {
+    font-family: var(--ff-mono);
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: 0.02em;
+  }
+  .wp-copy {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.12rem 0.4rem;
+    cursor: pointer;
+  }
+  .wp-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .wp-copy[data-copied="true"] { color: var(--badge-decided-fg); border-color: var(--badge-decided-border); }
+  .wp-close {
+    appearance: none;
+    margin-left: auto;
+    width: 1.8rem; height: 1.8rem;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .wp-close:hover { color: var(--accent); border-color: var(--accent); }
+
+  .wp-body {
+    padding: 1rem 1.1rem 1.2rem;
+    overflow-y: auto;
+    flex: 1 1 auto;
+  }
+
+  .wp-section + .wp-section { margin-top: 1.3rem; }
+  .wp-section__title {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.7rem;
+  }
+
+  /* ---- Layer 1: RUNG LADDER (the bespoke signature element). ----
+     Five stacked labelled rungs L0..L4. Achieved rungs filled with accent;
+     future rungs hairline-empty; the CURRENT rung carries a paired text
+     badge "L2 -- CURRENT" (label + tint, never tint alone). */
+  .ladder { display: flex; flex-direction: column-reverse; gap: 4px; }
+  .rung {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    height: 1.55rem;
+    padding: 0 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-row-alt);
+  }
+  .rung__lbl {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    min-width: 1.8ch;
+    z-index: 2;
+  }
+  .rung__fill {
+    position: absolute;
+    inset: 0;
+    border-radius: 3px;
+    background: var(--accent-dim);
+    z-index: 0;
+  }
+  /* achieved rungs: accent fill + brighter label */
+  .rung--done { border-color: var(--border-hi); }
+  .rung--done .rung__lbl { color: var(--text-bright); }
+  /* future rungs: hairline-empty, dimmed */
+  .rung--future { opacity: 0.5; }
+  .rung--future .rung__fill { display: none; }
+  /* current rung: carries the paired CURRENT badge */
+  .rung--current { border-color: var(--accent); }
+  .rung--current .rung__fill { background: var(--accent-dim); }
+  .rung__badge {
+    margin-left: auto;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 2px;
+    padding: 0.1rem 0.34rem;
+  }
+  .rung__badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* rung_confidence meter -- TEXT "4 / 10 toward L3" plus a fill bar. */
+  .rung-meter { margin-top: 0.7rem; }
+  .rung-meter__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.3rem;
+  }
+  .rung-meter__lbl { font-size: 0.7rem; color: var(--text-dim); }
+  .rung-meter__num {
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .rung-meter__bar {
+    height: 0.42rem;
+    border-radius: 999px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .rung-meter__fill { height: 100%; background: var(--accent); border-radius: 999px; }
+
+  /* 3-up mono stat strip: success_rate / age / last_reinforced */
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+  }
+  .stat {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.5rem 0.55rem;
+    background: var(--bg-row-alt);
+  }
+  .stat__k {
+    display: block;
+    font-family: var(--ff-mono);
+    font-size: 0.54rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin-bottom: 0.25rem;
+  }
+  .stat__v {
+    font-family: var(--ff-mono);
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat__sub {
+    display: block;
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    color: var(--text-dim);
+    margin-top: 0.15rem;
+  }
+
+  /* OVERFIT flag -- dashed WARN-style chip (reuses M8 dashed-advisory idiom).
+     Always the word "OVERFIT?" beside the dashed amber -- never tint alone. */
+  .overfit {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 4px;
+    background: rgba(234, 88, 12, 0.06);
+  }
+  .overfit__tag {
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+  }
+  .overfit__txt { font-size: 0.72rem; color: var(--text-dim); }
+
+  /* ---- Layer 2: ANCESTRAL REPLAY (collapsible, collapsed by default). ---- */
+  .replay-toggle {
+    appearance: none;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .replay-toggle__caret {
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    color: var(--text-ui);
+    transition: transform 0.16s ease;
+    width: 1ch;
+  }
+  .replay-toggle[aria-expanded="true"] .replay-toggle__caret { transform: rotate(90deg); }
+  .replay-toggle__hint {
+    margin-left: auto;
+    font-size: 0.64rem;
+    color: var(--text-ui);
+  }
+
+  .replay { margin-top: 0.85rem; display: none; }
+  .replay.is-open { display: block; }
+
+  /* read-only scrubber at the top of the timeline (drives nothing server-side) */
+  .scrubber-wrap { margin-bottom: 0.9rem; }
+  .scrubber-wrap__lbl {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 0.64rem;
+    color: var(--text-dim);
+    margin-bottom: 0.3rem;
+  }
+  .scrubber {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .timeline { position: relative; padding-left: 1.1rem; }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 0.32rem; top: 0.2rem; bottom: 0.2rem;
+    width: 1px;
+    background: var(--border);
+  }
+  .tnode {
+    position: relative;
+    padding: 0.45rem 0 0.45rem 0.4rem;
+  }
+  .tnode::before {
+    content: "";
+    position: absolute;
+    left: -0.85rem; top: 0.7rem;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+  }
+  .tnode.is-active::before { background: var(--accent); border-color: var(--accent); }
+  .tnode.is-active { background: var(--accent-dim); border-radius: 5px; }
+  .tnode__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .tnode__seq {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .tnode__ts {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    color: var(--text-dim);
+  }
+  .tnode__intent {
+    margin-left: auto;
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    letter-spacing: 0.06em;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.05rem 0.3rem;
+  }
+  .tnode__fp {
+    margin: 0.3rem 0 0;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--text);
+  }
+  .tnode__conf {
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    color: var(--text-dim);
+    margin-top: 0.15rem;
+  }
+
+  /* empty-state (404 / no pedigree) -- calm, never an error toast. */
+  .wp-empty {
+    text-align: center;
+    padding: 2.4rem 1rem;
+    color: var(--text-dim);
+  }
+  .wp-empty__glyph { font-size: 1.4rem; color: var(--text-ui); margin-bottom: 0.6rem; }
+  .wp-empty__txt { font-size: 0.78rem; line-height: 1.4; }
+
+  /* beta annotation footer inside the pane */
+  .wp-foot {
+    padding: 0.7rem 1.1rem;
+    border-top: 1px solid var(--border);
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    color: var(--text-ui);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .wp-foot__dot { width: 5px; height: 5px; border-radius: 50%; background: var(--badge-ar-fg); }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============ FEATURE HEADER STRIP ============ -->
+  <header class="hdr">
+    <div>
+      <p class="hdr__id">BETA feature #12</p>
+      <h1 class="hdr__title">Decision Oracle: inline pattern pedigree</h1>
+      <p class="hdr__sub">
+        Turn an opaque decision row into a one-click, no-SQL pattern-pedigree
+        card -- judge whether a low-confidence verdict is trustworthy or
+        overfit without ever leaving the monitor.
+      </p>
+    </div>
+    <div class="hdr__right">
+      <span class="beta-pill">
+        <span class="beta-pill__dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+      <span class="gate">
+        <span class="gate__label" id="gate-lbl">Decision Oracle</span>
+        <button
+          id="oracle-toggle"
+          class="switch"
+          type="button"
+          role="switch"
+          aria-pressed="true"
+          aria-labelledby="gate-lbl"
+        >
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__state" id="gate-state">ON</span>
+        </button>
+      </span>
+    </div>
+  </header>
+
+  <!-- ============ AMBER BUILD-GATING FOOTNOTE ============ -->
+  <div class="amendment" role="note">
+    <span class="amendment__tag">Build gated</span>
+    <p class="amendment__txt">
+      UI is approvable now, but the build is gated on ADR-18 Addendum
+      "Polarity-floor self-exclude for new read-only endpoints" -- the oracle
+      endpoint MUST cross-check decision -&gt; session.project_slug server-side
+      and return 404 for any SM-self session (G2). Build may proceed in
+      parallel with the amendment landing.
+    </p>
+  </div>
+
+  <!-- ============ DECISION FEED (Frame A, static sample) ============ -->
+  <div class="feed-cap">
+    <span class="feed-cap__eyebrow">Frame A -- decision feed</span>
+    <span class="feed-cap__hint" id="feed-hint">Oracle ON -- each non-SM row carries a pedigree glyph. Click it to whisper.</span>
+  </div>
+
+  <div class="feed" id="feed" data-oracle="on">
+
+    <!-- ROW 1: the GUIDE-at-62% row from the persona walk -- THE target. -->
+    <article class="drow" data-session="s_4f7a">
+      <header class="drow__head">
+        <span class="drow__ts">05:41:07.812</span>
+        <span class="drow__action drow__action--GUIDE" title="Action: GUIDE">GUIDE</span>
+        <span class="ar-badge ar-observing"><span class="dot" aria-hidden="true"></span>OBSERVING</span>
+        <span class="drow__layer" title="L2 pattern, no LLM at this layer">L2</span>
+        <!-- ORACLE GLYPH: real button, between layer chip and confidence bar. -->
+        <button
+          class="oracle-glyph"
+          type="button"
+          data-decision="dec_8a31"
+          aria-label="Show pattern pedigree for this decision"
+          title="Show pattern pedigree"
+        >&#9733;</button>
+        <span class="drow__conf" title="62% confidence">
+          <span class="drow__conf-bar" aria-hidden="true"><span class="drow__conf-fill" style="width:62%"></span></span>
+          <span class="drow__conf-num">62%</span>
+        </span>
+      </header>
+      <div class="drow__body">
+        <p class="drow__content">running integration before the version bump as usual</p>
+      </div>
+      <footer class="drow__foot">
+        <span class="drow__agent-chip">doc-writer</span>
+        <span class="drow__sess">s_4f7a</span>
+      </footer>
+    </article>
+
+    <!-- ROW 2: a calm ALLOW. -->
+    <article class="drow" data-session="s_91c2">
+      <header class="drow__head">
+        <span class="drow__ts">05:40:55.207</span>
+        <span class="drow__action drow__action--ALLOW" title="Action: ALLOW">ALLOW</span>
+        <span class="ar-badge ar-observing"><span class="dot" aria-hidden="true"></span>OBSERVING</span>
+        <span class="drow__layer" title="L4 pattern">L4</span>
+        <button
+          class="oracle-glyph"
+          type="button"
+          data-decision="dec_77b0"
+          aria-label="Show pattern pedigree for this decision"
+          title="Show pattern pedigree"
+        >&#9733;</button>
+        <span class="drow__conf" title="94% confidence">
+          <span class="drow__conf-bar" aria-hidden="true"><span class="drow__conf-fill" style="width:94%"></span></span>
+          <span class="drow__conf-num">94%</span>
+        </span>
+      </header>
+      <div class="drow__body">
+        <p class="drow__content">read the config file and summarise the active flags</p>
+      </div>
+      <footer class="drow__foot">
+        <span class="drow__agent-chip">build-runner</span>
+        <span class="drow__sess">s_91c2</span>
+      </footer>
+    </article>
+
+    <!-- ROW 3: an INTERVENE -- decided. -->
+    <article class="drow" data-session="s_91c2">
+      <header class="drow__head">
+        <span class="drow__ts">05:40:31.044</span>
+        <span class="drow__action drow__action--INTERVENE" title="Action: INTERVENE">INTERVENE</span>
+        <span class="ar-badge ar-decided"><span class="dot" aria-hidden="true"></span>DECIDED</span>
+        <span class="drow__layer" title="L1 pattern">L1</span>
+        <button
+          class="oracle-glyph"
+          type="button"
+          data-decision="dec_5e22"
+          aria-label="Show pattern pedigree for this decision"
+          title="Show pattern pedigree"
+        >&#9733;</button>
+        <span class="drow__conf" title="71% confidence">
+          <span class="drow__conf-bar" aria-hidden="true"><span class="drow__conf-fill" style="width:71%"></span></span>
+          <span class="drow__conf-num">71%</span>
+        </span>
+      </header>
+      <div class="drow__body">
+        <p class="drow__content">force-push the rewritten history to the shared branch</p>
+      </div>
+      <footer class="drow__foot">
+        <span class="drow__agent-chip">build-runner</span>
+        <span class="drow__sess">s_91c2</span>
+      </footer>
+    </article>
+
+    <!-- ROW 4: SM-SELF session -- POLARITY (G2). NO oracle glyph rendered.
+         The endpoint would 404 this; the client never paints the button. -->
+    <article class="drow" data-session="sm_self">
+      <header class="drow__head">
+        <span class="drow__ts">05:40:02.660</span>
+        <span class="drow__action drow__action--ALLOW" title="Action: ALLOW">ALLOW</span>
+        <span class="ar-badge ar-observing"><span class="dot" aria-hidden="true"></span>OBSERVING</span>
+        <span class="drow__layer" title="L0 pattern">L0</span>
+        <!-- intentionally NO .oracle-glyph here: self-exclude polarity -->
+        <span class="drow__conf" title="88% confidence">
+          <span class="drow__conf-bar" aria-hidden="true"><span class="drow__conf-fill" style="width:88%"></span></span>
+          <span class="drow__conf-num">88%</span>
+        </span>
+      </header>
+      <div class="drow__body">
+        <p class="drow__content">project_slug == streamManager (self) -- no pedigree exposed</p>
+      </div>
+      <footer class="drow__foot">
+        <span class="drow__agent-chip">--</span>
+        <span class="drow__sess">sm_self</span>
+        <span class="drow__self-note" title="G2 polarity: SM never inspects its own session">self session -- oracle suppressed</span>
+      </footer>
+    </article>
+
+  </div>
+
+  <!-- ============ THIN SCRIM (no dim) + WHISPER PANE ============ -->
+  <div class="wp-scrim" id="wp-scrim" aria-hidden="true"></div>
+
+  <aside
+    class="whisper"
+    id="whisper"
+    role="dialog"
+    aria-labelledby="wp-eyebrow"
+    aria-hidden="true"
+  >
+    <header class="wp-head">
+      <div>
+        <p class="wp-eyebrow" id="wp-eyebrow">Pattern pedigree</p>
+        <div class="wp-hash-row">
+          <span class="wp-hash" id="wp-hash" title="9f2c1a77b4e03d56">9f2c1a77</span>
+          <button class="wp-copy" id="wp-copy" type="button" aria-label="Copy full pattern hash to clipboard">Copy hash</button>
+        </div>
+      </div>
+      <button class="wp-close" id="wp-close" type="button" aria-label="Close pattern pedigree">&times;</button>
+    </header>
+
+    <div class="wp-body" id="wp-body">
+
+      <!-- ===== LAYER 1: RUNG LADDER ===== -->
+      <section class="wp-section">
+        <h3 class="wp-section__title">Layer 1 -- promotion ladder</h3>
+
+        <div class="ladder" role="list" aria-label="Pattern promotion rungs L0 to L4, current rung L2">
+          <!-- column-reverse stacks L4 at top, L0 at bottom; markup order L0..L4 -->
+          <div class="rung rung--done" role="listitem">
+            <span class="rung__fill" aria-hidden="true"></span>
+            <span class="rung__lbl">L0</span>
+          </div>
+          <div class="rung rung--done" role="listitem">
+            <span class="rung__fill" aria-hidden="true"></span>
+            <span class="rung__lbl">L1</span>
+          </div>
+          <div class="rung rung--done rung--current" role="listitem" aria-current="step">
+            <span class="rung__fill" aria-hidden="true"></span>
+            <span class="rung__lbl">L2</span>
+            <span class="rung__badge"><span class="dot" aria-hidden="true"></span>L2 -- CURRENT</span>
+          </div>
+          <div class="rung rung--future" role="listitem">
+            <span class="rung__lbl">L3</span>
+          </div>
+          <div class="rung rung--future" role="listitem">
+            <span class="rung__lbl">L4</span>
+          </div>
+        </div>
+
+        <!-- rung_confidence meter: TEXT "4 / 10 toward L3" + fill bar -->
+        <div class="rung-meter">
+          <div class="rung-meter__row">
+            <span class="rung-meter__lbl">Toward L3 promotion</span>
+            <span class="rung-meter__num">4 / 10</span>
+          </div>
+          <div class="rung-meter__bar" role="progressbar" aria-valuemin="0" aria-valuemax="10" aria-valuenow="4" aria-valuetext="4 of 10 reinforcements toward L3">
+            <span class="rung-meter__fill" style="width:40%"></span>
+          </div>
+        </div>
+
+        <!-- 3-up mono stat strip -->
+        <div class="stat-strip">
+          <div class="stat">
+            <span class="stat__k">Success rate</span>
+            <span class="stat__v">82%</span>
+            <span class="stat__sub">39 / 47 hits</span>
+          </div>
+          <div class="stat">
+            <span class="stat__k">Age</span>
+            <span class="stat__v">6d</span>
+            <span class="stat__sub">first seen Jun 5</span>
+          </div>
+          <div class="stat">
+            <span class="stat__k">Last reinforced</span>
+            <span class="stat__v">05:41</span>
+            <span class="stat__sub">today, &lt;1m ago</span>
+          </div>
+        </div>
+
+        <!-- OVERFIT flag: dashed amber chip, always paired with the word. -->
+        <div class="overfit" role="note" aria-label="Overfit hint: 91 percent of hits on one agent profile, doc-writer">
+          <span class="overfit__tag">OVERFIT?</span>
+          <span class="overfit__txt">91% of hits on one agent profile (doc-writer)</span>
+        </div>
+      </section>
+
+      <!-- ===== LAYER 2: ANCESTRAL REPLAY (collapsed by default) ===== -->
+      <section class="wp-section">
+        <button
+          class="replay-toggle"
+          id="replay-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="replay"
+        >
+          <span class="replay-toggle__caret" aria-hidden="true">&#9656;</span>
+          <span class="wp-section__title" style="margin:0;">Layer 2 -- ancestral replay</span>
+          <span class="replay-toggle__hint" id="replay-hint">3 observations -- collapsed</span>
+        </button>
+
+        <div class="replay" id="replay">
+          <!-- read-only scrubber -- visual stepping only, drives nothing server-side -->
+          <div class="scrubber-wrap">
+            <div class="scrubber-wrap__lbl">
+              <span>Step through observations</span>
+              <span id="scrub-read">observation 1 of 3</span>
+            </div>
+            <input
+              class="scrubber"
+              id="scrubber"
+              type="range"
+              min="1" max="3" step="1" value="1"
+              aria-label="Step through pattern observations"
+              aria-valuetext="observation 1 of 3"
+            >
+          </div>
+
+          <div class="timeline" id="timeline">
+            <div class="tnode is-active" data-seq="1">
+              <div class="tnode__head">
+                <span class="tnode__seq">#1</span>
+                <span class="tnode__ts">Jun 5, 09:02</span>
+                <span class="tnode__intent">test-gate</span>
+              </div>
+              <p class="tnode__fp" title="run the full integration suite before tagging the release candidate">run the full integration suite before tagging the rel...</p>
+              <span class="tnode__conf">match 55%</span>
+            </div>
+            <div class="tnode" data-seq="2">
+              <div class="tnode__head">
+                <span class="tnode__seq">#2</span>
+                <span class="tnode__ts">Jun 7, 14:20</span>
+                <span class="tnode__intent">test-gate</span>
+              </div>
+              <p class="tnode__fp" title="kick off the integration tests, do not skip the slow ones this time">kick off the integration tests, do not skip the slow o...</p>
+              <span class="tnode__conf">match 71%</span>
+            </div>
+            <div class="tnode" data-seq="3">
+              <div class="tnode__head">
+                <span class="tnode__seq">#3</span>
+                <span class="tnode__ts">Jun 9, 11:48</span>
+                <span class="tnode__intent">test-gate</span>
+              </div>
+              <p class="tnode__fp" title="running integration before the version bump as usual">running integration before the version bump as usual</p>
+              <span class="tnode__conf">match 83%</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- BETA annotation footer (required) -->
+    <footer class="wp-foot">
+      <span class="wp-foot__dot" aria-hidden="true"></span>
+      BETA -- default OFF, toggled in Settings &gt; BETA features
+    </footer>
+  </aside>
+
+  <!-- live region for copy / scrubber announcements -->
+  <div class="sr-only" id="live" role="status" aria-live="polite"></div>
+
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    var feed        = document.getElementById("feed");
+    var feedHint    = document.getElementById("feed-hint");
+    var toggle      = document.getElementById("oracle-toggle");
+    var gateState   = document.getElementById("gate-state");
+    var whisper     = document.getElementById("whisper");
+    var scrim       = document.getElementById("wp-scrim");
+    var wpClose     = document.getElementById("wp-close");
+    var wpCopy      = document.getElementById("wp-copy");
+    var wpHash      = document.getElementById("wp-hash");
+    var live        = document.getElementById("live");
+    var replayBtn   = document.getElementById("replay-toggle");
+    var replay      = document.getElementById("replay");
+    var replayHint  = document.getElementById("replay-hint");
+    var scrubber    = document.getElementById("scrubber");
+    var scrubRead   = document.getElementById("scrub-read");
+    var timeline    = document.getElementById("timeline");
+
+    var lastTrigger = null; // restore focus here on close (M17)
+
+    // ---- BETA gate: toggle paints/removes the oracle glyphs (default ON in
+    //      this mockup so the operator sees the feature WITH data; flipping it
+    //      OFF demonstrates the gated default-OFF behaviour). ----
+    function setGate(on) {
+      toggle.setAttribute("aria-pressed", on ? "true" : "false");
+      gateState.textContent = on ? "ON" : "OFF";
+      feed.setAttribute("data-oracle", on ? "on" : "off");
+      feedHint.textContent = on
+        ? "Oracle ON -- each non-SM row carries a pedigree glyph. Click it to whisper."
+        : "Oracle OFF (default) -- no glyph painted, no fetch registered. Flip ON to inspect.";
+      if (!on) closeWhisper();
+    }
+    toggle.addEventListener("click", function () {
+      setGate(toggle.getAttribute("aria-pressed") !== "true");
+    });
+
+    // ---- Open the whisper pane from a glyph (Enter/Space/click via button). ----
+    function openWhisper(trigger) {
+      lastTrigger = trigger || null;
+      scrim.classList.add("is-open");
+      whisper.classList.add("is-open");
+      whisper.setAttribute("aria-hidden", "false");
+      scrim.setAttribute("aria-hidden", "false");
+      // focus management: first focusable is the close button (M17)
+      wpClose.focus();
+    }
+    function closeWhisper() {
+      if (!whisper.classList.contains("is-open")) return;
+      scrim.classList.remove("is-open");
+      whisper.classList.remove("is-open");
+      whisper.setAttribute("aria-hidden", "true");
+      scrim.setAttribute("aria-hidden", "true");
+      if (lastTrigger && typeof lastTrigger.focus === "function") {
+        lastTrigger.focus(); // restore focus to the originating glyph
+      }
+      lastTrigger = null;
+    }
+
+    // Delegate glyph clicks (only glyphs that are painted -- gated rows have none).
+    feed.addEventListener("click", function (e) {
+      var g = e.target.closest(".oracle-glyph");
+      if (g) openWhisper(g);
+    });
+
+    wpClose.addEventListener("click", closeWhisper);
+    scrim.addEventListener("click", closeWhisper); // dismiss on blur/scrim
+
+    // Escape closes + restores focus (M17).
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && whisper.classList.contains("is-open")) {
+        e.preventDefault();
+        closeWhisper();
+      }
+    });
+
+    // ---- Click-to-copy hash with a TEXT "copied" confirm (never color-only). ----
+    wpCopy.addEventListener("click", function () {
+      var full = wpHash.getAttribute("title") || wpHash.textContent;
+      var done = function () {
+        wpCopy.textContent = "Copied";
+        wpCopy.setAttribute("data-copied", "true");
+        live.textContent = "Pattern hash copied to clipboard.";
+        setTimeout(function () {
+          wpCopy.textContent = "Copy hash";
+          wpCopy.removeAttribute("data-copied");
+        }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(full).then(done, done);
+      } else {
+        done();
+      }
+    });
+
+    // ---- Layer 2 collapse toggle (native aria-expanded button). ----
+    replayBtn.addEventListener("click", function () {
+      var open = replayBtn.getAttribute("aria-expanded") !== "true";
+      replayBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      replay.classList.toggle("is-open", open);
+      replayHint.textContent = open ? "3 observations -- expanded" : "3 observations -- collapsed";
+    });
+
+    // ---- Scrubber: arrow-key steppable, highlights the matching node,
+    //      announces "observation N of 3". Drives NOTHING server-side. ----
+    var nodes = timeline ? timeline.querySelectorAll(".tnode") : [];
+    function setActiveNode(n) {
+      for (var i = 0; i < nodes.length; i++) {
+        nodes[i].classList.toggle("is-active", String(i + 1) === String(n));
+      }
+      var txt = "observation " + n + " of " + nodes.length;
+      scrubber.setAttribute("aria-valuetext", txt);
+      scrubRead.textContent = txt;
+    }
+    scrubber.addEventListener("input", function () {
+      setActiveNode(scrubber.value);
+    });
+  })();
+</script>
+</body>
+</html>

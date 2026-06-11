@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "confidence-heatmap-pane" (#9: Confidence heat map grid pane,
+  Frame B: role x time-bucket).
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written (directive #2).
+  This previews dashboard/ui-next/src/lib/components/ConfidenceHeatMap.svelte + HeatCell.svelte --
+  an OPTIONAL pane mounted INSIDE Frame B (Sub-Agents), BELOW the AgentRoster, behind
+  {#if $betaFlags['confidence-heatmap']} so it is a no-op (zero pollers, zero render) when OFF.
+
+  THE TASK IT SERVES: spotting a confidence TREND per agent-role across a rolling 60-min window
+  without reading the feed row-by-row. Y = agent roles (the fixed domain-agnostic RoleBadge schema,
+  sorted by current mean confidence DESC); X = 12 contiguous 5-min buckets, oldest-left newest-right.
+  GLANCE a ROW left-to-right => one role's trajectory; SCAN a COLUMN top-to-bottom => which roles
+  were shaky in the same window. HOVER a cell => tooltip. CLICK a cell => an inline mini-tray of the
+  5-10 decisions behind it. Observation-only -- it NEVER gates or blocks an agent (M13).
+
+  Real obsidian/phosphor/paper tokens lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css (incl. the per-theme action palette
+  --c-allow / --c-suggest / --c-guide / --c-intervene / --c-block, reused as the confidence-band
+  color RAMP). No new color tokens introduced.
+
+  ADR-18 MUSTs honored in this mockup:
+    M2  calm at rest -- a still grid INSIDE Frame B; no pulse, no motion, no Frame escalation; it
+        never auto-foregrounds. Frame B is "still water"; only the rightmost "now" column earns a
+        single 1px accent underline (where new decisions land).
+    M4  PAIRED label+color everywhere -- every HeatCell carries THREE simultaneous encodings:
+        (1) a band fill color, (2) the literal mean % printed IN the tile (load-bearing text),
+        (3) a one-letter band glyph H/O/W/L in the corner. An EMPTY cell is NOT colored -- it is a
+        calm --border hairline gap, so absence reads as quiet, never as a low band. Color is never
+        the sole signal; the % + glyph survive a fully-desaturated render.
+    M13 observation-only -- no agent is gated/blocked; the pane is a read surface.
+    M15/G2 self-exclude -- the SM-own session MUST return an empty grid (server WHERE on
+        sessions.project_slug + client backstop). Shown + asserted via the scope buttons.
+    M16 domain-agnostic -- the Y-axis role vocabulary is the fixed RoleBadge ROLE_SCHEMA; governed-
+        target identity is rendered FROM DATA, no monitored-project vocabulary baked in.
+    M17 2px solid accent focus ring + offset on the focused gridcell (roving-tabindex 2D grid).
+    M18 post-hoc read-only; live updates ride the EXISTING /events decisionsStore (sse.js) with NO
+        new envelope and NO new SSE channel; in-place cell recompute coalesced 1/500ms.
+
+  BUILD-GATE NOTE: this feature is flagged NEEDS-AMENDMENT only as a FOOTPRINT CORRECTION -- the
+  kingmodeDesign correctly rides the existing /events decisionsStream so NO new bus envelope is
+  needed (newEnvelope=false). Once the footprint is corrected the UI is approvable and the surfaces
+  (GET /api/heatmap + 2 components + 1 registry row) are all additive read-only. An amber footnote
+  below states the UI is approvable but the build is gated on that correction.
+
+  Self-contained: inline <style> + inline <script>. No external assets / CDNs / fonts.
+  System font stack. ASCII-only (no smart quotes, no em-dashes -- written as "--", no box-drawing).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Confidence Heat Map pane -- KingMode mockup (BETA)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    /* fixed paired-badge tokens (theme-invariant per M4) */
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+  }
+  /* ---- THEME TOKENS (verbatim from theme.css, incl. per-theme action palette) ---- */
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+    /* action palette (shared :root default in theme.css), reused as the band ramp */
+    --c-allow:#22c55e; --c-suggest:#84cc16; --c-guide:#eab308; --c-intervene:#f97316; --c-block:#ef4444;
+    /* per-band IN-TILE ink chosen for AAA (>=7:1) on each band fill (dark themes => near-black ink) */
+    --ink-high:#06210f; --ink-ok:#1c2606; --ink-watch:#2a1404; --ink-low:#2a0606;
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+    /* phosphor action palette (re-tuned for green-on-black, verbatim theme.css) */
+    --c-allow:#39ff14; --c-suggest:#7fff00; --c-guide:#ccff00; --c-intervene:#ffaa00; --c-block:#ff3333;
+    --ink-high:#001a00; --ink-ok:#0a1a00; --ink-watch:#2a1a00; --ink-low:#2a0000;
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+    /* paper action palette (darkened for AA on light, verbatim theme.css) */
+    --c-allow:#16a34a; --c-suggest:#65a30d; --c-guide:#ca8a04; --c-intervene:#ea580c; --c-block:#dc2626;
+    /* paper => band fills darken (as RoleBadge does) so a near-WHITE in-tile ink clears AAA */
+    --ink-high:#ffffff; --ink-ok:#ffffff; --ink-watch:#ffffff; --ink-low:#ffffff;
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    display:flex; min-height:100%;
+    align-items:flex-start; justify-content:center;
+    padding: 36px 20px 80px;
+  }
+  .stage { width:100%; max-width: 1060px; }
+
+  /* ---- page chrome / header strip ---- */
+  .legend { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    font-size:25px; color:var(--text-bright); line-height:1.05;
+  }
+  .legend p { margin:6px 0 0; font-size:13px; color:var(--text-dim); max-width:64ch; line-height:1.55; }
+  .legend .lead-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+
+  /* BETA pill */
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:var(--font-d); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--accent); border:1px solid var(--border-hi); border-radius:999px;
+    padding:4px 11px; background:var(--accent-dim); white-space:nowrap;
+  }
+  .beta-pill .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent-glow); }
+
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+  [data-theme="paper"] .themes button.on { color:#fffbeb; }
+
+  /* the master on/off switch (the gated nature, wired client-side) */
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; flex:0 0 auto; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border); transition:background .18s, border-color .18s; flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform .18s, background .18s;
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track { outline:2px solid var(--badge-ar-border); outline-offset:2px; }
+  .switch__text {
+    min-width:3.2ch; font-family:var(--font-d); font-size:12px; letter-spacing:.06em; font-weight:600;
+    color:var(--text-dim);
+  }
+  .switch__text[data-on="true"] { color:var(--accent); }
+
+  /* ---------------------------------------------------------------------------
+     FRAME B FACSIMILE -- the Sub-Agents frame. AgentRoster (the spatial list)
+     sits at top; the ConfidenceHeatMap pane (the temporal companion) mounts
+     BELOW it behind the beta gate.
+  --------------------------------------------------------------------------- */
+  .frame {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    box-shadow: -18px 24px 60px -30px rgba(0,0,0,.7);
+    overflow:hidden;
+  }
+  .frame__head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 18px; border-bottom:1px solid var(--border); gap:14px;
+  }
+  .frame__title {
+    margin:0; font-family:var(--font-h); font-size:17px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-bright);
+  }
+  .frame__title .frame-tag {
+    font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.12em; margin-left:9px;
+  }
+  /* M3 ACTION count -- paired label + tabular number; B is calm here (0) */
+  .fh-count {
+    display:inline-flex; align-items:baseline; gap:6px;
+    font-family:var(--font-d); font-size:12px; color:var(--text-dim);
+    border:1px solid var(--border); border-radius:4px; padding:3px 9px;
+  }
+  .fh-count .n { color:var(--text-bright); font-variant-numeric:tabular-nums; font-weight:700; }
+  .fh-count .lab { letter-spacing:.1em; text-transform:uppercase; font-size:10px; }
+
+  .fb-ctx {
+    display:flex; align-items:baseline; gap:8px; padding:9px 18px 4px;
+    font-size:.68rem; color:var(--text-dim); letter-spacing:.03em;
+  }
+  .fb-ctx .lbl { text-transform:uppercase; letter-spacing:.12em; font-size:.58rem; color:var(--text-ui); }
+  .fb-ctx .name { font-family:var(--font-d); color:var(--text-bright); font-weight:600; }
+  .fb-ctx .pid { font-family:var(--font-d); color:var(--text-dim); }
+
+  /* ---- AgentRoster facsimile (the spatial list above the pane) ---- */
+  .roster { padding:6px 18px 4px; }
+  .roster__h { font-size:11px; text-transform:uppercase; letter-spacing:.12em; color:var(--text-ui); padding-bottom:6px; border-bottom:1px solid var(--border); }
+  .roster__list { display:flex; flex-wrap:wrap; gap:8px; padding:10px 0 12px; }
+
+  /* RoleBadge facsimile (dot decorative / text load-bearing -- M4) */
+  .role-badge {
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:var(--font-d); font-weight:600; letter-spacing:.02em; line-height:1;
+    border-radius:2px; border:1px solid var(--border); background:var(--bg-row-alt);
+    color:var(--text); white-space:nowrap; font-size:11px; padding:3px 8px;
+  }
+  .role-badge__dot { width:5px; height:5px; border-radius:50%; background:currentColor; flex:0 0 auto; opacity:.85; }
+  .role-badge--calm  { color:#93a4bd; border-color:rgba(148,163,184,.26); background:rgba(148,163,184,.07); }
+  .role-badge--watch { color:#c9a227; border-color:rgba(202,138,4,.4); background:rgba(202,138,4,.1); font-weight:700; }
+  .role-badge--muted { color:var(--text-dim); border-color:var(--border); background:rgba(148,163,184,.05); font-weight:500; }
+  [data-theme="paper"] .role-badge--calm  { color:#475569; }
+  [data-theme="paper"] .role-badge--watch { color:#92620a; }
+  .role-badge__side {
+    font-size:.82em; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    padding:1px 4px; border-radius:2px; color:var(--text-dim); background:rgba(148,163,184,.16); flex:0 0 auto;
+  }
+
+  /* ---------------------------------------------------------------------------
+     THE CONFIDENCE HEAT MAP PANE (ConfidenceHeatMap.svelte facsimile)
+  --------------------------------------------------------------------------- */
+  .pane { padding:10px 18px 18px; }
+  .pane__head {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    padding-bottom:10px;
+  }
+  .pane__title { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pane__title h3 {
+    margin:0; font-family:var(--font-h); font-size:15px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-bright);
+  }
+  /* the small slate "BETA -- default OFF, toggled in Settings" chip next to the title */
+  .pane__beta {
+    font-family:var(--font-d); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+    border-radius:3px; padding:2px 8px; white-space:nowrap;
+  }
+  .pane__win {
+    font-family:var(--font-d); font-size:11px; color:var(--text-dim); letter-spacing:.04em;
+  }
+  .pane__win .live { color:var(--accent); }
+
+  /* the grid: [role-rail] [12 buckets]. Borderless flush tiles separated only by the
+     --bg gap so the SHAPE of the heat reads as a single field of color (M2). */
+  .hm {
+    --cols: 12;
+    display:grid;
+    grid-template-columns: minmax(132px, max-content) 1fr;
+    gap: 8px;
+    align-items:start;
+  }
+  /* X-axis: a thin baseline of 5-min ticks; only every other tick labelled (calm). */
+  .hm__xaxis {
+    grid-column: 2; display:grid; grid-template-columns: repeat(var(--cols), 1fr); gap:3px;
+    padding-bottom:4px; border-bottom:1px solid var(--border);
+  }
+  .hm__tick {
+    font-family:var(--font-d); font-size:9px; color:var(--text-dim); text-align:center;
+    letter-spacing:.02em; white-space:nowrap; min-width:0; overflow:hidden;
+  }
+  .hm__tick--now { color:var(--accent); font-weight:700; }
+  .hm__spacer { grid-column:1; } /* empty corner above the role rail */
+
+  /* a role row = [RoleBadge chip] [12 cells]. */
+  .hm__row { display:contents; }
+  .hm__rolecell {
+    grid-column:1; display:flex; align-items:center; justify-content:flex-end; gap:7px;
+    height:34px; padding-right:4px;
+  }
+  .hm__rolemean {
+    font-family:var(--font-d); font-size:10px; color:var(--text-dim); font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+  }
+  .hm__cells {
+    grid-column:2; display:grid; grid-template-columns: repeat(var(--cols), 1fr); gap:3px;
+  }
+
+  /* HeatCell facsimile -- THREE simultaneous encodings (M4):
+       (1) band fill color  (2) the literal mean % printed IN the tile  (3) H/O/W/L glyph */
+  .cell {
+    position:relative; height:34px; border:0; border-radius:2px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+    cursor:pointer; padding:0; background:transparent; font-family:var(--font-d);
+    transition: filter .15s ease;
+  }
+  .cell:hover { filter:brightness(1.06); }
+  .cell .pct {
+    font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1;
+  }
+  .cell .glyph {
+    position:absolute; top:2px; right:3px; font-size:8px; font-weight:700; letter-spacing:.02em; line-height:1; opacity:.92;
+  }
+  /* band fills reuse the action-palette tokens as the confidence ramp; in-tile ink per band => AAA */
+  .cell[data-band="HIGH"]  { background:var(--c-allow);     color:var(--ink-high); }
+  .cell[data-band="OK"]    { background:var(--c-suggest);   color:var(--ink-ok); }
+  .cell[data-band="WATCH"] { background:var(--c-intervene); color:var(--ink-watch); }
+  .cell[data-band="LOW"]   { background:var(--c-block);     color:var(--ink-low); }
+  /* an EMPTY cell (no decisions) is NOT colored -- a calm hairline gap (absence reads as quiet). */
+  .cell[data-band="EMPTY"] {
+    background:transparent; border:1px solid var(--border); color:var(--text-dim); cursor:default;
+  }
+  .cell[data-band="EMPTY"] .pct { font-size:11px; font-weight:600; opacity:.6; }
+  .cell[data-band="EMPTY"]:hover { filter:none; }
+  /* the rightmost ("now") column gets a 1px accent underline -- the one element that earns emphasis */
+  .cell[data-now="true"]::after {
+    content:""; position:absolute; left:0; right:0; bottom:-2px; height:1px; background:var(--accent);
+  }
+  /* M17 keyboard focus ring on a gridcell: 2px solid accent + offset */
+  .cell:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
+  .cell[data-selected="true"]::before {
+    content:""; position:absolute; inset:-3px; border:2px solid var(--accent); border-radius:4px; pointer-events:none;
+  }
+  @media (prefers-reduced-motion: reduce) { .cell { transition:none; } }
+
+  /* hover tooltip -- the SAME signal IN WORDS (aria-describedby) */
+  .cell__tip {
+    position:absolute; left:50%; bottom:calc(100% + 7px); transform:translateX(-50%);
+    z-index:6; white-space:nowrap; display:none;
+    background:var(--bg-row); border:1px solid var(--border-hi); border-radius:5px;
+    padding:7px 10px; box-shadow:0 8px 24px -10px rgba(0,0,0,.7);
+    font-family:var(--font-d); font-size:11px; color:var(--text-bright); line-height:1.4;
+    text-align:left;
+  }
+  .cell[data-band]:not([data-band="EMPTY"]):hover .cell__tip,
+  .cell:focus-visible .cell__tip { display:block; }
+  .cell__tip .tline2 { color:var(--text-dim); margin-top:2px; }
+
+  /* legend (the band ramp) + beta annotation under the grid */
+  .hm-foot { display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-top:14px; }
+  .legend-key { display:inline-flex; align-items:center; gap:14px; font-family:var(--font-d); font-size:11px; color:var(--text-dim); flex-wrap:wrap; }
+  .legend-key .k { display:inline-flex; align-items:center; gap:6px; }
+  .legend-key .sw { width:13px; height:13px; border-radius:2px; display:inline-flex; align-items:center; justify-content:center; font-size:8px; font-weight:700; }
+  .legend-key .sw.high  { background:var(--c-allow);     color:var(--ink-high); }
+  .legend-key .sw.ok    { background:var(--c-suggest);   color:var(--ink-ok); }
+  .legend-key .sw.watch { background:var(--c-intervene); color:var(--ink-watch); }
+  .legend-key .sw.low   { background:var(--c-block);     color:var(--ink-low); }
+  .legend-key .sw.empty { background:transparent; border:1px solid var(--border); color:var(--text-dim); }
+  .beta-anno {
+    font-family:var(--font-d); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border);
+    border-radius:3px; padding:2px 8px;
+  }
+
+  /* ---- the CLICK mini-tray (slides open BELOW the grid; does NOT cover it) ---- */
+  .tray {
+    display:none; margin-top:14px; border:1px solid var(--border-hi); border-radius:6px;
+    background:var(--bg-row); overflow:hidden;
+  }
+  .tray.on { display:block; }
+  .tray__head {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:9px 13px; border-bottom:1px solid var(--border); background:var(--bg-row-alt);
+  }
+  .tray__title { font-family:var(--font-d); font-size:12px; color:var(--text-bright); }
+  .tray__title .meta { color:var(--text-dim); }
+  .tray__close {
+    appearance:none; background:transparent; border:1px solid var(--border); color:var(--text-ui);
+    border-radius:4px; font-size:11px; padding:3px 9px; cursor:pointer; font-family:var(--font-d); letter-spacing:.04em;
+  }
+  .tray__close:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .tray__rows { padding:4px 0; max-height:260px; overflow:auto; }
+  /* DecisionRow-style compact line -- click to scope the main feed (sm:focus-session) */
+  .drow {
+    display:grid; grid-template-columns: 72px 104px 56px 1fr; gap:10px; align-items:center;
+    padding:7px 13px; border-top:1px solid var(--border); font-size:12px; cursor:pointer; width:100%;
+    text-align:left; background:transparent; border-left:0; border-right:0; color:inherit; font-family:inherit;
+  }
+  .drow:first-child { border-top:0; }
+  .drow:hover { background:var(--bg-row-hover); }
+  .drow:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .drow .ts { font-family:var(--font-d); color:var(--text-dim); font-variant-numeric:tabular-nums; }
+  .drow .conf { font-family:var(--font-d); color:var(--text-bright); font-variant-numeric:tabular-nums; text-align:right; }
+  .drow .msg { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  /* paired action badge inside the tray (text label ALWAYS present; color is 2nd channel) */
+  .badge {
+    display:inline-flex; align-items:center; gap:6px; justify-self:start;
+    font-family:var(--font-d); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+    border:1px solid var(--border); border-radius:3px; padding:2px 7px; color:var(--text-bright);
+  }
+  .badge .swatch { width:7px; height:7px; border-radius:50%; }
+  .badge[data-act="ALLOW"]     { border-color:var(--c-allow); }     .badge[data-act="ALLOW"] .swatch { background:var(--c-allow); }
+  .badge[data-act="SUGGEST"]   { border-color:var(--c-suggest); }   .badge[data-act="SUGGEST"] .swatch { background:var(--c-suggest); }
+  .badge[data-act="GUIDE"]     { border-color:var(--c-guide); }     .badge[data-act="GUIDE"] .swatch { background:var(--c-guide); }
+  .badge[data-act="INTERVENE"] { border-color:var(--c-intervene); } .badge[data-act="INTERVENE"] .swatch { background:var(--c-intervene); }
+  .badge[data-act="BLOCK"]     { border-color:var(--c-block); }     .badge[data-act="BLOCK"] .swatch { background:var(--c-block); box-shadow:0 0 0 1px var(--bg-row),0 0 0 2px var(--c-block); }
+
+  /* OFF state: the pane renders NOTHING (no-op gate). A ghost note explains. */
+  .frame[data-beta="off"] .pane__inner { display:none; }
+  .pane__off {
+    display:none; font-size:12px; color:var(--text-dim); font-style:italic;
+    border:1px dashed var(--border); border-radius:5px; padding:10px 13px; line-height:1.55;
+  }
+  .frame[data-beta="off"] .pane__off { display:block; }
+  .pane__off code { font-family:var(--font-d); color:var(--text-ui); font-style:normal; }
+
+  /* ---- secondary: Settings > BETA features row shown ON ---- */
+  .settings {
+    margin-top:22px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; overflow:hidden;
+  }
+  .settings__head { padding:12px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .settings__head h3 { margin:0; font-family:var(--font-h); font-size:15px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-bright); }
+  .settings__head .grp { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.1em; text-transform:uppercase; }
+  .settings__row { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:13px 18px; }
+  .settings__row .main { min-width:0; }
+  .settings__row .name { font-size:13px; font-weight:600; color:var(--text-bright); }
+  .settings__row .name .num { font-family:var(--font-d); font-size:11px; color:var(--text-dim); margin-left:7px; }
+  .settings__row .desc { font-size:12px; color:var(--text-dim); line-height:1.5; margin-top:3px; max-width:60ch; }
+
+  .footnote { margin-top:20px; font-size:11px; color:var(--text-dim); line-height:1.65; max-width:94ch; }
+  .footnote code { font-family:var(--font-d); color:var(--text-ui); }
+  .footnote strong { color:var(--text-bright); }
+  /* amber "build gated on ADR-18 amendment" footnote */
+  .gate-note {
+    margin-top:16px; padding:10px 13px; border:1px solid var(--badge-ar-border); border-radius:5px;
+    background:var(--badge-ar-bg); color:#7c4a02; font-size:12px; line-height:1.55;
+  }
+  .gate-note strong { color:#5a3500; }
+  .gate-note code { font-family:var(--ff-mono); color:#7c4a02; }
+  .self-note {
+    margin-top:12px; padding:10px 13px; border:1px solid var(--border); border-radius:5px;
+    background:var(--bg-row-alt); font-size:12px; color:var(--text-dim); line-height:1.55;
+  }
+  .self-note strong { color:var(--text-bright); }
+  .self-note code { font-family:var(--font-d); color:var(--accent); }
+  .self-note .fclear {
+    appearance:none; background:transparent; border:1px solid var(--border); color:var(--text-ui);
+    border-radius:4px; font-size:11px; padding:3px 9px; cursor:pointer; font-family:var(--font-d); letter-spacing:.04em;
+  }
+  .self-note .fclear:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .scope-tag {
+    display:inline-block; margin-top:8px; font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+  }
+  .scope-tag .nm { color:var(--text-bright); }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <!-- ===================== HEADER STRIP ===================== -->
+    <div class="legend">
+      <div>
+        <div class="lead-row">
+          <h1>Confidence Heat Map</h1>
+          <span class="beta-pill"><span class="dot" aria-hidden="true"></span> BETA</span>
+        </div>
+        <p>A still, calm grid INSIDE Frame B (Sub-Agents): Y = agent roles (sorted by current mean
+           confidence, highest at top), X = 12 contiguous 5-min buckets over a rolling 60 min. Read a
+           ROW left-to-right for one role's trajectory; scan a COLUMN for which roles were shaky in the
+           same window. Hover a cell for the tooltip; click it for the 5-10 decisions behind it.
+           Observation-only -- it never gates an agent. Switch theme to preview all three.</p>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:12px; align-items:flex-end;">
+        <label class="switch" title="Master ON/OFF -- BETA, default OFF">
+          <input type="checkbox" id="betaToggle" checked aria-label="Confidence Heat Map BETA (currently ON)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="betaText" data-on="true">ON</span>
+        </label>
+        <div class="themes" role="group" aria-label="Theme preview">
+          <button class="on" data-theme-btn="obsidian" aria-pressed="true">Obsidian</button>
+          <button data-theme-btn="phosphor" aria-pressed="false">Phosphor</button>
+          <button data-theme-btn="paper" aria-pressed="false">Paper</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== FRAME B FACSIMILE ===================== -->
+    <div class="frame" id="frame" data-beta="on" role="region" aria-label="Sub-Agents frame">
+      <div class="frame__head">
+        <h2 class="frame__title">Sub-Agents <span class="frame-tag">FRAME B</span></h2>
+        <span class="fh-count"><span class="n">0</span> <span class="lab">action required</span></span>
+      </div>
+
+      <div class="fb-ctx">
+        <span class="lbl">scope</span>
+        <span class="name" id="scopeName">s-4f7a2c91</span>
+        <span class="pid" id="scopePid">pid 48217</span>
+      </div>
+
+      <!-- AgentRoster (the spatial list -- the heatmap is its temporal companion below) -->
+      <div class="roster">
+        <div class="roster__h">Agent roster -- live</div>
+        <div class="roster__list" aria-label="Active agent roles">
+          <span class="role-badge role-badge--calm"><span class="role-badge__dot" aria-hidden="true"></span>frontend_architect</span>
+          <span class="role-badge role-badge--calm"><span class="role-badge__dot" aria-hidden="true"></span>developer</span>
+          <span class="role-badge role-badge--calm"><span class="role-badge__dot" aria-hidden="true"></span>code_reviewer <span class="role-badge__side">side</span></span>
+          <span class="role-badge role-badge--calm"><span class="role-badge__dot" aria-hidden="true"></span>tester</span>
+          <span class="role-badge role-badge--calm"><span class="role-badge__dot" aria-hidden="true"></span>researcher</span>
+        </div>
+      </div>
+
+      <!-- THE CONFIDENCE HEAT MAP PANE (ConfidenceHeatMap.svelte) -->
+      <div class="pane"
+           role="region"
+           aria-label="Confidence heat map, role by time"
+           aria-live="off">
+
+        <div class="pane__inner">
+          <div class="pane__head">
+            <div class="pane__title">
+              <h3>Confidence Heat Map</h3>
+              <span class="pane__beta">BETA -- default OFF, toggled in Settings</span>
+            </div>
+            <div class="pane__win">
+              rolling 60 min -- 12 x 5-min buckets -- <span class="live">live</span>
+            </div>
+          </div>
+
+          <!-- the grid (role rail + 12 buckets). role="grid" + roving-tabindex cells. -->
+          <div class="hm"
+               id="hmGrid"
+               role="grid"
+               aria-label="Confidence heat map, agent role by 5-minute time bucket, oldest left, newest right"
+               aria-readonly="true"
+               tabindex="0">
+            <!-- header row: corner spacer + the X-axis ticks (built by JS) -->
+            <div class="hm__spacer" aria-hidden="true"></div>
+            <div class="hm__xaxis" id="hmXaxis" role="row" aria-hidden="true"></div>
+            <!-- role rows injected here -->
+            <div id="hmRows" style="display:contents"></div>
+          </div>
+
+          <div class="hm-foot">
+            <span class="legend-key" aria-label="Confidence band legend">
+              <span class="k"><span class="sw high"  aria-hidden="true">H</span>HIGH >=75%</span>
+              <span class="k"><span class="sw ok"    aria-hidden="true">O</span>OK 60-75%</span>
+              <span class="k"><span class="sw watch" aria-hidden="true">W</span>WATCH 45-60%</span>
+              <span class="k"><span class="sw low"   aria-hidden="true">L</span>LOW &lt;45%</span>
+              <span class="k"><span class="sw empty" aria-hidden="true"></span>(empty) no decisions</span>
+            </span>
+            <span class="beta-anno">BETA -- default OFF, toggled in Settings</span>
+          </div>
+
+          <!-- the CLICK mini-tray (slides open below the grid; never covers it) -->
+          <div class="tray" id="tray" role="region" aria-label="Decisions behind the selected cell">
+            <div class="tray__head">
+              <span class="tray__title" id="trayTitle">code_reviewer -- 14:50 window</span>
+              <button class="tray__close" id="trayClose" aria-label="Close decision tray (Escape)">Close (Esc)</button>
+            </div>
+            <div class="tray__rows" id="trayRows"></div>
+          </div>
+        </div>
+
+        <!-- OFF (no-op gate) ghost note -->
+        <div class="pane__off">Confidence Heat Map OFF -- the pane renders nothing and registers no
+          poller / SSE handler (no-op gate <code>{#if $betaFlags['confidence-heatmap']}</code>). It
+          adds zero work to the verdict path. Flip the master switch above to ON.</div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS > BETA FEATURES (row shown ON) ===================== -->
+    <div class="settings" role="region" aria-label="Settings -- BETA features">
+      <div class="settings__head">
+        <h3>Settings &gt; BETA features</h3>
+        <span class="grp">group: Monitor &amp; glance-readability</span>
+      </div>
+      <div class="settings__row">
+        <div class="main">
+          <div class="name">Confidence Heat Map grid pane <span class="num">#9</span></div>
+          <div class="desc">See which agent-role's confidence is drifting in which 5-minute window --
+            a still grid inside Frame B (role x time-bucket). Default OFF. When OFF the pane renders
+            nothing and registers no poller / SSE handler.</div>
+        </div>
+        <label class="switch" title="Toggle the BETA flag">
+          <input type="checkbox" id="settingsToggle" checked aria-label="Confidence Heat Map (currently ON)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="settingsText" data-on="true">ON</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- G2 / M15 self-exclude proof -->
+    <div class="self-note">
+      <strong>Self-exclude proof (G2 polarity).</strong> SM monitors NON-SM sessions only. The
+      <code>GET /api/heatmap</code> endpoint MUST return an empty grid (<code>roles:[], cells:[]</code>)
+      for the SM-own session -- excluded at the SQL WHERE on <code>sessions.project_slug</code>
+      (default <code>{streamManager}</code>) plus a client backstop. Switch the scope to the SM-own
+      session: the grid goes blank with a "self-monitored -- excluded" note, never a wall of cells.
+      <div style="margin-top:9px;">
+        <button id="selfBtn" class="fclear">Switch scope to SM-own session</button>
+        <button id="liveBtn" class="fclear" style="margin-left:6px;">Back to governed session</button>
+      </div>
+      <span class="scope-tag">current scope: <span class="nm" id="scopeTag">s-4f7a2c91 (governed, non-SM)</span></span>
+    </div>
+
+    <!-- amber: UI approvable, build gated on ADR-18 footprint correction -->
+    <div class="gate-note" role="note">
+      <strong>Build gated on ADR-18 amendment (footprint correction).</strong> The UI approach shown
+      here is approvable, but the build is GATED until the footprint is corrected to
+      <code>newEnvelope=false</code>: live updates ride the EXISTING <code>/events</code> decisionsStream
+      (no <code>decision_heatmap_cell_update</code> envelope, no cassette/soak coverage needed). With
+      that correction every surface is additive read-only -- one read endpoint, two new components, one
+      registry row -- and the feature is FEASIBLE with NO FROZEN-surface touch.
+    </div>
+
+    <p class="footnote">
+      <strong>Footprint.</strong> Additive <code>new-read-api</code>: no FROZEN touch, NO new envelope,
+      no new table. One read endpoint <code>GET /api/heatmap?session_id&amp;minutes=60&amp;bucket_min=5</code>
+      (server pre-aggregates per role x 5-min bucket; copies the escalation-timeline polarity self-exclude
+      block verbatim). Two new components <code>ConfidenceHeatMap.svelte</code> + <code>HeatCell.svelte</code>,
+      one additive <code>getHeatmap</code> api wrapper (mirrors <code>getEscalationTimeline</code>), one
+      registry row <code>confidence-heatmap</code> (#9, group Monitor, default OFF). Reuses the existing
+      action-palette tokens <code>--c-allow / --c-suggest / --c-intervene / --c-block</code> as the band
+      ramp -- no new color tokens. <strong>Live update rides the EXISTING /events decisionsStore</strong>
+      (sse.js): on a new decision for the scoped session only the affected role+bucket cell recomputes,
+      coalesced 1/500ms -- NO new fetch, NO new SSE channel, NO new envelope (the #14 escalation-timeline
+      precedent). The click mini-tray reuses the EXISTING <code>getDecisions({session_id})</code> filtered
+      client-side by role+bucket -- no tray endpoint. Each cell pairs the band color with the literal mean
+      % text + an H/O/W/L glyph; an empty cell is an uncolored hairline gap -- color is never the sole
+      signal (ADR-18 M4). Clicking a tray row emits the existing <code>CustomEvent 'sm:focus-session'</code>
+      to scope the main feed. axe target: 0 serious, color-contrast PASS (in-tile ink tuned per band for AAA).
+    </p>
+  </div>
+
+<script>
+  // ---------------------------------------------------------------------------
+  // MOCK DATA -- matches the /api/heatmap shape in mockDataSpec exactly (live and
+  // mock shapes are identical). When live gov.db data is unavailable the endpoint
+  // degrades to {roles:[],buckets:[],cells:[],mock:false} and the component
+  // substitutes this mock:true payload so the axe/Playwright gates render populated.
+  //
+  // The fixture deliberately exercises all three reads:
+  //   - code_reviewer: a DRIFT row trending HIGH -> OK -> WATCH -> LOW left-to-right
+  //   - frontend_architect: a fully-HIGH row (calm, confident throughout)
+  //   - researcher: a SPARSE row (gaps -> empty hairline cells)
+  // band derives from mean_confidence: HIGH>=.75, OK .60-.75, WATCH .45-.60, LOW<.45
+  // ---------------------------------------------------------------------------
+  var NOW_MS = 1749600000000;       // wall-clock epoch ms of the NEWEST bucket edge
+  var BUCKET_MIN = 5;
+  var BUCKET_MS = BUCKET_MIN * 60 * 1000;
+  var NCOLS = 12;
+
+  // 12 contiguous 5-min buckets, idx 0..11, oldest-left newest-right.
+  function pad(n){ return n < 10 ? '0'+n : ''+n; }
+  function hhmm(ms){ var d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); }
+  function hhmmss(ms){ var d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  var BUCKETS = (function(){
+    var arr = [];
+    // oldest bucket starts (NCOLS-1) intervals before NOW; newest bucket label == "now"
+    var t0 = NOW_MS - (NCOLS - 1) * BUCKET_MS;
+    for (var i = 0; i < NCOLS; i++) {
+      var t = t0 + i * BUCKET_MS;
+      arr.push({ idx:i, t_ms:t, label: hhmm(t) });
+    }
+    return arr;
+  })();
+
+  function bandOf(conf){
+    if (conf >= 0.75) return 'HIGH';
+    if (conf >= 0.60) return 'OK';
+    if (conf >= 0.45) return 'WATCH';
+    return 'LOW';
+  }
+  var BAND_GLYPH = { HIGH:'H', OK:'O', WATCH:'W', LOW:'L' };
+  var BAND_NAME  = { HIGH:'HIGH', OK:'OK', WATCH:'WATCH', LOW:'LOW' };
+
+  // build a cell record (mirrors the endpoint cell shape)
+  function mkCell(role, idx, count, conf, mix){
+    return { role:role, bucket_idx:idx, count:count, mean_confidence:conf, band:bandOf(conf), action_breakdown:mix };
+  }
+  function mix(a,s,g,i,b){ return { ALLOW:a, SUGGEST:s, GUIDE:g, INTERVENE:i, BLOCK:b }; }
+
+  // The governed (non-SM) fixture cells. Sparse: only role x bucket pairs with >=1 decision.
+  var GOVERNED_CELLS = [
+    // -- frontend_architect: a fully-HIGH row (confident throughout) --
+    mkCell('frontend_architect', 4,  6, 0.79, mix(5,1,0,0,0)),
+    mkCell('frontend_architect', 5,  5, 0.82, mix(4,1,0,0,0)),
+    mkCell('frontend_architect', 6,  7, 0.80, mix(6,0,1,0,0)),
+    mkCell('frontend_architect', 7,  4, 0.84, mix(4,0,0,0,0)),
+    mkCell('frontend_architect', 8,  6, 0.78, mix(5,1,0,0,0)),
+    mkCell('frontend_architect', 9,  5, 0.81, mix(4,1,0,0,0)),
+    mkCell('frontend_architect', 10, 6, 0.83, mix(5,1,0,0,0)),
+    mkCell('frontend_architect', 11, 7, 0.81, mix(5,1,1,0,0)),
+    // -- developer: steady OK/HIGH, mild dip mid-window then recovers --
+    mkCell('developer', 3,  4, 0.77, mix(3,1,0,0,0)),
+    mkCell('developer', 4,  5, 0.72, mix(3,1,1,0,0)),
+    mkCell('developer', 5,  6, 0.68, mix(3,2,1,0,0)),
+    mkCell('developer', 6,  5, 0.71, mix(3,1,1,0,0)),
+    mkCell('developer', 7,  6, 0.74, mix(4,1,1,0,0)),
+    mkCell('developer', 8,  7, 0.76, mix(5,1,1,0,0)),
+    mkCell('developer', 9,  5, 0.73, mix(3,1,1,0,0)),
+    mkCell('developer', 10, 6, 0.75, mix(4,1,1,0,0)),
+    mkCell('developer', 11, 5, 0.74, mix(3,1,1,0,0)),
+    // -- code_reviewer: THE DRIFT row -- HIGH -> OK -> WATCH -> LOW left-to-right --
+    mkCell('code_reviewer', 4,  5, 0.80, mix(4,1,0,0,0)),  // HIGH
+    mkCell('code_reviewer', 5,  6, 0.76, mix(4,1,1,0,0)),  // HIGH
+    mkCell('code_reviewer', 6,  5, 0.71, mix(3,1,1,0,0)),  // OK
+    mkCell('code_reviewer', 7,  6, 0.66, mix(3,1,2,0,0)),  // OK
+    mkCell('code_reviewer', 8,  4, 0.62, mix(2,1,1,0,0)),  // OK
+    mkCell('code_reviewer', 9,  4, 0.58, mix(1,0,2,1,0)),  // WATCH  (14:50)
+    mkCell('code_reviewer', 10, 5, 0.51, mix(1,0,2,2,0)),  // WATCH
+    mkCell('code_reviewer', 11, 3, 0.41, mix(0,0,1,1,1)),  // LOW    (now)
+    // -- tester: mostly OK with one WATCH cell --
+    mkCell('tester', 5,  3, 0.70, mix(2,1,0,0,0)),
+    mkCell('tester', 6,  4, 0.67, mix(2,1,1,0,0)),
+    mkCell('tester', 7,  3, 0.63, mix(2,0,1,0,0)),
+    mkCell('tester', 9,  3, 0.55, mix(1,0,1,1,0)),   // WATCH
+    mkCell('tester', 10, 4, 0.64, mix(2,1,1,0,0)),
+    mkCell('tester', 11, 4, 0.66, mix(2,1,1,0,0)),
+    // -- researcher: a SPARSE row (big gaps -> empty hairline cells) --
+    mkCell('researcher', 2,  2, 0.73, mix(1,1,0,0,0)),
+    mkCell('researcher', 6,  3, 0.69, mix(2,0,1,0,0)),
+    mkCell('researcher', 11, 2, 0.72, mix(1,1,0,0,0))
+  ];
+
+  // current mean per role over the window (for DESC sort + the role-rail readout)
+  function meanForRole(cells, role){
+    var rows = cells.filter(function(c){ return c.role === role; });
+    if (!rows.length) return 0;
+    var wSum = 0, n = 0;
+    rows.forEach(function(c){ wSum += c.mean_confidence * c.count; n += c.count; });
+    return n ? (wSum / n) : 0;
+  }
+
+  function buildPayload(cells){
+    // roles present, sorted by current mean confidence DESC (heaviest at top)
+    var roleset = {};
+    cells.forEach(function(c){ roleset[c.role] = true; });
+    var roles = Object.keys(roleset).sort(function(a,b){ return meanForRole(cells,b) - meanForRole(cells,a); });
+    return {
+      now_ms: NOW_MS, bucket_min: BUCKET_MIN, minutes: 60, excluded_self: 1, mock: true,
+      roles: roles, buckets: BUCKETS, cells: cells
+    };
+  }
+
+  // tone class for the RoleBadge chip (mirrors ROLE_SCHEMA: generic roles = calm)
+  function roleTone(role){
+    if (role === 'health_monitor') return 'watch';
+    if (role === 'sub_agent' || role === 'unknown') return 'muted';
+    return 'calm';
+  }
+
+  // ---- the click mini-tray rows: the EXISTING getDecisions({session_id}) filtered
+  //      client-side by role+bucket window. Mocked per the spec shape. ----
+  var REASONS = {
+    code_reviewer: [
+      'flagged an unverified claim in the review summary',
+      'lowered confidence: reviewer could not reproduce the cited test',
+      'guided toward re-running the failing case before approving',
+      'intervened: review approved a change with no test coverage',
+      'blocked: review sign-off on an unscoped destructive edit'
+    ],
+    frontend_architect: [
+      'approved a token-only style change within scope',
+      'suggested reusing an existing component over a new one',
+      'guided toward an accessible focus-ring pattern',
+      'approved an additive pane behind a beta gate'
+    ],
+    developer: [
+      'approved a scoped edit to a single module',
+      'suggested a smaller diff for the same outcome',
+      'guided toward an idempotent migration step'
+    ],
+    tester: [
+      'approved a read-only status assertion',
+      'guided toward a deterministic fixture',
+      'intervened on a flaky timing-dependent assertion'
+    ],
+    researcher: [
+      'approved a read-only context gather',
+      'suggested narrowing the search scope'
+    ]
+  };
+  // synth 5-10 decision rows for a clicked cell from its action_breakdown + role reasons
+  function trayRowsFor(cell){
+    var rows = [];
+    var bk = BUCKETS[cell.bucket_idx];
+    var order = ['BLOCK','INTERVENE','GUIDE','SUGGEST','ALLOW'];
+    var rsList = REASONS[cell.role] || ['governance decision recorded'];
+    var ri = 0, idCounter = 0;
+    order.forEach(function(act){
+      var n = cell.action_breakdown[act] || 0;
+      for (var k = 0; k < n; k++) {
+        // spread timestamps across the 5-min bucket; confidence near the cell mean
+        var t = bk.t_ms + Math.floor(((idCounter + 1) / (cell.count + 1)) * BUCKET_MS);
+        var jitter = (act === 'BLOCK' ? -0.10 : act === 'INTERVENE' ? -0.05 : act === 'GUIDE' ? -0.01 : 0.02);
+        var conf = Math.max(0.05, Math.min(0.98, cell.mean_confidence + jitter));
+        rows.push({
+          id: 'd-' + cell.role + '-' + cell.bucket_idx + '-' + idCounter,
+          action: act,
+          confidence: conf,
+          timestamp: t,
+          agent_profile_slug: cell.role,
+          reasoning: rsList[ri % rsList.length]
+        });
+        ri++; idCounter++;
+      }
+    });
+    rows.sort(function(a,b){ return a.timestamp - b.timestamp; });
+    return rows;
+  }
+
+  // ---- session fixtures: governed (real grid) + SM-own (empty -- G2 self-exclude) ----
+  var SESSIONS = {
+    governed: { id:'s-4f7a2c91', label:'s-4f7a2c91', pid:'pid 48217',
+                tag:'s-4f7a2c91 (governed, non-SM)', payload: buildPayload(GOVERNED_CELLS), self:false },
+    self:     { id:'sm-self', label:'streamManager (self)', pid:'',
+                tag:'streamManager (self) -- EXCLUDED (G2)',
+                payload:{ now_ms:NOW_MS, bucket_min:BUCKET_MIN, minutes:60, excluded_self:1, mock:true, roles:[], buckets:BUCKETS, cells:[] },
+                self:true }
+  };
+  var currentSessionKey = 'governed';
+
+  // ---- state for the roving-tabindex 2D grid + the tray ----
+  var grid = [];     // grid[r][c] = cell record or null (empty)
+  var roles = [];    // ordered role list (rows)
+  var focusR = 0, focusC = NCOLS - 1; // start on the newest col of the top role
+  var selected = null; // {r,c} of the open tray
+
+  function cellAt(r, c){ return (grid[r] && grid[r][c]) ? grid[r][c] : null; }
+
+  // ---- render the X-axis ticks (only every other tick labelled; rightmost == "now") ----
+  function renderXaxis(){
+    var host = document.getElementById('hmXaxis');
+    var html = '';
+    for (var c = 0; c < NCOLS; c++) {
+      var b = BUCKETS[c];
+      var isNow = (c === NCOLS - 1);
+      var label = isNow ? 'now' : ((c % 2 === 0) ? b.label : '');
+      html += '<span class="hm__tick' + (isNow ? ' hm__tick--now' : '') + '">' + esc(label) + '</span>';
+    }
+    host.innerHTML = html;
+  }
+
+  // ---- render the role rows of the grid ----
+  function renderGrid(){
+    var sess = SESSIONS[currentSessionKey];
+    var p = sess.payload;
+    var rowsHost = document.getElementById('hmRows');
+    var gridEl = document.getElementById('hmGrid');
+    document.getElementById('scopeName').textContent = sess.label;
+    document.getElementById('scopePid').textContent = sess.pid;
+    document.getElementById('scopeTag').textContent = sess.tag;
+
+    roles = p.roles.slice();
+    grid = [];
+
+    // G2: a self-monitored session returns an empty grid -> blank with a note
+    if (sess.self || !roles.length) {
+      rowsHost.innerHTML = '<div role="row" style="grid-column:1 / -1; padding:18px 4px; '
+        + 'color:var(--text-dim); font-style:italic; font-size:12px; line-height:1.5;">'
+        + (sess.self
+            ? 'self-monitored -- excluded (G2 polarity). SM never governs its own session, so the heat map is empty by design. /api/heatmap returns roles:[], cells:[].'
+            : 'No agent decisions in the last 60 minutes -- the grid is calm.')
+        + '</div>';
+      closeTray();
+      return;
+    }
+
+    var html = '';
+    for (var r = 0; r < roles.length; r++) {
+      var role = roles[r];
+      grid[r] = [];
+      var rowMean = meanForRole(p.cells, role);
+      var tone = roleTone(role);
+      // role rail cell (RoleBadge chip + the literal current mean %)
+      html += '<div class="hm__rolecell" role="rowheader">'
+        + '<span class="hm__rolemean">' + Math.round(rowMean * 100) + '%</span>'
+        + '<span class="role-badge role-badge--' + tone + '">'
+        + '<span class="role-badge__dot" aria-hidden="true"></span>' + esc(role) + '</span>'
+        + '</div>';
+      // the 12 cells
+      html += '<div class="hm__cells" role="row">';
+      for (var c = 0; c < NCOLS; c++) {
+        var cell = p.cells.find(function(x){ return x.role === role && x.bucket_idx === c; }) || null;
+        grid[r][c] = cell;
+        var isNow = (c === NCOLS - 1);
+        var b = BUCKETS[c];
+        if (!cell) {
+          // EMPTY cell: uncolored hairline gap, absence reads as quiet (M4)
+          var emptyLabel = role + ', ' + b.label + ' window, no decisions';
+          html += '<div class="cell" data-band="EMPTY"'
+            + ' data-r="' + r + '" data-c="' + c + '"'
+            + (isNow ? ' data-now="true"' : '')
+            + ' role="gridcell" aria-readonly="true" tabindex="-1"'
+            + ' aria-label="' + esc(emptyLabel) + '">'
+            + '<span class="pct" aria-hidden="true">--</span></div>';
+        } else {
+          var pctTxt = Math.round(cell.mean_confidence * 100) + '%';
+          var glyph = BAND_GLYPH[cell.band];
+          // paired full aria-label: role + window + N + mean % + band name (no color reliance)
+          var aria = role + ', ' + b.label + ' window'
+            + (isNow ? ' (now)' : '')
+            + ', ' + cell.count + ' decision' + (cell.count === 1 ? '' : 's')
+            + ', mean ' + pctTxt + ', band ' + BAND_NAME[cell.band];
+          // tooltip text (M4 paired -- the SAME signal in words) + the action mix
+          var bd = cell.action_breakdown;
+          var mixParts = [];
+          ['ALLOW','SUGGEST','GUIDE','INTERVENE','BLOCK'].forEach(function(a){ if (bd[a]) mixParts.push(bd[a] + ' ' + a); });
+          var tipLine1 = role + ': ' + cell.count + ' decisions in ' + b.label + ', mean ' + pctTxt;
+          var tipLine2 = (mixParts.length ? mixParts.join('  ') : 'no action breakdown') + '  -- band ' + BAND_NAME[cell.band];
+          html += '<div class="cell" data-band="' + cell.band + '"'
+            + ' data-r="' + r + '" data-c="' + c + '"'
+            + (isNow ? ' data-now="true"' : '')
+            + ' role="gridcell" aria-readonly="true" tabindex="-1"'
+            + ' aria-label="' + esc(aria) + '"'
+            + ' aria-describedby="">'
+            + '<span class="glyph" aria-hidden="true">' + glyph + '</span>'
+            + '<span class="pct">' + pctTxt + '</span>'
+            + '<span class="cell__tip" role="tooltip"><span class="tline1">' + esc(tipLine1) + '</span>'
+            + '<span class="tline2">' + esc(tipLine2) + '</span></span>'
+            + '</div>';
+        }
+      }
+      html += '</div>';
+    }
+    rowsHost.innerHTML = html;
+
+    // re-apply selection + roving tabindex
+    if (selected && cellAt(selected.r, selected.c)) {
+      var sel = document.querySelector('.cell[data-r="' + selected.r + '"][data-c="' + selected.c + '"]');
+      if (sel) sel.setAttribute('data-selected', 'true');
+    }
+    setRoving(clampFocus(focusR, focusC));
+  }
+
+  // ---- roving tabindex: exactly one cell is tabbable at a time ----
+  function clampFocus(r, c){
+    r = Math.max(0, Math.min(roles.length - 1, r));
+    c = Math.max(0, Math.min(NCOLS - 1, c));
+    return { r:r, c:c };
+  }
+  function setRoving(pos){
+    focusR = pos.r; focusC = pos.c;
+    document.querySelectorAll('#hmRows .cell').forEach(function(el){ el.setAttribute('tabindex', '-1'); });
+    var el = document.querySelector('#hmRows .cell[data-r="' + focusR + '"][data-c="' + focusC + '"]');
+    if (el) el.setAttribute('tabindex', '0');
+  }
+  function focusCell(r, c){
+    var pos = clampFocus(r, c);
+    setRoving(pos);
+    var el = document.querySelector('#hmRows .cell[data-r="' + pos.r + '"][data-c="' + pos.c + '"]');
+    if (el) el.focus();
+  }
+
+  // ---- the CLICK mini-tray: list the 5-10 decisions behind a cell ----
+  function openTray(r, c){
+    var cell = cellAt(r, c);
+    if (!cell) { closeTray(); return; }  // empty cell -> nothing to open
+    // clear any prior selection ring
+    document.querySelectorAll('.cell[data-selected="true"]').forEach(function(el){ el.removeAttribute('data-selected'); });
+    var el = document.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]');
+    if (el) el.setAttribute('data-selected', 'true');
+    selected = { r:r, c:c };
+
+    var b = BUCKETS[c];
+    document.getElementById('trayTitle').innerHTML =
+      esc(cell.role) + ' <span class="meta">-- ' + esc(b.label) + ' window, ' + cell.count
+      + ' decisions, mean ' + Math.round(cell.mean_confidence * 100) + '%, band ' + BAND_NAME[cell.band] + '</span>';
+
+    var rows = trayRowsFor(cell);
+    var html = '';
+    rows.forEach(function(d){
+      html += '<button class="drow" data-id="' + esc(d.id) + '" '
+        + 'aria-label="Decision ' + esc(d.action) + ', confidence ' + Math.round(d.confidence * 100)
+        + ' percent, ' + esc(d.reasoning) + '. Activate to scope the main feed to this decision.">'
+        + '<span class="ts">' + hhmmss(d.timestamp) + '</span>'
+        + '<span class="badge" data-act="' + d.action + '"><span class="swatch" aria-hidden="true"></span>' + d.action + '</span>'
+        + '<span class="conf">' + Math.round(d.confidence * 100) + '%</span>'
+        + '<span class="msg" title="' + esc(d.reasoning) + '">' + esc(d.reasoning) + '</span>'
+        + '</button>';
+    });
+    document.getElementById('trayRows').innerHTML = html;
+    document.getElementById('tray').classList.add('on');
+  }
+  function closeTray(){
+    document.getElementById('tray').classList.remove('on');
+    document.querySelectorAll('.cell[data-selected="true"]').forEach(function(el){ el.removeAttribute('data-selected'); });
+    selected = null;
+  }
+
+  // ---- wiring: click a cell ----
+  document.getElementById('hmRows').addEventListener('click', function(e){
+    var el = e.target.closest('.cell');
+    if (!el) return;
+    var r = parseInt(el.getAttribute('data-r'), 10), c = parseInt(el.getAttribute('data-c'), 10);
+    setRoving({ r:r, c:c });
+    if (selected && selected.r === r && selected.c === c) { closeTray(); return; } // toggle off
+    openTray(r, c);
+  });
+
+  // ---- KEYBOARD 2D grid: Arrows move cell-to-cell, Enter/Space open, Esc close ----
+  document.getElementById('hmGrid').addEventListener('keydown', function(e){
+    if (!roles.length) return;
+    var handled = true;
+    if (e.key === 'ArrowRight')      focusCell(focusR, focusC + 1);
+    else if (e.key === 'ArrowLeft')  focusCell(focusR, focusC - 1);
+    else if (e.key === 'ArrowDown')  focusCell(focusR + 1, focusC);
+    else if (e.key === 'ArrowUp')    focusCell(focusR - 1, focusC);
+    else if (e.key === 'Home')       focusCell(focusR, 0);
+    else if (e.key === 'End')        focusCell(focusR, NCOLS - 1);
+    else if (e.key === 'Enter' || e.key === ' ') {
+      if (selected && selected.r === focusR && selected.c === focusC) closeTray();
+      else openTray(focusR, focusC);
+    }
+    else if (e.key === 'Escape') {
+      var hadTray = !!selected;
+      var rr = selected ? selected.r : focusR, cc = selected ? selected.c : focusC;
+      closeTray();
+      if (hadTray) focusCell(rr, cc); // Esc returns focus to the originating cell
+    }
+    else handled = false;
+    if (handled) e.preventDefault();
+  });
+  // entering the grid via Tab seeds focus onto the roving cell
+  document.getElementById('hmGrid').addEventListener('focus', function(){
+    if (roles.length) focusCell(focusR, focusC);
+  });
+
+  document.getElementById('trayClose').addEventListener('click', function(){
+    var rr = selected ? selected.r : focusR, cc = selected ? selected.c : focusC;
+    closeTray(); focusCell(rr, cc);
+  });
+
+  // ---- a tray row: scope the main feed via the existing CustomEvent (mirrors EscalationRail) ----
+  document.getElementById('trayRows').addEventListener('click', function(e){
+    var btn = e.target.closest('.drow');
+    if (!btn) return;
+    window.dispatchEvent(new CustomEvent('sm:focus-session', {
+      detail: { sessionId: SESSIONS[currentSessionKey].id, decisionId: btn.getAttribute('data-id') }
+    }));
+    // visual ack in the mockup
+    btn.style.background = 'var(--accent-dim)';
+    setTimeout(function(){ btn.style.background = ''; }, 280);
+  });
+
+  // ---- master ON/OFF toggle (the gated nature, wired client-side) ----
+  function setBeta(on){
+    var frame = document.getElementById('frame');
+    frame.setAttribute('data-beta', on ? 'on' : 'off');
+    document.getElementById('betaToggle').checked = on;
+    document.getElementById('settingsToggle').checked = on;
+    document.getElementById('betaText').textContent = on ? 'ON' : 'OFF';
+    document.getElementById('betaText').setAttribute('data-on', on ? 'true' : 'false');
+    document.getElementById('settingsText').textContent = on ? 'ON' : 'OFF';
+    document.getElementById('settingsText').setAttribute('data-on', on ? 'true' : 'false');
+    if (!on) closeTray();
+  }
+  document.getElementById('betaToggle').addEventListener('change', function(e){ setBeta(e.target.checked); });
+  document.getElementById('settingsToggle').addEventListener('change', function(e){ setBeta(e.target.checked); });
+
+  // ---- self-exclude proof buttons (G2) ----
+  document.getElementById('selfBtn').addEventListener('click', function(){
+    currentSessionKey = 'self'; selected = null; focusR = 0; focusC = NCOLS - 1; renderGrid();
+  });
+  document.getElementById('liveBtn').addEventListener('click', function(){
+    currentSessionKey = 'governed'; selected = null; focusR = 0; focusC = NCOLS - 1; renderGrid();
+  });
+
+  // ---- theme switcher ----
+  document.querySelectorAll('[data-theme-btn]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.documentElement.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function(x){
+        var on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+  });
+
+  // ---- LIVE-UPDATE demo (rides the existing /events decisionsStore; NO new envelope) ----
+  // Simulate a new decision landing in the scoped session's "now" column: only the
+  // affected role+bucket cell recomputes (coalesced 1/500ms in the real component).
+  // Here we nudge code_reviewer's "now" cell once after load to show the in-place update.
+  setTimeout(function(){
+    if (currentSessionKey !== 'governed') return;
+    var p = SESSIONS.governed.payload;
+    var cell = p.cells.find(function(x){ return x.role === 'code_reviewer' && x.bucket_idx === (NCOLS - 1); });
+    if (!cell) return;
+    // a fresh BLOCK at low confidence drags the "now" cell mean down a touch (drift continues)
+    cell.count += 1;
+    cell.action_breakdown.BLOCK += 1;
+    cell.mean_confidence = Math.max(0.05, +(cell.mean_confidence * 0.92).toFixed(2));
+    cell.band = bandOf(cell.mean_confidence);
+    renderGrid();
+  }, 1400);
+
+  // initial paint
+  renderXaxis();
+  renderGrid();
+</script>
+</body>
+</html>

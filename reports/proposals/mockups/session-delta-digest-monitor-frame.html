@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<!--
+  KingMode mockup -- BETA feature "session-delta-digest-monitor-frame"
+    (#29: Session Delta Digest -- multi-session "what did I miss?" snapshot in the Monitor frame).
+
+  Self-contained. Inline <style> + inline <script> only. No external assets / CDNs / fonts.
+  ASCII-only (no smart quotes, no em-dashes -- "--" is written literally, no box-drawing).
+  System font stack only.
+
+  Previews the REAL ui-next obsidian tokens (dashboard/ui-next/src/styles/theme.css) so the
+  operator can confirm the UI approach BEFORE any code is written (directive #2). The feature
+  is shown ON with realistic mock data drawn from the vetted mockDataSpec. It is default-OFF
+  and gated in Settings > BETA features > Monitor & glance-readability.
+
+  WHERE IT LIVES: a collapsible panel inside the LEFT command-column (the SessionRail
+  fragment in App.svelte), mounted BELOW the lanes and ABOVE the rail self-exclude footer --
+  the same column HealthDigest (#32) already lives in. It adds NO 4th frame (M1/M6 preserved):
+  the three frames are untouched; this is additive rail chrome that auto-expands once on the
+  operator's return-to-tab (Page Visibility) when any lane has a non-zero delta.
+
+  BATCH HONESTY (per NEEDS-AMENDMENT note):
+    - Feature #29 is DEFERRED batch-2 work, NOT batch-1 additive-only mandated. It overlaps
+      #49 (What-Changed, batch-1); the deferral is disclosed in BETA-DEFERRAL-LEDGER line 63
+      ("Overlaps #49 (batch-1 What-Changed); land #49 first.").
+    - The live endpoint is GET /api/session-delta (SINGULAR -- proposal form), NOT a plural
+      /api/sessions/delta. This mockup uses the singular form everywhere.
+    - The registry.js entry "session-delta-digest" is NOT in the current batch-1 registry.js;
+      it is ADDED during the batch-2 build (group: 'monitor', defaultEnabled: false).
+    - The data file is SessionDeltaDigest-data.js (HYPHEN, matching AwayMode-data.js /
+      HealthDigest-data.js / EventCursor-data.js), not a dotted name.
+    - The UI is approvable now, but the BUILD is GATED on an ADR-18 amendment landing first
+      (see the amber footnote in the rail). Firewall G1 PASS, polarity G2 PASS, M5 PASS.
+
+  G2 polarity: NO SM-own session_id in the fixture; the panel shows the self-exclude readout.
+  M16 domain-agnostic: every lane identity is rendered FROM DATA (alpha-/beta-/gamma- generic
+    project_slug placeholders) -- never monitored-project vocabulary.
+  M5 / M4: every signal carries a literal text WORD + count -- color is strictly the SECOND
+    channel; removing all hue still leaves a fully legible delta readout.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Session Delta Digest (#29)</title>
+<style>
+  /* ---- REAL obsidian theme tokens (verbatim from theme.css :root + [data-theme=obsidian]) ---- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired badge tokens (M4) -- theme-invariant. The delta chips reuse these EXACT
+       frozen, axe-documented AA pairs: amber (ar) / red (blocked) / green (decided) / slate (obs). */
+    --badge-ar-fg: #d97706;      --badge-ar-bg: #fef3c7;      --badge-ar-border: #d97706;
+    --badge-obs-fg: #475569;     --badge-obs-bg: #f1f5f9;     --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626; --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+    --badge-warn-fg: #ea580c;    --badge-warn-bg: #ffedd5;    --badge-warn-border: #ea580c;
+    --badge-timeout-fg: #7c3aed; --badge-timeout-bg: #ede9fe; --badge-timeout-border: #c4b5fd;
+
+    /* action palette (the five governance bands) -- always paired with a text label */
+    --c-allow: #22c55e; --c-suggest: #84cc16; --c-guide: #eab308; --c-intervene: #f97316; --c-block: #ef4444;
+  }
+  [data-theme="obsidian"] {
+    --bg: #080a0c;
+    --bg-card: #0c1118;
+    --bg-row: #0e141e;
+    --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245,158,11,0.09);
+    --border: #192030;
+    --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098;
+    --text-dim: #948870;
+    --text-ui: #8a8068;
+    --text-bright: #e8e0cc;
+    --accent: #f59e0b;
+    --accent-dim: rgba(245,158,11,0.09);
+    --accent-glow: rgba(245,158,11,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 28px clamp(16px, 4vw, 56px) 64px;
+  }
+
+  /* ---------- header strip ---------- */
+  .strip {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px; margin-bottom: 26px;
+  }
+  .strip__title {
+    font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
+    color: var(--text-bright); margin: 0;
+  }
+  .strip__sub { color: var(--text-dim); font-size: 12.5px; margin: 3px 0 0; max-width: 74ch; }
+  .head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 2px;
+    color: var(--badge-warn-fg); background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+  }
+  .pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .strip__spacer { flex: 1 1 auto; }
+
+  /* inline on/off toggle (client-side wired) */
+  .flag {
+    display: inline-flex; align-items: center; gap: 11px;
+    padding: 8px 13px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-card);
+  }
+  .flag__label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+  .flag__key { font-family: var(--ff-mono); color: var(--text-bright); font-size: 12px; }
+  .switch {
+    position: relative; width: 46px; height: 24px; border-radius: 13px;
+    border: 1px solid var(--border-hi); background: var(--bg-row-alt);
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease; padding: 0;
+  }
+  .switch[aria-checked="true"] { background: var(--accent-dim); border-color: var(--accent); }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text-ui); transition: left 120ms ease, background 120ms ease;
+  }
+  .switch[aria-checked="true"] .switch__knob { left: 24px; background: var(--accent); }
+  .switch__state {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    min-width: 26px; color: var(--text-dim);
+  }
+  .switch[aria-checked="true"] ~ .switch__state { color: var(--accent); }
+  .flag:focus-within .switch { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  /* ---------- layout: rail preview + notes ---------- */
+  .stage { display: grid; grid-template-columns: minmax(320px, 392px) minmax(0, 1fr); gap: 26px; align-items: start; }
+  @media (max-width: 940px) { .stage { grid-template-columns: 1fr; } }
+
+  /* ======================= THE LEFT COMMAND COLUMN (SessionRail fragment preview) ======= */
+  .rail {
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    max-height: 760px;
+  }
+  .rail__head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .rail__title { margin: 0; font-family: var(--ff-system); font-size: 14px; font-weight: 560;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-bright); white-space: nowrap; }
+  .rail__all {
+    appearance: none; flex: 0 0 auto; background: transparent;
+    border: 1px solid var(--border); color: var(--text-ui);
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  }
+  .rail__all:hover { color: var(--text-bright); border-color: var(--border-hi); }
+  .rail__all:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  /* the existing lanes (compact, dimmed -- context only; the delta panel is the subject) */
+  .rail__lanes {
+    flex: 0 0 auto; overflow: hidden;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px 10px 4px;
+  }
+  .minilane {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border: 1px solid var(--border); border-left: 2px solid transparent;
+    border-radius: 4px; background: var(--bg-card);
+  }
+  .minilane__pip { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); opacity: 0.8; }
+  .minilane__name { flex: 1 1 auto; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .minilane__meta { font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-ui); font-variant-numeric: tabular-nums; }
+  .rail__lanes-cap {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-ui); padding: 0 12px 6px;
+  }
+
+  /* ======================= THE DELTA DIGEST PANEL (SessionDeltaDigest.svelte) ============ */
+  .sdd {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    border-top: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+  /* ---- panel header: a real toggle <button> (aria-expanded / aria-controls) ---- */
+  .sdd__head {
+    appearance: none; width: 100%; text-align: left; cursor: pointer;
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 9px 12px; background: var(--bg-row-alt); border: 0;
+    border-bottom: 1px solid var(--border); color: inherit; font: inherit;
+  }
+  .sdd__head:hover { background: var(--bg-row-hover); }
+  .sdd__head:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: -2px; }
+  .sdd__chev { display: inline-block; font-size: 1rem; line-height: 1; color: var(--text-ui);
+    transition: transform 180ms ease; flex: 0 0 auto; }
+  .sdd--open .sdd__chev { transform: rotate(90deg); }
+  .sdd__eyebrow {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--text-ui);
+  }
+  .sdd__beta {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+    color: #92400e; background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border);
+    border-radius: 4px; padding: 0 5px;
+  }
+  /* moved-count chip in the header: paired word + count, amber when >0, slate at calm */
+  .sdd__moved {
+    margin-left: auto; display: inline-flex; align-items: baseline; gap: 5px;
+    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--badge-obs-border);
+    background: var(--badge-obs-bg);
+  }
+  .sdd__moved-tag { font-family: var(--ff-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--badge-obs-fg); }
+  .sdd__moved-num { font-family: var(--ff-mono); font-variant-numeric: tabular-nums; font-size: 12px;
+    font-weight: 720; line-height: 1; color: var(--badge-obs-fg); }
+  .sdd__moved--active { background: var(--badge-ar-bg); border-color: var(--badge-ar-border); }
+  .sdd__moved--active .sdd__moved-tag, .sdd__moved--active .sdd__moved-num { color: #92400e; }
+
+  /* ---- panel body (collapses when the header toggle is closed) ---- */
+  .sdd__body { display: flex; flex-direction: column; min-height: 0;
+    max-height: 460px; overflow: hidden; transition: max-height 180ms ease; }
+  .sdd:not(.sdd--open) .sdd__body { max-height: 0; }
+
+  /* source readout: ALWAYS a literal text label (LIVE vs SAMPLE DATA) */
+  .sdd__source {
+    margin: 0; padding: 7px 12px 4px;
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.02em; line-height: 1.45;
+    color: var(--text-dim);
+  }
+  .sdd__source[data-mock="true"] { color: var(--badge-warn-fg); }
+
+  /* "mark all caught up" control */
+  .sdd__bar { display: flex; align-items: center; gap: 8px; padding: 0 12px 7px; }
+  .sdd__catchall {
+    appearance: none; background: transparent; cursor: pointer;
+    border: 1px solid var(--border); color: var(--text-ui);
+    font-family: var(--ff-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 999px;
+  }
+  .sdd__catchall:hover:not(:disabled) { color: var(--text-bright); border-color: var(--border-hi); }
+  .sdd__catchall:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+  .sdd__catchall:disabled { opacity: 0.45; cursor: default; }
+  .sdd__hint { font-size: 11px; color: var(--text-dim); }
+
+  .sdd__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 6px; padding: 4px 10px 10px; scrollbar-gutter: stable; }
+
+  /* ---- ONE delta row (a real <button>) ---- */
+  .drow {
+    position: relative; display: grid;
+    grid-template-columns: 1fr auto; grid-template-rows: auto auto;
+    column-gap: 10px;
+    width: 100%; text-align: left; cursor: pointer; color: inherit; font: inherit;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left-width: 2px; border-left-color: transparent; /* transparent at rest */
+    border-radius: 4px;
+    padding: 7px 10px;
+    transition: border-color 180ms ease, background 180ms ease;
+  }
+  .drow:hover { background: var(--bg-row-hover); }
+  .drow:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 4px; }
+  /* has_change: amber left-edge (DECORATIVE emphasis -- never the only signal) */
+  .drow--changed { border-left-color: var(--badge-ar-border); }
+  /* calm zero-delta rows are demoted + slightly dimmed (sorted below) */
+  .drow--calm { opacity: 0.72; }
+  .drow--calm:hover { opacity: 1; }
+
+  .drow__id { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .drow__name {
+    font-family: var(--ff-system); font-size: 13px; font-weight: 460; letter-spacing: 0.01em;
+    color: var(--text-bright); line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .drow--changed .drow__name { font-weight: 600; }
+  .drow__elapsed {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* the DELTA BADGE CLUSTER (right column, tabular-nums => a scannable vertical axis) */
+  .drow__badges {
+    grid-column: 2; grid-row: 1; align-self: center;
+    display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em; line-height: 1.4; padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+  }
+  .chip__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  /* primary "[+N dec]" -- slate at 0, accent-amber when > 0 */
+  .chip--dec   { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .chip--dec.is-hot { color: #92400e; background: var(--badge-ar-bg); border-color: var(--badge-ar-border); }
+  /* per-band sub-chips (each carries its band WORD) */
+  .chip--guide     { color: #8a6d00; background: #fef9c3; border: 1px solid #eab308; }
+  .chip--intervene { color: #9a3412; background: #ffedd5; border: 1px solid #f97316; }
+  .chip--block     { color: #b91c1c; background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); }
+  /* escalation chip -- block-red border, the literal word "esc" */
+  .chip--esc { color: #b91c1c; background: var(--badge-blocked-bg); border: 1px solid var(--badge-blocked-border); }
+  /* L4 promotion chip -- suggest-green, the literal "L4" */
+  .chip--l4  { color: #15803d; background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  /* the calm "[no change]" word-chip -- never an empty colored box */
+  .chip--none { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px dashed var(--badge-obs-border); }
+
+  /* representative reason -- one dim italic truncated line, has-change rows only */
+  .drow__reason {
+    grid-column: 1 / -1; grid-row: 2;
+    margin: 4px 0 0; font-size: 11px; font-style: italic; color: var(--text-dim);
+    line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .drow__reason b { font-style: normal; font-family: var(--ff-mono); font-weight: 700; color: var(--text-ui); }
+
+  /* ---- the ADR-18 amendment build-gate footnote (amber, in-rail) ---- */
+  .sdd__gate {
+    margin: 0; display: flex; align-items: flex-start; gap: 8px;
+    padding: 8px 12px; border-top: 1px solid var(--border);
+    background: var(--badge-ar-bg);
+    color: #7c2d12; font-size: 11px; line-height: 1.45;
+  }
+  .sdd__gate-dot { flex: 0 0 auto; margin-top: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--badge-ar-border); }
+  .sdd__gate b { color: #7c2d12; }
+
+  /* ---- self-exclude footer (polarity G2 readout) ---- */
+  .rail__foot {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    padding: 6px 14px; border-top: 1px solid var(--border); background: var(--bg);
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .rail__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); opacity: 0.7; }
+
+  /* ---------- design notes column ---------- */
+  .notes { display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); letter-spacing: 0.02em; }
+  .card p { margin: 0 0 8px; color: var(--text-dim); font-size: 12.5px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; }
+  .card li { margin-bottom: 4px; }
+  kbd {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; background: var(--bg-row-alt);
+  }
+  code { font-family: var(--ff-mono); font-size: 11.5px; color: var(--accent); }
+
+  /* badge legend mini-rows */
+  .legend { display: flex; flex-direction: column; gap: 8px; }
+  .legend__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .legend__why { font-size: 11.5px; color: var(--text-dim); }
+
+  /* amber callout inside the notes -- mirrors the in-rail gate footnote */
+  .gatecard { border-color: var(--badge-ar-border); background: rgba(245,158,11,0.06); }
+  .gatecard h3 { color: var(--badge-ar-fg); }
+
+  /* OFF state: the whole panel renders nothing (the no-op gate). We collapse the panel and
+     show a single placeholder so the operator SEES the gated absence. */
+  .is-off .sdd { display: none; }
+  .is-off .sdd-off { display: flex; }
+  .sdd-off { display: none; align-items: center; gap: 8px;
+    padding: 10px 12px; border-top: 1px solid var(--border); background: var(--bg);
+    font-size: 11.5px; color: var(--text-dim); }
+  .sdd-off code { color: var(--text-ui); }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+  /* M17 reduced motion: suppress the collapse + chevron transitions */
+  @media (prefers-reduced-motion: reduce) {
+    .sdd__chev, .sdd__body, .drow, .switch, .switch__knob { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ====================== HEADER STRIP ====================== -->
+  <div class="strip">
+    <div>
+      <div class="head-row">
+        <h1 class="strip__title">Session Delta Digest -- "what did I miss?" snapshot</h1>
+        <span class="pill"><span class="pill__dot"></span>BETA -- default OFF</span>
+      </div>
+      <p class="strip__sub">Feature #29 -- toggled in Settings &gt; BETA features &gt; Monitor &amp; glance-readability.
+        A compact per-lane DELTA panel in the left command column: since you last clicked into each governed
+        session, how many new GUIDE / INTERVENE / BLOCK decisions, agent escalations and L4 pattern promotions
+        landed -- plus one representative reason. Click a row to select that session AND mark it caught up.
+        Reads <code>GET /api/session-delta</code> (singular). KingMode mockup -- no code written yet
+        (this is BATCH-2 deferred work; build gated on an ADR-18 amendment).</p>
+    </div>
+    <div class="strip__spacer"></div>
+    <label class="flag">
+      <span class="flag__label">flag <span class="flag__key">session-delta-digest</span></span>
+      <button id="flagSwitch" class="switch" role="switch" aria-checked="true" aria-label="Toggle session-delta-digest feature flag">
+        <span class="switch__knob"></span>
+      </button>
+      <span id="flagState" class="switch__state">ON</span>
+    </label>
+  </div>
+
+  <!-- ====================== STAGE ====================== -->
+  <div id="stage" class="stage">
+
+    <!-- ---- LEFT COMMAND COLUMN preview ---- -->
+    <nav class="rail" id="rail" aria-label="Governed sessions and delta digest">
+      <header class="rail__head">
+        <h2 class="rail__title">Sessions</h2>
+        <button type="button" class="rail__all" aria-pressed="false" aria-label="Select all governed sessions">ALL</button>
+      </header>
+
+      <!-- existing lanes (context only -- live STATE, no memory of what was seen) -->
+      <div class="rail__lanes" aria-label="Live session lanes">
+        <div class="minilane" style="border-left-color: var(--accent);">
+          <span class="minilane__pip" aria-hidden="true"></span>
+          <span class="minilane__name">alpha-service</span>
+          <span class="minilane__meta">ACTIVE 3</span>
+        </div>
+        <div class="minilane">
+          <span class="minilane__pip" aria-hidden="true"></span>
+          <span class="minilane__name">beta-pipeline</span>
+          <span class="minilane__meta">live</span>
+        </div>
+        <div class="minilane">
+          <span class="minilane__pip" aria-hidden="true"></span>
+          <span class="minilane__name">gamma-batch</span>
+          <span class="minilane__meta">live</span>
+        </div>
+      </div>
+      <p class="rail__lanes-cap">live state -- no memory of what you have seen</p>
+
+      <!-- =============== THE DELTA DIGEST PANEL (the subject) =============== -->
+      <section class="sdd sdd--open" id="sdd" aria-label="Session delta digest">
+        <button
+          type="button"
+          class="sdd__head"
+          id="sddHead"
+          aria-expanded="true"
+          aria-controls="sddBody"
+        >
+          <span class="sdd__chev" aria-hidden="true">&rsaquo;</span>
+          <span class="sdd__eyebrow">Delta since last seen</span>
+          <span class="sdd__beta">BETA</span>
+          <span class="sdd__moved sdd__moved--active" id="movedChip"
+                aria-label="2 of 3 sessions moved since last seen">
+            <span class="sdd__moved-tag">MOVED</span>
+            <span class="sdd__moved-num" id="movedNum">2</span>
+          </span>
+        </button>
+
+        <div class="sdd__body" id="sddBody">
+          <!-- source readout (paired text -- LIVE vs SAMPLE DATA) -->
+          <p class="sdd__source" id="sddSource" data-mock="true">
+            SAMPLE DATA -- representative shape; no live /api/session-delta rows in gov.db yet.
+          </p>
+
+          <div class="sdd__bar">
+            <button type="button" class="sdd__catchall" id="catchAll"
+                    aria-label="Mark all visible sessions caught up">Mark all caught up</button>
+            <span class="sdd__hint" id="catchHint">clicking a row resets that lane to [no change]</span>
+          </div>
+
+          <div class="sdd__list" id="sddList" role="list"><!-- rows injected by script --></div>
+
+          <!-- ADR-18 amendment build-gate footnote (approvable now; build gated) -->
+          <p class="sdd__gate">
+            <span class="sdd__gate-dot" aria-hidden="true"></span>
+            <span><b>Build gated on ADR-18 amendment.</b> UI is approvable, but this is BATCH-2 deferred
+              work (overlaps #49 What-Changed) -- ship #49 first. Code lands only after the amendment.</span>
+          </p>
+        </div>
+      </section>
+
+      <!-- OFF placeholder: shows the gated absence when the flag is OFF -->
+      <div class="sdd-off">
+        <span class="rail__self-dot" aria-hidden="true"></span>
+        <span>Delta digest <b>OFF</b> -- no panel, no <code>/api/session-delta</code> poll registered (no-op gate).</span>
+      </div>
+
+      <!-- G2 polarity readout: self-exclude, on-screen + auditable -->
+      <footer class="rail__foot">
+        <span class="rail__self-dot" aria-hidden="true"></span>
+        <span id="selfFoot">1 self row excluded (polarity filter)</span>
+      </footer>
+    </nav>
+
+    <!-- ---- design notes ---- -->
+    <div class="notes">
+      <div class="card">
+        <h3>The glance (return-to-desk, ~3 seconds)</h3>
+        <p>You were heads-down resolving a HITL row in <b>beta-pipeline</b> for two minutes. Sessions
+          alpha-service, gamma-batch and others streamed decisions the whole time. The SessionRail tells you
+          the live STATE ("alpha-service: ACTIVE 3") -- but not whether those 3 are brand-new since you last
+          cared about alpha, or were already there. This panel answers exactly that: rows with a non-zero delta
+          float to the top with an amber left-edge AND a paired text badge; a caught-up lane reads a literal
+          <b>[no change]</b> and stays calm slate.</p>
+        <p>The acknowledgment is the inbox "mark read" gesture: clicking a row selects that session (routed
+          through the rail's guarded <code>selectSession</code>, G2-safe) AND writes that lane's
+          <code>last_seen</code> watermark to localStorage, so its delta resets to <b>[no change]</b>. Try it
+          in the rail -- click a changed row, watch it drop to calm and the MOVED count fall.</p>
+      </div>
+
+      <div class="card">
+        <h3>Paired label + color badge (M5 -- color is never the only channel)</h3>
+        <div class="legend">
+          <div class="legend__row">
+            <span class="chip chip--dec is-hot"><span class="chip__dot" aria-hidden="true"></span>+4 dec</span>
+            <span class="legend__why">amber -- new decisions in the window (slate <span class="chip chip--dec" style="margin:0 2px"><span class="chip__dot" aria-hidden="true"></span>+0 dec</span> at zero)</span>
+          </div>
+          <div class="legend__row">
+            <span class="chip chip--guide">GUIDE 2</span>
+            <span class="chip chip--intervene">INTERVENE 1</span>
+            <span class="chip chip--block"><span class="chip__dot" aria-hidden="true"></span>BLOCK 1</span>
+            <span class="legend__why">per-band sub-chips, each carrying the band WORD</span>
+          </div>
+          <div class="legend__row">
+            <span class="chip chip--esc"><span class="chip__dot" aria-hidden="true"></span>2 esc</span>
+            <span class="legend__why">red border -- escalations DERIVED from decision bands (no escalation table; <code>server.py:2303-2307</code>)</span>
+          </div>
+          <div class="legend__row">
+            <span class="chip chip--l4"><span class="chip__dot" aria-hidden="true"></span>1 L4</span>
+            <span class="legend__why">green -- patterns crossing into level 4 (<code>patterns.level</code>, <code>server.py:2018</code>)</span>
+          </div>
+          <div class="legend__row">
+            <span class="chip chip--none">no change</span>
+            <span class="legend__why">slate dashed -- a single calm word-chip; never an empty colored box, never a bare amber glow</span>
+          </div>
+        </div>
+        <p style="margin-top:10px">Remove ALL hue and every row still reads as a full delta: the text+count
+          is the durable signal; the amber left-edge is decorative emphasis only. Each row's aria-label restates
+          the whole delta in words, so a screen-reader never depends on color.</p>
+      </div>
+
+      <div class="card gatecard">
+        <h3>Build gated on an ADR-18 amendment (approvable, not yet buildable)</h3>
+        <ul>
+          <li><b>Batch honesty:</b> #29 is DEFERRED <b>batch-2</b> work, not batch-1 additive-only mandated.
+            It overlaps #49 (What-Changed, batch-1) -- <code>BETA-DEFERRAL-LEDGER.md:63</code> says
+            "land #49 first." This mockup confirms the UI direction so the build can start once unblocked.</li>
+          <li><b>Endpoint name reconciled:</b> the live read is <code>GET /api/session-delta</code>
+            (singular, the proposal form) -- NOT a plural <code>/api/sessions/delta</code>.</li>
+          <li><b>Registry status:</b> <code>session-delta-digest</code> is NOT in the current batch-1
+            <code>registry.js</code>; it is added during the batch-2 build (<code>group:'monitor'</code>,
+            <code>defaultEnabled:false</code>).</li>
+          <li><b>File name:</b> data file is <code>SessionDeltaDigest-data.js</code> (hyphen, matching
+            <code>HealthDigest-data.js</code> / <code>AwayMode-data.js</code> / <code>EventCursor-data.js</code>).</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Calm + safety contract</h3>
+        <ul>
+          <li>Additive RAIL CHROME only -- NO 4th frame (M1/M6). The three frames are untouched; the panel
+            is collapsed-by-default and auto-expands ONCE on return-to-tab (Page Visibility) when any lane moved.</li>
+          <li>Read-only <code>GET /api/session-delta</code> -- no new bus envelope, no frozen surface touched.
+            <code>last_seen</code> is a CLIENT watermark in localStorage (key <code>sm.next.session-delta-seen</code>,
+            per <code>session_id</code>) passed back as <code>since_ts</code>; no new table, no sessions-schema write.</li>
+          <li>Polarity G2: the endpoint excludes SM-self (<code>project_slug NOT IN {streamManager}</code> AND
+            <code>session_id != self</code>); the panel shows the on-screen <code>excluded_self</code> readout
+            in the footer. No SM-own row is ever constructed.</li>
+          <li>Identity is rendered FROM DATA (<code>project_slug</code>) -- generic alpha-/beta-/gamma-
+            placeholders only, no monitored-project vocabulary (M8/M16).</li>
+          <li>Flag OFF =&gt; the whole panel renders nothing and registers no poller (no-op gate). Flip the
+            switch above to see it collapse to the gated-absence line.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Keyboard path (M17 / WCAG AAA)</h3>
+        <ul>
+          <li>The panel header is a real toggle <code>&lt;button&gt;</code> (<code>aria-expanded</code> /
+            <code>aria-controls</code>). <kbd>Enter</kbd> / <kbd>Space</kbd> collapses + expands the panel.</li>
+          <li>Each row is in tab order; <kbd>Enter</kbd> / <kbd>Space</kbd> selects + acknowledges (writes the
+            watermark, resets the lane to <b>[no change]</b>). The "mark all caught up" button is focus-reachable.</li>
+          <li><kbd>Esc</kbd> collapses the panel and returns focus to the rail title.</li>
+          <li>An <code>aria-live="polite"</code> region announces on auto-expand
+            ("3 sessions changed: alpha-service +4 decisions 2 escalations; gamma-batch +1 decision").
+            The 2px amber focus ring (<code>--accent</code>) with 2px offset matches the global ring.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p class="sr-only" id="liveStatus" aria-live="polite"></p>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // -- fixed "now" so elapsed-since-seen values are deterministic --
+  // matches the mockDataSpec contract (now: 1749600000).
+  var NOW = 1749600000; // epoch seconds
+
+  // ===========================================================================
+  // MOCK PAYLOAD -- mirrors the vetted mockDataSpec / GET /api/session-delta shape
+  // EXACTLY (mock:true forces the SAMPLE-DATA source line; the component renders
+  // identically for live and mock -- only the source-line text differs).
+  // All identities are GENERIC placeholders (alpha-/beta-/gamma-); NO monitored-
+  // project vocabulary; NO SM-own session_id (G2). excluded_self = 1.
+  // ===========================================================================
+  var PAYLOAD = {
+    now: NOW,
+    excluded_self: 1,
+    mock: true,
+    sessions: [
+      {
+        session_id: "sess-7f3a", project_slug: "alpha-service",
+        last_seen_ts: NOW - 600, elapsed_since_seen_seconds: 600,
+        delta: {
+          new_decisions: 4,
+          by_band: { GUIDE: 2, INTERVENE: 1, BLOCK: 1 },
+          escalations: 2, l4_promotions: 1,
+          representative_reason: "Negative regression in retry-budget heuristic"
+        },
+        has_change: true
+      },
+      {
+        session_id: "sess-2b9c", project_slug: "beta-pipeline",
+        last_seen_ts: NOW - 100, elapsed_since_seen_seconds: 100,
+        delta: {
+          new_decisions: 0,
+          by_band: { GUIDE: 0, INTERVENE: 0, BLOCK: 0 },
+          escalations: 0, l4_promotions: 0,
+          representative_reason: ""
+        },
+        has_change: false
+      },
+      {
+        session_id: "sess-c401", project_slug: "gamma-batch",
+        last_seen_ts: null, elapsed_since_seen_seconds: null,
+        delta: {
+          new_decisions: 1,
+          by_band: { GUIDE: 1, INTERVENE: 0, BLOCK: 0 },
+          escalations: 0, l4_promotions: 0,
+          representative_reason: "First visit -- 1 new GUIDE decision"
+        },
+        has_change: true
+      }
+    ]
+  };
+
+  // per-session client watermark mirror (the localStorage acknowledgment state).
+  // Acknowledging a lane zeroes its delta locally so the panel reads "[no change]".
+  var acked = {}; // session_id -> true once caught up
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function fmtElapsed(secs) {
+    if (secs == null) return "never visited";
+    if (secs < 60) return secs + "s ago";
+    var m = Math.floor(secs / 60);
+    if (m < 60) return m + "m ago";
+    return Math.floor(m / 60) + "h ago";
+  }
+
+  // a session's EFFECTIVE delta after local acknowledgment
+  function effHasChange(s) { return s.has_change && !acked[s.session_id]; }
+
+  // build the aria-label that restates the FULL delta in words (color-independent)
+  function rowAria(s) {
+    var name = s.project_slug;
+    if (!effHasChange(s)) {
+      return "Session " + name + ", no change since last seen " + fmtElapsed(s.elapsed_since_seen_seconds) +
+             ". Select to view.";
+    }
+    var d = s.delta, parts = [];
+    parts.push(d.new_decisions + " new decision" + (d.new_decisions === 1 ? "" : "s"));
+    var bands = [];
+    if (d.by_band.GUIDE) bands.push(d.by_band.GUIDE + " GUIDE");
+    if (d.by_band.INTERVENE) bands.push(d.by_band.INTERVENE + " INTERVENE");
+    if (d.by_band.BLOCK) bands.push(d.by_band.BLOCK + " BLOCK");
+    if (bands.length) parts.push("(" + bands.join(", ") + ")");
+    if (d.escalations) parts.push(d.escalations + " escalation" + (d.escalations === 1 ? "" : "s"));
+    if (d.l4_promotions) parts.push(d.l4_promotions + " L4 promotion" + (d.l4_promotions === 1 ? "" : "s"));
+    var lead = (s.last_seen_ts == null) ? "first visit" : "since last seen " + fmtElapsed(s.elapsed_since_seen_seconds);
+    return "Session " + name + " changed -- " + lead + ": " + parts.join(", ") +
+           ". " + (d.representative_reason ? d.representative_reason + ". " : "") + "Select to view and mark caught up.";
+  }
+
+  // ---------------- render one delta row ----------------
+  function rowEl(s) {
+    var changed = effHasChange(s);
+    var d = s.delta;
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "drow " + (changed ? "drow--changed" : "drow--calm");
+    btn.setAttribute("data-session-id", s.session_id);
+    btn.setAttribute("role", "listitem");
+    btn.setAttribute("aria-label", rowAria(s));
+
+    // --- id + elapsed (left) ---
+    var idCol = document.createElement("span");
+    idCol.className = "drow__id";
+    var name = document.createElement("span");
+    name.className = "drow__name"; name.title = s.project_slug; name.textContent = s.project_slug;
+    var elapsed = document.createElement("span");
+    elapsed.className = "drow__elapsed";
+    elapsed.textContent = (s.last_seen_ts == null ? "first visit" : "seen " + fmtElapsed(s.elapsed_since_seen_seconds));
+    idCol.appendChild(name); idCol.appendChild(elapsed);
+
+    // --- badge cluster (right) ---
+    var badges = document.createElement("span");
+    badges.className = "drow__badges";
+
+    if (!changed) {
+      // single calm "[no change]" word-chip -- never an empty box
+      var none = document.createElement("span");
+      none.className = "chip chip--none";
+      none.textContent = "no change";
+      badges.appendChild(none);
+    } else {
+      // primary "[+N dec]" (amber when > 0)
+      var dec = document.createElement("span");
+      dec.className = "chip chip--dec" + (d.new_decisions > 0 ? " is-hot" : "");
+      dec.innerHTML = "<span class=\"chip__dot\" aria-hidden=\"true\"></span>+" + d.new_decisions + " dec";
+      badges.appendChild(dec);
+
+      // per-band sub-chips (each carries the band WORD); only non-zero bands shown
+      if (d.by_band.GUIDE)     { var g = document.createElement("span"); g.className = "chip chip--guide";     g.textContent = "GUIDE " + d.by_band.GUIDE; badges.appendChild(g); }
+      if (d.by_band.INTERVENE) { var i = document.createElement("span"); i.className = "chip chip--intervene"; i.textContent = "INTERVENE " + d.by_band.INTERVENE; badges.appendChild(i); }
+      if (d.by_band.BLOCK)     { var b = document.createElement("span"); b.className = "chip chip--block"; b.innerHTML = "<span class=\"chip__dot\" aria-hidden=\"true\"></span>BLOCK " + d.by_band.BLOCK; badges.appendChild(b); }
+
+      // escalation chip (literal "esc")
+      if (d.escalations) { var e = document.createElement("span"); e.className = "chip chip--esc"; e.innerHTML = "<span class=\"chip__dot\" aria-hidden=\"true\"></span>" + d.escalations + " esc"; badges.appendChild(e); }
+      // L4 promotion chip (literal "L4")
+      if (d.l4_promotions) { var l = document.createElement("span"); l.className = "chip chip--l4"; l.innerHTML = "<span class=\"chip__dot\" aria-hidden=\"true\"></span>" + d.l4_promotions + " L4"; badges.appendChild(l); }
+    }
+
+    btn.appendChild(idCol);
+    btn.appendChild(badges);
+
+    // --- representative reason (has-change rows only) ---
+    if (changed && d.representative_reason) {
+      var reason = document.createElement("span");
+      reason.className = "drow__reason";
+      reason.innerHTML = "<b>reason</b> " + esc(d.representative_reason);
+      btn.appendChild(reason);
+    }
+
+    // --- select + acknowledge (the inbox "mark read" gesture) ---
+    btn.addEventListener("click", function () { acknowledge(s.session_id, s.project_slug, true); });
+
+    return btn;
+  }
+
+  // sort has-change-first; calm rows demoted below; stable by project_slug within group
+  function sorted() {
+    return PAYLOAD.sessions.slice().sort(function (a, bb) {
+      var ca = effHasChange(a) ? 0 : 1, cb = effHasChange(bb) ? 0 : 1;
+      if (ca !== cb) return ca - cb;
+      return a.project_slug < bb.project_slug ? -1 : a.project_slug > bb.project_slug ? 1 : 0;
+    });
+  }
+
+  function movedCount() {
+    return PAYLOAD.sessions.reduce(function (n, s) { return n + (effHasChange(s) ? 1 : 0); }, 0);
+  }
+
+  function render() {
+    var host = $("sddList");
+    host.innerHTML = "";
+    sorted().forEach(function (s) { host.appendChild(rowEl(s)); });
+
+    var moved = movedCount();
+    $("movedNum").textContent = moved;
+    var chip = $("movedChip");
+    chip.classList.toggle("sdd__moved--active", moved > 0);
+    chip.setAttribute("aria-label",
+      moved + " of " + PAYLOAD.sessions.length + " session" +
+      (PAYLOAD.sessions.length === 1 ? "" : "s") + " moved since last seen");
+
+    // source readout (paired text -- mock here; live would read LIVE)
+    var src = $("sddSource");
+    if (PAYLOAD.mock) {
+      src.setAttribute("data-mock", "true");
+      src.textContent = "SAMPLE DATA -- representative shape; no live /api/session-delta rows in gov.db yet.";
+    } else {
+      src.removeAttribute("data-mock");
+      src.textContent = "LIVE -- aggregated from gov.db (polarity-filtered, SM-self excluded).";
+    }
+
+    // self-exclude footer readout (G2)
+    $("selfFoot").textContent = PAYLOAD.excluded_self + " self row" +
+      (PAYLOAD.excluded_self === 1 ? "" : "s") + " excluded (polarity filter)";
+
+    // mark-all-caught-up is disabled when nothing is changed
+    $("catchAll").disabled = moved === 0;
+    $("catchHint").textContent = moved === 0
+      ? "all lanes caught up -- nothing to acknowledge"
+      : "clicking a row resets that lane to [no change]";
+  }
+
+  // acknowledge one lane: write the watermark, zero its local delta, re-render
+  function acknowledge(id, slug, announce) {
+    acked[id] = true; // localStorage sm.next.session-delta-seen.<id> in the real component
+    render();
+    if (announce) {
+      $("liveStatus").textContent = "Scope set to " + slug +
+        " -- caught up; that lane reset to no change.";
+    }
+  }
+
+  // mark ALL visible lanes caught up at once
+  $("catchAll").addEventListener("click", function () {
+    PAYLOAD.sessions.forEach(function (s) { if (s.has_change) acked[s.session_id] = true; });
+    render();
+    $("liveStatus").textContent = "All sessions marked caught up -- the digest is now quiet.";
+  });
+
+  // ---------------- panel collapse toggle (real <button>, aria-expanded) ----------------
+  function setOpen(open) {
+    var sdd = $("sdd"), head = $("sddHead");
+    sdd.classList.toggle("sdd--open", open);
+    head.setAttribute("aria-expanded", String(open));
+  }
+  $("sddHead").addEventListener("click", function () {
+    setOpen(!$("sdd").classList.contains("sdd--open"));
+  });
+  // Esc collapses + returns focus to the rail title (mocked: focus the head button)
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && $("sdd").classList.contains("sdd--open")) {
+      setOpen(false);
+      $("sddHead").focus();
+    }
+  });
+
+  // ---------------- flag toggle (no-op gate preview) ----------------
+  function toggleFlag() {
+    var sw = $("flagSwitch");
+    var on = sw.getAttribute("aria-checked") === "true";
+    var next = !on;
+    sw.setAttribute("aria-checked", String(next));
+    $("flagState").textContent = next ? "ON" : "OFF";
+    $("stage").classList.toggle("is-off", !next);
+    $("liveStatus").textContent = next
+      ? "session-delta-digest ON -- the panel polls /api/session-delta and renders the per-lane deltas."
+      : "session-delta-digest OFF -- no panel, no poller registered (no-op gate).";
+  }
+  $("flagSwitch").addEventListener("click", toggleFlag);
+
+  // initial paint + the aria-live auto-expand announcement (mocked on load)
+  render();
+  $("liveStatus").textContent =
+    "2 sessions changed: alpha-service +4 decisions 2 escalations 1 L4 promotion; gamma-batch +1 decision.";
+})();
+</script>
+</body>
+</html>
