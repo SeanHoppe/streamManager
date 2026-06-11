@@ -41,37 +41,19 @@ class _TimeoutRunner:
         raise subprocess.TimeoutExpired(cmd="claude", timeout=kwargs.get("timeout", 30.0))
 
 
-def _build_parser():
-    if _TOOLS not in sys.path:
-        sys.path.insert(0, _TOOLS)
-    sd = importlib.import_module("soak_driver")
-    # Re-derive the parser the same way main() does, without running it.
-    import argparse
-
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--cli-pool-size", type=int, default=0)
-    return ap, sd
-
-
 def test_cli_pool_size_default_is_zero_spawn_per_call():
     """Default --cli-pool-size is 0 (legacy spawn-per-call cold-start).
 
-    This is the v1.0 latency-regression default the operator must
+    Asserts soak_driver's REAL parser default (not source text), so a
+    silent change to the default is a loud failure while reformatting
+    the argparse call or rewording help is not. The operator must
     override with --cli-pool-size 2 for a representative ship-gate soak.
-    Pinning it makes a silent default change a loud test failure.
     """
     if _TOOLS not in sys.path:
         sys.path.insert(0, _TOOLS)
     sd = importlib.import_module("soak_driver")
-    src = Path(sd.__file__).read_text(encoding="utf-8")
-    # The argparse default for --cli-pool-size must remain 0, and the help
-    # text must keep documenting the cold-start tradeoff.
-    assert '"--cli-pool-size"' in src
-    # Locate the default beside the flag declaration.
-    flag_idx = src.index('"--cli-pool-size"')
-    window = src[flag_idx:flag_idx + 400]
-    assert "default=0" in window, window
-    assert "spawn-per-call" in window, window
+    args = sd.build_parser().parse_args([])
+    assert args.cli_pool_size == 0
 
 
 def test_default_pool_path_degrades_gracefully_under_timeout(monkeypatch):

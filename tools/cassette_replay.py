@@ -78,7 +78,7 @@ def run_assert(pack: Path) -> int:
     from stream_manager.messages import Message
     from stream_manager.project_context import load as load_project_context
 
-    cassettes = sorted(pack.glob("p*.json"))
+    cassettes = _load_cassettes(pack)
     if not cassettes:
         print(f"[cassette-replay] no cassettes under {pack}", file=sys.stderr)
         return 2
@@ -94,8 +94,7 @@ def run_assert(pack: Path) -> int:
     )
     fails = 0
     try:
-        for path in cassettes:
-            env = json.loads(path.read_text(encoding="utf-8"))
+        for env in cassettes:
             if env["priority"] == "p5":
                 print(f"[{env['priority']}] SKIP (timeout-simulation re-record pending)")
                 continue
@@ -199,7 +198,6 @@ def run_shadow(
     bus.subscribe_decision(_enrich_and_record)
 
     replayed = 0
-    skipped = 0
     try:
         for env in cassettes:
             priority = str(env.get("priority", "?"))
@@ -274,7 +272,6 @@ def run_shadow(
         "proposal": str(proposal),
         "candidate_l4_threshold": candidate.l4_threshold(),
         "cassettes_replayed": replayed,
-        "cassettes_skipped": skipped,
         "recorded": recorder.recorded,
         "dropped": recorder.dropped,
         "budget_violations": recorder.budget_violations,

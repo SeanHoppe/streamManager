@@ -43,6 +43,13 @@ def _load_real_from_db(db_path: Path) -> list[Episode]:
     # Polarity-flip at the SQL WHERE (CLAUDE.md L42): exclude SM-self
     # project_slug values. NULL project_slug (legacy rows pre-dating the
     # column, already screened by the write-time refusal) is retained.
+    # CLAUDE.md L42's dual-key self-exclusion is upheld via a write-time /
+    # read-time SPLIT, not by dropping half the rule: the
+    # session_id != BRIDGE_SM_SELF_SESSION_ID half is enforced at WRITE time
+    # (episode_logger raises SelfMonitorRefusal) because that env var names
+    # the *current* session and is meaningless against historical rows; only
+    # the project_slug half is durable at read time, so the read-side SQL
+    # WHERE carries it alone.
     sm_slugs = sorted(_sm_slug_set())
     slug_placeholders = ",".join("?" for _ in sm_slugs)
     slug_clause = (
