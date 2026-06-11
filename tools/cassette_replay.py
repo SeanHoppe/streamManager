@@ -209,27 +209,29 @@ def run_shadow(
             model_used = str(decision.get("model_used", ""))
             layer = int(decision.get("layer", 0))
 
-            # Insert a minimal message row directly so record_decision's
-            # JOIN (messages -> sessions) resolves session_id + slug. We
-            # bypass bus.publish() because the bus Message model differs
-            # from messages.py Message; a direct row keeps it deterministic.
+            # Insert a minimal message row so record_decision's JOIN
+            # (messages -> sessions) resolves session_id + slug. We bypass
+            # bus.publish() because the bus Message model differs from
+            # messages.py Message; the public fetch_rows/execute_write seams
+            # (added v1.3 to keep callers off bus._conn/_lock, each holds the
+            # bus lock internally) keep it deterministic without reaching into
+            # bus internals.
             message_id = str(uuid.uuid4())
             ts = time.time()
-            with bus._lock:
-                seq_row = bus._conn.execute(
-                    "SELECT COALESCE(MAX(sequence), 0) FROM messages WHERE session_id=?",
-                    (sid,),
-                ).fetchone()
-                sequence = (seq_row[0] or 0) + 1
-                bus._conn.execute(
-                    "INSERT INTO messages (id, session_id, sequence, type, "
-                    "direction, content, context, metadata, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        message_id, sid, sequence, "user", "inbound",
-                        str(env.get("prompt", "")), "{}", "{}", ts,
-                    ),
-                )
+            seq_rows = bus.fetch_rows(
+                "SELECT COALESCE(MAX(sequence), 0) FROM messages WHERE session_id=?",
+                (sid,),
+            )
+            sequence = (seq_rows[0][0] or 0) + 1
+            bus.execute_write(
+                "INSERT INTO messages (id, session_id, sequence, type, "
+                "direction, content, context, metadata, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    message_id, sid, sequence, "user", "inbound",
+                    str(env.get("prompt", "")), "{}", "{}", ts,
+                ),
+            )
 
             # Register the ground-truth + state-features for this trace.
             # The fanned envelope's trace_id == decision_id, but the

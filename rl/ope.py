@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -161,16 +162,15 @@ def load_episodes_from_db(
     conn.row_factory = sqlite3.Row
     placeholders = ",".join("?" for _ in sources)
     params: list[object] = list(sources)
-    # Polarity-flip at the SQL WHERE (CLAUDE.md L42): exclude SM-self
-    # project_slug values. NULL project_slug (legacy rows pre-dating the
-    # column, already screened by the write-time refusal) is retained.
-    # CLAUDE.md L42's dual-key self-exclusion is upheld via a write-time /
-    # read-time SPLIT, not by dropping half the rule: the
-    # session_id != BRIDGE_SM_SELF_SESSION_ID half is enforced at WRITE time
-    # (episode_logger raises SelfMonitorRefusal) because that env var names
-    # the *current* session and is meaningless against historical rows; only
-    # the project_slug half is durable at read time, so the read-side SQL
-    # WHERE carries it alone.
+    # Polarity self-exclusion (CLAUDE.md "Session-source exception rule").
+    # project_slug is the DURABLE read-side key: the SQL WHERE below default-
+    # excludes SM-self slug values. NULL/unstamped project_slug is retained by
+    # the WHERE and instead caught by the session backstop after the fetch (see
+    # below). The session_id half is the load-bearing WRITE-time gate
+    # (episode_logger raises SelfMonitorRefusal; env-conditional) and is also
+    # applied at read as a cheap defence-in-depth backstop on an ephemeral key
+    # -- belt-and-suspenders, not the durable selector, so it is NOT in the
+    # SQL WHERE.
     sm_slugs = sorted(_sm_slug_set())
     slug_clause = ""
     if sm_slugs:
@@ -195,4 +195,12 @@ def load_episodes_from_db(
         except (TypeError, ValueError, json.JSONDecodeError):
             rec["state_features"] = {}
         out.append(rec)
+    # Read-time session backstop (defence-in-depth on an ephemeral key): drop
+    # rows whose session_id matches the current SM-self session. Env-conditional
+    # (no-op when BRIDGE_SM_SELF_SESSION_ID unset). Catches the SM-self /
+    # NULL-slug class the slug WHERE retains. Mirrors corpus_augment +
+    # rl/cli/train ._filter_self_monitor.
+    sm_self = os.environ.get("BRIDGE_SM_SELF_SESSION_ID", "").strip()
+    if sm_self:
+        out = [rec for rec in out if str(rec.get("session_id", "")) != sm_self]
     return out

@@ -179,3 +179,40 @@ def test_load_episodes_excludes_sm_project_slug(tmp_path: Path):
     rows = load_episodes_from_db(db_path, sources=("live", "soak"))
     session_ids = {r["session_id"] for r in rows}
     assert session_ids == {"ok", "legacy"}  # SM-slug "sm" excluded; NULL kept
+
+
+def test_load_episodes_read_backstop_excludes_sm_self_session(
+    tmp_path: Path, monkeypatch,
+):
+    """Read-time session backstop: an SM-self session_id row carrying NULL
+    project_slug (retained by the slug WHERE) is dropped on read. Env-
+    conditional on BRIDGE_SM_SELF_SESSION_ID; a non-self NULL-slug row stays."""
+    monkeypatch.setenv("BRIDGE_SM_SELF_SESSION_ID", "sm-self-sess")
+    db_path = tmp_path / "ep.db"
+    schema = (Path(__file__).resolve().parents[1]
+              / "rl" / "schema.sql").read_text()
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(schema)
+    # SM-self session, NULL project_slug -> slug WHERE retains it; backstop drops.
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id,"
+        " state_features_json, action_taken, action_propensity, verdict,"
+        " confidence, latency_ms, budget_violation, source)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "sm-self-sess", "t-self", "{}",
+         0.75, 1.0, "ALLOW", 0.9, 100.0, 0, "live"),
+    )
+    # Non-self NULL-slug row -> retained.
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id,"
+        " state_features_json, action_taken, action_propensity, verdict,"
+        " confidence, latency_ms, budget_violation, source)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "other-sess", "t-other", "{}",
+         0.75, 1.0, "ALLOW", 0.9, 100.0, 0, "live"),
+    )
+    conn.commit()
+    conn.close()
+    rows = load_episodes_from_db(db_path, sources=("live", "soak"))
+    session_ids = {r["session_id"] for r in rows}
+    assert session_ids == {"other-sess"}  # SM-self dropped by backstop; NULL kept

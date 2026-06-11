@@ -40,16 +40,14 @@ class GoldenInTrainingError(AssertionError):
 def _load_real_from_db(db_path: Path) -> list[Episode]:
     if not db_path.exists():
         return []
-    # Polarity-flip at the SQL WHERE (CLAUDE.md L42): exclude SM-self
-    # project_slug values. NULL project_slug (legacy rows pre-dating the
-    # column, already screened by the write-time refusal) is retained.
-    # CLAUDE.md L42's dual-key self-exclusion is upheld via a write-time /
-    # read-time SPLIT, not by dropping half the rule: the
-    # session_id != BRIDGE_SM_SELF_SESSION_ID half is enforced at WRITE time
-    # (episode_logger raises SelfMonitorRefusal) because that env var names
-    # the *current* session and is meaningless against historical rows; only
-    # the project_slug half is durable at read time, so the read-side SQL
-    # WHERE carries it alone.
+    # Polarity self-exclusion (CLAUDE.md "Session-source exception rule").
+    # project_slug is the DURABLE read-side key: the SQL WHERE below default-
+    # excludes SM-self slug values. NULL/unstamped project_slug is retained by
+    # the WHERE and instead caught by the session backstop (_filter_self_monitor,
+    # applied in assemble_training_set). The session_id half is the load-bearing
+    # WRITE-time gate (episode_logger raises SelfMonitorRefusal; env-conditional)
+    # and a cheap read-time backstop on an ephemeral key -- belt-and-suspenders,
+    # not the durable selector, so it is NOT in the SQL WHERE.
     sm_slugs = sorted(_sm_slug_set())
     slug_placeholders = ",".join("?" for _ in sm_slugs)
     slug_clause = (

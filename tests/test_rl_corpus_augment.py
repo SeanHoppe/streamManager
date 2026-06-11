@@ -171,3 +171,31 @@ def test_sql_where_excludes_sm_project_slug(tmp_path: Path) -> None:
     )
     assert all(ep.session_id != "sm-poison-sess" for ep in out)
     assert all(ep.trace_id != "sm-poison-trace" for ep in out)
+
+
+def test_read_backstop_excludes_sm_self_session_null_slug(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Read-time session backstop (_filter_self_monitor): an SM-self session_id
+    row carrying NULL project_slug (retained by the slug WHERE) is dropped.
+    Env-conditional on BRIDGE_SM_SELF_SESSION_ID."""
+    import sqlite3 as _sqlite3
+
+    monkeypatch.setenv("BRIDGE_SM_SELF_SESSION_ID", "sm-self-sess")
+    db = _make_real_db(tmp_path, n=10)
+    conn = _sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id, state_features_json,"
+        " action_taken, action_propensity, verdict, confidence, latency_ms,"
+        " budget_violation, source, project_slug)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "sm-self-sess", "sm-self-trace",
+         "{}", 0.7, 1.0, "ALLOW", 0.9, 100.0, 0, "live", None),
+    )
+    conn.commit()
+    conn.close()
+
+    out = assemble_training_set(
+        target_n=20, ratio_synthetic=0.0, seed=1, db_path=db, extra_episodes=[],
+    )
+    assert all(ep.session_id != "sm-self-sess" for ep in out)
