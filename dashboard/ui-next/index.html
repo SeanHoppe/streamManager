@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<!--
+  dashboard/ui-next/index.html -- Vite entry shell for the KingMode UI spike.
+
+  This is the build-stack ENTRY only. It defines NO UI logic. The Svelte
+  application is mounted by /src/main.js (owned by the shell component unit),
+  which renders the three frames (#frameA Interactive REPL/Sessions,
+  #frameB Sub-Agents, #frameC Background Jobs -- M1) into #app.
+
+  CONTRACT NOTES baked into this shell:
+
+  * data-theme="obsidian" matches the live dashboard's default theme
+    (dashboard/static/index.html). The theme unit (u-theme) swaps this
+    attribute to phosphor / paper via CSS custom properties; all three
+    themes resolve through vars, so this attribute is the only switch.
+
+  * <meta name="sm-own-session-id" content=""> is the M15 self-exclude hook.
+    At PROMOTION the live server injects the real id by rewriting the
+    closing head tag (see dashboard/server.py root() -- it looks for
+    SM_OWN_SESSION_ID and
+    rewrites this exact tag). In the spike the content is intentionally
+    EMPTY: per M15, an empty/missing value means "skip self-filtering",
+    so the spike never wrongly hides rows while running standalone. The
+    stores unit reads this at DOM-ready (defense-in-depth alongside the
+    server-side strip).
+
+  * data-reduced-motion="" is the FR-UI-9 reduced-motion / prefers-reduced
+    -motion gate surface; the settings unit toggles it. Naming it here keeps
+    the attribute stable for CSS [data-reduced-motion] selectors.
+
+  The live dashboard/static/index.html and server.py are UNTOUCHED. This
+  spike consumes the existing server API unchanged (proxied in dev; served
+  same-origin post-promotion).
+-->
+<html lang="en" data-theme="obsidian" data-reduced-motion="">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="StreamManager governance monitor -- operator console (experimental)." />
+
+    <!-- M15 self-exclude hook. Server rewrites this exact tag at promotion;
+         empty content in the spike means skip self-filtering. -->
+    <meta name="sm-own-session-id" content="" />
+
+    <!-- Polarity self-exclude by project_slug (CLAUDE.md: SM must NEVER present
+         its OWN sessions as governed targets). Unlike the per-session id above,
+         the SM's own slug is static, so the spike self-identifies it here; the
+         server may rewrite/extend it (BRIDGE_SM_PROJECT_SLUGS) at promotion.
+         Comma-separated; empty => no slug-based self-filtering. -->
+    <meta name="sm-own-project-slugs" content="streamManager" />
+
+    <title>StreamManager</title>
+  </head>
+  <body>
+    <!--
+      Svelte mount point. The shell unit's main.js targets #app.
+      Frame presence (#frameA / #frameB / #frameC) is rendered by the shell
+      and is asserted by the M17 axe gate (tools/axe_audit.mjs waits for
+      those three selectors before analyzing).
+    -->
+    <div id="app"></div>
+
+    <!--
+      noscript fallback: the console requires JS (SSE + live polling). State
+      it plainly rather than rendering a broken, empty page.
+    -->
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; padding: 1.5rem;">
+        StreamManager requires JavaScript to render the live governance
+        monitor. Enable JavaScript and reload.
+      </p>
+    </noscript>
+
+    <!-- Module entry, owned by the shell component unit (u-shell). -->
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

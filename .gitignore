@@ -57,3 +57,10 @@ reports/replay_*.md
 .claude/worktrees/
 tmp/
 tmpv2-*.log
+
+# ADR-20: KingMode UI redesign EXPERIMENTAL spike build artifacts.
+# Source under dashboard/ui-next/ is tracked; node_modules + build output are not.
+dashboard/ui-next/node_modules/
+dashboard/ui-next/dist/
+dashboard/ui-next/.vite/
+dashboard/ui-next/*.local

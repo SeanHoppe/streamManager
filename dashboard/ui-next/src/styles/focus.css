@@ -1,0 +1,132 @@
+/* ============================================================================
+   focus.css -- StreamManager operator UI (KingMode redesign, ui-next spike)
+   ----------------------------------------------------------------------------
+   THE FOCUS-RING CONTRACT (M17 / D4-013). One job, done absolutely:
+
+     Every interactive element gets a 2px solid #d97706 focus ring with a 2px
+     offset. No exceptions, no element-specific overrides that weaken it.
+
+   Why a dedicated file: the axe-core WCAG 2.1 A+AA gate (M17) blocks on
+   serious/critical focus-visibility failures. Concentrating the rule here
+   makes the contract auditable in one place and impossible to silently
+   regress when a component adds outline:none for its own styling. The ring
+   color #d97706 is intentionally the SAME amber as the ACTION REQUIRED badge
+   so keyboard focus reads as a first-class, deliberate affordance -- not a
+   browser default -- in all three themes (the ring is theme-INVARIANT by
+   design: a constant operator anchor).
+
+   Strategy:
+     - Use :focus-visible so the ring shows for keyboard / programmatic focus
+       but not for mouse clicks (avoids the "ring on every click" noise that
+       pushes operators to disable focus styles -- which would fail M17).
+     - A universal :focus-visible rule covers custom/role-based widgets
+       (div[tabindex], [role="button"], Svelte action targets, etc.).
+     - Explicit element selectors restate the same ring on the native
+       interactives so a component's local outline:none cannot win on
+       specificity and erase the contract.
+     - forced-colors / high-contrast mode keeps a visible ring via the
+       system Highlight color.
+
+   Pure CSS. No JS. No component import. ASCII-only (cp1252-safe); dash = "--".
+============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   FOCUS-RING TOKENS -- single source of truth for the ring geometry + color.
+   The amber is constant across themes (operator-anchor); offset + width are
+   the M17 / D4-013 contract values.
+---------------------------------------------------------------------------- */
+:root {
+  --focus-ring-color:  #d97706;
+  --focus-ring-width:  2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-style:  solid;
+}
+
+/* ----------------------------------------------------------------------------
+   1. UNIVERSAL :focus-visible -- catches every focusable element, including
+   custom widgets that take focus via tabindex / ARIA roles. This is the floor.
+---------------------------------------------------------------------------- */
+:focus-visible {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* ----------------------------------------------------------------------------
+   2. EXPLICIT NATIVE-INTERACTIVE RESTATEMENT -- restate the identical ring on
+   the standard interactive elements. This guards the contract: if a component
+   sets `outline: none` on, say, a button for its own visual treatment, this
+   rule (equal-or-higher specificity, loaded after component styles in the
+   cascade) re-asserts the M17 ring. Components must rely on this, never strip
+   it.
+---------------------------------------------------------------------------- */
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[contenteditable]:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="checkbox"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[role="switch"]:focus-visible {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* ----------------------------------------------------------------------------
+   3. RANGE / RADIO / CHECKBOX -- native form controls whose default focus is
+   the platform ring. Restate the contract ring on them too (they are reachable
+   via Settings: confidence floor slider, audible-cue toggle, etc.).
+---------------------------------------------------------------------------- */
+input[type="range"]:focus-visible,
+input[type="radio"]:focus-visible,
+input[type="checkbox"]:focus-visible {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* ----------------------------------------------------------------------------
+   4. SAFETY NET -- if any component sets outline:none WITHOUT relying on the
+   restatement above, a :focus-visible state would lose the ring. We cannot
+   block authors from writing outline:none, but we can ensure that whenever an
+   element is :focus-visible the ring is present by also offering a
+   box-shadow-based ring fallback that survives `outline:none`. This double-
+   encodes the contract (outline OR box-shadow), so even an aggressive reset
+   leaves a visible focus indicator. Offset replicated via spread geometry.
+---------------------------------------------------------------------------- */
+:where(a, button, select, input, textarea, summary,
+       [tabindex], [contenteditable], [role]):focus-visible {
+  /* 2px transparent gap (the offset) + 2px amber ring, drawn as stacked
+     shadows so it reads identically to outline-offset:2px even if `outline`
+     was zeroed by a component reset. */
+  box-shadow:
+    0 0 0 var(--focus-ring-offset) var(--calm-surface, transparent),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width)) var(--focus-ring-color);
+}
+
+/* ----------------------------------------------------------------------------
+   5. FORCED-COLORS / WINDOWS HIGH-CONTRAST -- in forced-colors mode our amber
+   is replaced by the system palette. Keep a visible ring using the system
+   Highlight keyword so keyboard focus survives high-contrast themes (M17).
+---------------------------------------------------------------------------- */
+@media (forced-colors: active) {
+  :focus-visible,
+  a:focus-visible,
+  button:focus-visible,
+  select:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible,
+  [role]:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) Highlight;
+    outline-offset: var(--focus-ring-offset);
+    box-shadow: none; /* let the system ring stand alone in forced-colors */
+  }
+}

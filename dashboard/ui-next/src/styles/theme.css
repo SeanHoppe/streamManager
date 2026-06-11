@@ -1,0 +1,236 @@
+/* ============================================================================
+   theme.css -- StreamManager operator UI (KingMode redesign, ui-next spike)
+   ----------------------------------------------------------------------------
+   DESIGN-TOKEN LAYER ONLY. Pure CSS custom properties. No JS, no component
+   import, no selectors with visual side effects beyond declaring variables on
+   the theme roots. This is the FROZEN contract surface: the three themes
+   obsidian / phosphor / paper carry the exact accent identities and the exact
+   AA-documented --text-dim values lifted verbatim from the live dashboard
+   (dashboard/static/index.html :root + [data-theme=*] blocks). Re-architecting
+   the FORM (calm.css, focus.css) must never re-baseline these token VALUES.
+
+   Frozen accents (do not edit -- contract):
+     obsidian = amber       #f59e0b
+     phosphor = CRT-green   #39ff14
+     paper    = editorial-red #c0392b
+
+   M16 (domain-agnostic): no monitored-project vocabulary appears here. These
+   are pure design tokens -- governed-target identity is rendered from data by
+   the component layer, never named in a stylesheet.
+
+   M17 / NFR-UI-1: --text-dim values are the AA-audited values from the live
+   build. Their measured ratios are documented inline and, for the paper theme,
+   carried into PAPER-CONTRAST.md as the named pre-production deliverable.
+
+   ASCII-only (cp1252-safe): no smart quotes, em-dashes, or box-drawing.
+   Dash is rendered as "--".
+============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   FONT STACKS (NFR-UI-3): system stacks are the default rendering surface.
+   Theme display fonts are declared per-theme below as --font-h / --font-d but
+   the system stacks remain the fallback so the UI never blocks on a web font.
+---------------------------------------------------------------------------- */
+:root {
+  --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+               "Liberation Mono", Menlo, monospace;
+}
+
+/* ----------------------------------------------------------------------------
+   ACTION PALETTE (shared default; overridden per theme where contrast needs it)
+   These are the five governance-mode action colors. They are ALWAYS paired
+   with a text label in the component layer (M4) -- color alone is never a
+   signal. Declared here only as tokens.
+---------------------------------------------------------------------------- */
+:root {
+  --c-allow:     #22c55e;
+  --c-suggest:   #84cc16;
+  --c-guide:     #eab308;
+  --c-intervene: #f97316;
+  --c-block:     #ef4444;
+}
+
+/* ----------------------------------------------------------------------------
+   THEME: OBSIDIAN -- dark industrial telemetry, amber glow. Default theme.
+---------------------------------------------------------------------------- */
+[data-theme="obsidian"] {
+  --bg:           #080a0c;
+  --bg-card:      #0c1118;
+  --bg-row:       #0e141e;
+  --bg-row-alt:   #0b1018;
+  --bg-row-hover: #131c2a;
+  --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+  --border:       #192030;
+  --border-hi:    rgba(245, 158, 11, 0.25);
+
+  --text:         #b8b098;
+  /* NFR-UI-1: AA 5.37:1 on #0c1118 (frozen value -- see PAPER-CONTRAST.md). */
+  --text-dim:     #948870;
+  --text-ui:      #8a8068;
+  --text-bright:  #e8e0cc;
+
+  --accent:       #f59e0b;
+  --accent-dim:   rgba(245, 158, 11, 0.09);
+  --accent-glow:  rgba(245, 158, 11, 0.35);
+
+  /* Display fonts. System stack remains the resilient fallback. */
+  --font-h:       'Teko', var(--ff-system);
+  --font-d:       'JetBrains Mono', var(--ff-mono);
+
+  /* per-theme chrome knobs consumed by the component layer */
+  --scan-op:      0.7;
+  --logo-size:    30px;
+  --logo-ls:      0.12em;
+}
+
+/* ----------------------------------------------------------------------------
+   THEME: PHOSPHOR -- pure CRT green phosphor terminal.
+---------------------------------------------------------------------------- */
+[data-theme="phosphor"] {
+  --bg:           #010602;
+  --bg-card:      #010d03;
+  --bg-row:       #021005;
+  --bg-row-alt:   #010d03;
+  --bg-row-hover: #031508;
+  --bg-row-flash: rgba(57, 255, 20, 0.07);
+
+  --border:       #082510;
+  --border-hi:    rgba(57, 255, 20, 0.3);
+
+  --text:         #5aaa60;
+  /* NFR-UI-1: AA 5.15:1 on #010d03 (frozen value -- see PAPER-CONTRAST.md). */
+  --text-dim:     #429056;
+  --text-ui:      #4ea060;
+  --text-bright:  #9de89e;
+
+  --accent:       #39ff14;
+  --accent-dim:   rgba(57, 255, 20, 0.07);
+  --accent-glow:  rgba(57, 255, 20, 0.3);
+
+  --font-h:       'Share Tech Mono', var(--ff-mono);
+  --font-d:       'Share Tech Mono', var(--ff-mono);
+
+  --scan-op:      1;
+  --logo-size:    20px;
+  --logo-ls:      0.2em;
+
+  /* phosphor action palette: re-tuned for green-on-black legibility */
+  --c-allow:     #39ff14;
+  --c-suggest:   #7fff00;
+  --c-guide:     #ccff00;
+  --c-intervene: #ffaa00;
+  --c-block:     #ff3333;
+}
+
+/* ----------------------------------------------------------------------------
+   THEME: PAPER -- editorial print, light surface, ink + editorial-red accent.
+   This is the light theme whose --text-dim contrast is the named open risk;
+   the value below is carried, MEASURED, and signed off in PAPER-CONTRAST.md.
+---------------------------------------------------------------------------- */
+[data-theme="paper"] {
+  --bg:           #ede8df;
+  --bg-card:      #f8f4ee;
+  --bg-row:       #fefefc;
+  --bg-row-alt:   #f5f1ea;
+  --bg-row-hover: #f0eae0;
+  --bg-row-flash: rgba(192, 57, 43, 0.07);
+
+  --border:       #ccc4b4;
+  --border-hi:    rgba(192, 57, 43, 0.35);
+
+  --text:         #2a2018;
+  /* NFR-UI-1 OPEN RISK: measured + documented in PAPER-CONTRAST.md. */
+  --text-dim:     #6a5040;
+  --text-ui:      #5a4030;
+  --text-bright:  #140c04;
+
+  --accent:       #c0392b;
+  --accent-dim:   rgba(192, 57, 43, 0.07);
+  --accent-glow:  rgba(192, 57, 43, 0.2);
+
+  --font-h:       'Playfair Display', serif;
+  --font-d:       'Courier Prime', var(--ff-mono);
+
+  --scan-op:      0;
+  --logo-size:    26px;
+  --logo-ls:      0.04em;
+
+  /* paper action palette: darkened for AA on a light surface */
+  --c-allow:     #16a34a;
+  --c-suggest:   #65a30d;
+  --c-guide:     #ca8a04;
+  --c-intervene: #ea580c;
+  --c-block:     #dc2626;
+}
+
+/* ----------------------------------------------------------------------------
+   FIXED BADGE TOKENS (M4) -- the paired label+color badge palette is theme-
+   INVARIANT. The ACTION REQUIRED amber-on-cream identity is constant across
+   all three themes precisely because it is the load-bearing escalation signal;
+   it must read identically whether the operator is in obsidian, phosphor, or
+   paper. These tokens are consumed by the component layer, which ALWAYS pairs
+   them with the literal text label (color alone is never a signal).
+
+   Labels (the component layer renders these strings verbatim):
+     ACTION REQUIRED, OBSERVING, DECIDED, BLOCKED, WARN, TIMEOUT
+---------------------------------------------------------------------------- */
+:root {
+  /* ACTION REQUIRED -- amber #d97706 on #fef3c7, 2px solid amber border. */
+  --badge-ar-fg:      #d97706;
+  --badge-ar-bg:      #fef3c7;
+  --badge-ar-border:  #d97706;
+
+  /* OBSERVING -- slate, no border (HITL OFF resting state). */
+  --badge-obs-fg:     #475569;
+  --badge-obs-bg:     #f1f5f9;
+  --badge-obs-border: #cbd5e1;
+
+  /* DECIDED -- settled green. */
+  --badge-decided-fg:     #16a34a;
+  --badge-decided-bg:     #dcfce7;
+  --badge-decided-border: #86efac;
+
+  /* BLOCKED -- hard red, 2px border. */
+  --badge-blocked-fg:     #dc2626;
+  --badge-blocked-bg:     #fee2e2;
+  --badge-blocked-border: #dc2626;
+
+  /* WARN -- amber-orange, dashed border. */
+  --badge-warn-fg:     #ea580c;
+  --badge-warn-bg:     #ffedd5;
+  --badge-warn-border: #ea580c;
+
+  /* TIMEOUT -- violet. */
+  --badge-timeout-fg:     #7c3aed;
+  --badge-timeout-bg:     #ede9fe;
+  --badge-timeout-border: #c4b5fd;
+}
+
+/* ----------------------------------------------------------------------------
+   --sm-* COMPATIBILITY BRIDGE (repair -- u-theme/u-config seam gap).
+   The component layer consumes --sm-* prefixed tokens, but the theme blocks
+   above define UN-prefixed tokens (--text, --text-dim, --accent, ...). Without
+   this bridge every --sm-* fell back to a hardcoded inline slate, so (a) the
+   three themes never reached the components and (b) several dim labels rendered
+   below WCAG AA (axe color-contrast FAIL). Mapping --sm-* to the AA-documented
+   theme tokens HERE, in one place, fixes theming + contrast together. var()
+   resolves against the active [data-theme] at use time, so the bridge re-themes
+   automatically. Faint roles map to the AA-floored dim token -- never an alpha,
+   which is what dragged the count-tag / hint text under AA.
+---------------------------------------------------------------------------- */
+:root {
+  --sm-bg:          var(--bg);
+  --sm-bg-card:     var(--bg-card);
+  --sm-text:        var(--text-bright);
+  --sm-text-dim:    var(--text-dim);
+  --sm-text-faint:  var(--text-dim);
+  --sm-text-bright: var(--text-bright);
+  --sm-border:      var(--border);
+  --sm-accent:      var(--accent);
+  --sm-action-fg:   var(--badge-ar-fg);
+  --sm-action-bg:   var(--badge-ar-bg);
+  --sm-font-mono:   var(--font-d, ui-monospace, monospace);
+}
