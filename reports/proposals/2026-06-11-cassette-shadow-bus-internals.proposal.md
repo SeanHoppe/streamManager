@@ -1,7 +1,7 @@
 # Proposal: replace `run_shadow`'s direct `bus._conn` poke with a test-only insert helper
 
 - **Finding:** F1 (cavecrew review, 2026-06-11) — `tools/cassette_replay.py` `run_shadow` reaches into `bus._lock` + `bus._conn` and hand-`INSERT`s into the FROZEN `messages` table, bypassing `publish()` validation. Severity 🟡.
-- **Disposition:** ~~PROPOSAL (deferred — fix edits FROZEN surface)~~ → **REVISE: APPLY-NOW.** The "deferred because the only fix touches FROZEN `message_bus.py`" premise was **falsified** by verified research (workflow `w7npngehj`, 2026-06-11). The bus already exposes public, lock-managed seams; the fix is `tools/`-only and admissible this cycle. See **Verified-research update** at the bottom.
+- **Disposition:** ~~PROPOSAL (deferred — fix edits FROZEN surface)~~ → ~~REVISE: APPLY-NOW~~ → **DONE (`eb52689`).** Applied the `tools/`-only seam-swap: `run_shadow` now uses public `bus.fetch_rows` + `bus.execute_write` instead of `bus._lock`/`bus._conn`. E2E shadow run green (5/5 recorded, exit 0). The DEFER premise was falsified by verified research (workflow `w7npngehj`, 2026-06-11) — the bus already exposes the public seams; no FROZEN edit, no ADR-18 amendment. See **Verified-research update** at the bottom.
 
 ## Problem
 
