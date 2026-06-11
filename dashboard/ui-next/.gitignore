@@ -1,0 +1,23 @@
+# dashboard/ui-next/.gitignore
+#
+# EXPERIMENTAL KingMode UI spike. Source is checked in; everything below is
+# a regenerable artifact and MUST stay out of the repo (spike-dir scope).
+
+# Dependencies (npm install is MAIN-THREAD only -- see README, G7).
+node_modules/
+
+# Vite build output (vite build -> dist/; regenerated on every build).
+dist/
+
+# Vite caches / local server state.
+.vite/
+*.local
+
+# Editor / OS noise.
+.DS_Store
+Thumbs.db
+
+# Local env overrides (e.g. SM_SERVER_ORIGIN for the dev proxy).
+.env
+.env.*
+!.env.example

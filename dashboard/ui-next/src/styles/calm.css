@@ -1,0 +1,249 @@
+/* ============================================================================
+   calm.css -- StreamManager operator UI (KingMode redesign, ui-next spike)
+   ----------------------------------------------------------------------------
+   THE "STILL WATER" MONITOR LAYER. This is the calm-ambient spine made into
+   tokens + the motion budget that enforces it. Three responsibilities:
+
+     1. WHISPER-RESTING PALETTE -- semantic resting tokens layered over the
+        theme.css base tokens. At rest the UI is monitor-first calm: low
+        saturation, low contrast on chrome, high contrast reserved for content
+        and for the single true escalation. (calm-ambient thesis = the M2/M4
+        escalation-discipline floor: awe reinforces the contract.)
+
+     2. MOTION BUDGET (M2 + M18 + NFR-UI-7) -- a single auditable surface that
+        declares WHAT is allowed to move. ONLY two things animate:
+          (a) a true M2 escalation (desktop_pause / governance_negative_-
+              regression / static-rule) -- the ACTION REQUIRED pulse;
+          (b) the HITL countdown bar tick.
+        Everything else is still. new_pattern / low_confidence /
+        governance_variance_alert flag IN PLACE via static badges -- they are
+        NOT in the motion allow-list. Reduced-motion is honored unless the
+        operator force-allows via the FR-UI-9 override.
+
+     3. VARIABLE-WEIGHT TYPOGRAPHIC SEVERITY SCALE (grafted from monitor-first-
+        elevated) -- signal severity is encoded as TYPE EMPHASIS (weight +
+        tracking + optical size), NOT as chrome. Severity reads from the type,
+        so the resting chrome can stay whisper-quiet. Always paired with a text
+        label in the component layer (M4) -- weight is reinforcement, never the
+        sole signal.
+
+   Pure CSS. No JS. No component import. Consumes theme.css tokens only.
+   M16: no monitored-project vocabulary. M18: nothing here touches the verdict
+   hot path -- pure presentation. ASCII-only (cp1252-safe); dash = "--".
+============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   1. WHISPER-RESTING PALETTE
+   Semantic aliases over theme.css base tokens. The component layer reads these
+   so the still-water resting state is one place to tune, not scattered.
+   Resting saturation is deliberately low; the only saturated resting element
+   is the live-connection dot and the lone foreground escalation.
+---------------------------------------------------------------------------- */
+:root {
+  /* resting surfaces -- monitor-first calm, chrome recedes */
+  --calm-surface:        var(--bg);
+  --calm-surface-raised: var(--bg-card);
+  --calm-surface-row:    var(--bg-row);
+  --calm-surface-alt:    var(--bg-row-alt);
+  --calm-surface-hover:  var(--bg-row-hover);
+
+  /* resting hairlines -- the SessionRail lanes stay slate-calm at rest */
+  --calm-hairline:       var(--border);
+  --calm-hairline-hi:    var(--border-hi);
+
+  /* resting ink -- content stays legible; chrome ink is dimmed */
+  --calm-ink:            var(--text);
+  --calm-ink-quiet:      var(--text-dim);
+  --calm-ink-chrome:     var(--text-ui);
+  --calm-ink-loud:       var(--text-bright);
+
+  /* the single saturated resting affordance is the accent; everything else
+     defers to it so the lone escalation truly stands alone */
+  --calm-accent:         var(--accent);
+  --calm-accent-wash:    var(--accent-dim);
+  --calm-accent-glow:    var(--accent-glow);
+
+  /* SessionRail lane (grafted from ops-command-deck) -- calm at rest. A lane
+     only gains the accent edge when its per-lane ACTION REQUIRED tally > 0. */
+  --calm-lane-bg:        var(--bg-card);
+  --calm-lane-edge:      var(--border);
+  --calm-lane-edge-live: var(--accent);
+  --calm-lane-ink:       var(--text-ui);
+}
+
+/* ----------------------------------------------------------------------------
+   1b. SPACING RHYTHM + RADIUS -- a bespoke modular scale (root 4px), so the
+   density discipline ("perfect spacing") is a token, not a magic number.
+   Asymmetric by intent: the rail/frame gutters use the larger steps.
+---------------------------------------------------------------------------- */
+:root {
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 10px;
+  --space-5: 14px;
+  --space-6: 22px;
+  --space-7: 36px;
+  --space-8: 58px;
+
+  --radius-sharp: 2px;   /* telemetry-grade square corners */
+  --radius-soft:  4px;
+  --hairline:     1px;
+}
+
+/* ----------------------------------------------------------------------------
+   2. MOTION BUDGET -- the single auditable allow-list of what may animate.
+   This is the M2 escalation-discipline floor expressed as CSS. Two durations,
+   two keyframes, full stop.
+---------------------------------------------------------------------------- */
+:root {
+  /* the only two animation durations in the resting product */
+  --motion-pulse:    1.6s;   /* ACTION REQUIRED escalation pulse */
+  --motion-countdown: 1s;    /* HITL countdown bar tick cadence */
+  --motion-ease:     ease-in-out;
+
+  /* transition tokens for calm state changes (hover/open). These are NOT
+     keyframe animations -- they are short, interruptible, non-attention-
+     grabbing easing on color/opacity only. They never move layout. */
+  --t-calm:  180ms ease;
+  --t-flash: 300ms ease;
+}
+
+/* (a) ESCALATION PULSE -- the ONLY attention-grabbing keyframe in the product.
+   Fires exclusively on the ACTION REQUIRED escalation surface (M4). The
+   component layer applies .is-escalating to the lone foreground frame/badge.
+   This animates an outer glow ring, never layout, so it is repaint-cheap and
+   never triggers reflow (M18). */
+@keyframes calm-escalate-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(217, 119, 6, 0);   }
+}
+
+/* (b) COUNTDOWN TICK -- the HITL countdown bar. A 1s linear scaleX on a GPU-
+   compositable transform so the tick is repaint-free. The component layer
+   drives the remaining-time width via inline style / CSS var; this keyframe
+   provides the calm pulse on the live-connection dot only. */
+@keyframes calm-live-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);   }
+  50%      { opacity: .35; transform: scale(.8);  }
+}
+
+/* The escalation utility. ONLY the true M2 escalation gets this class. */
+.is-escalating {
+  animation: calm-escalate-pulse var(--motion-pulse) var(--motion-ease) infinite;
+}
+.calm-live-dot {
+  animation: calm-live-pulse 2.2s var(--motion-ease) infinite;
+}
+
+/* 2c. REDUCED-MOTION (NFR-UI-7). Honor the OS preference UNLESS the operator
+   force-allows motion via the FR-UI-9 override (html[data-motion="allow"]).
+   When motion is suppressed, the escalation is preserved as a STATIC inset
+   ring so the signal never disappears -- only its movement does. M4 holds:
+   the text label + static color still carry the signal. */
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion="allow"]) .is-escalating {
+    animation: none;
+    box-shadow: 0 0 0 1px #d97706 inset;
+  }
+  html:not([data-motion="allow"]) .calm-live-dot {
+    animation: none;
+  }
+}
+/* force-reduce: suppress unconditionally, keep the static ring. */
+html[data-motion="reduce"] .is-escalating {
+  animation: none !important;
+  box-shadow: 0 0 0 1px #d97706 inset;
+}
+html[data-motion="reduce"] .calm-live-dot { animation: none !important; }
+/* force-allow: re-assert motion even if the OS reports reduced-motion. */
+html[data-motion="allow"] .is-escalating {
+  animation: calm-escalate-pulse var(--motion-pulse) var(--motion-ease) infinite !important;
+}
+
+/* ----------------------------------------------------------------------------
+   3. VARIABLE-WEIGHT TYPOGRAPHIC SEVERITY SCALE
+   (grafted from monitor-first-elevated)
+   Severity is encoded as TYPE EMPHASIS so resting chrome can stay quiet.
+   Four steps. Each step is a (weight, tracking, optical-size, color) tuple.
+   The component layer applies .sev-<step> to the signal's TEXT; it ALWAYS sits
+   beside a literal label (M4), so the weight reinforces -- it is never alone.
+
+   Step ladder (calm -> loud):
+     sev-quiet   -- OBSERVING / background telemetry. Light, wide, dim.
+     sev-base    -- DECIDED / settled rows. Normal.
+     sev-notice  -- WARN / in-place flags (new_pattern, low_confidence,
+                    governance_variance_alert). Medium, tighter. STATIC.
+     sev-critical-- ACTION REQUIRED / BLOCKED / true M2 escalation. Heavy,
+                    tightest, loud ink. The ONLY step that may pair with motion.
+
+   The named font-feature settings (optical sizing + tabular numerals) keep
+   telemetry columns aligned and let variable fonts shift optical size with
+   weight; they degrade gracefully to the system stack.
+---------------------------------------------------------------------------- */
+:root {
+  --sev-quiet-weight:    300;
+  --sev-base-weight:     400;
+  --sev-notice-weight:   600;
+  --sev-critical-weight: 750;
+
+  --sev-quiet-track:     0.06em;
+  --sev-base-track:      0.02em;
+  --sev-notice-track:    0em;
+  --sev-critical-track: -0.01em;
+}
+
+.sev-quiet {
+  font-weight: var(--sev-quiet-weight);
+  letter-spacing: var(--sev-quiet-track);
+  color: var(--calm-ink-quiet);
+  font-variant-numeric: tabular-nums;
+}
+.sev-base {
+  font-weight: var(--sev-base-weight);
+  letter-spacing: var(--sev-base-track);
+  color: var(--calm-ink);
+  font-variant-numeric: tabular-nums;
+}
+.sev-notice {
+  font-weight: var(--sev-notice-weight);
+  letter-spacing: var(--sev-notice-track);
+  color: var(--calm-ink-loud);
+  font-variant-numeric: tabular-nums;
+}
+.sev-critical {
+  font-weight: var(--sev-critical-weight);
+  letter-spacing: var(--sev-critical-track);
+  color: var(--badge-ar-fg);
+  font-variant-numeric: tabular-nums;
+  /* optical-size hint for variable fonts; ignored by static fallbacks */
+  font-optical-sizing: auto;
+}
+
+/* ----------------------------------------------------------------------------
+   3b. MIN FONT SIZES (NFR-UI-2) -- tokens, so the density discipline never
+   undershoots the legibility floor. The component layer references these.
+     badges 12px / metadata 13px / body 14px.
+---------------------------------------------------------------------------- */
+:root {
+  --fs-badge:    12px;
+  --fs-meta:     13px;
+  --fs-body:     14px;
+  --fs-chrome:   11px;  /* labels/chrome captions only -- never content */
+
+  --lh-tight:    1.25;
+  --lh-body:     1.5;
+}
+
+/* ----------------------------------------------------------------------------
+   4. EXPIRED-ROW TREATMENT (M9) -- when a HITL countdown reaches zero the row
+   is dimmed + desaturated. Declared here as the calm "fade to background"
+   treatment. Pure opacity + filter (composited, repaint-cheap). The component
+   layer toggles .calm-expired. The countdown EXPIRY itself is driven by JS in
+   the hitl-core unit; this is only its resting visual.
+---------------------------------------------------------------------------- */
+.calm-expired {
+  opacity: .35;
+  filter: grayscale(.6);
+  transition: opacity var(--t-calm), filter var(--t-calm);
+}
