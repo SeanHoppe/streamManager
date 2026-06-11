@@ -1582,7 +1582,7 @@ def _emit_ppp_auto_probe(bus, session_id: str, idx: int) -> None:
     bus.write_envelope("audit.probe", payload)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--gov-db", default="tmp/soak_gov.db")
@@ -1656,7 +1656,11 @@ def main() -> int:
         help="v2.8 P1 / v10 P5: path to rl_shadow.db; pair with --shadow-proposal.")
     ap.add_argument("--shadow-proposal", type=str, default=None,
         help="v2.8 P1 / v10 P5: rl_proposals/<UTC>Z.json manifest path.")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     # Task A / v1.2: replay tier. Skip the claude-on-PATH check and the
     # BRIDGE_API_GOV / cli_pool init paths — replay exercises bus +

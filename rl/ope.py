@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from rl.episode_logger import _sm_slug_set
 
 State = dict
 Action = float
@@ -37,16 +38,6 @@ QModel = Callable[[State, Action], float]
 _PROPENSITY_FLOOR = 0.01
 _PROPENSITY_CEIL = 100.0
 _ACTION_TOLERANCE = 1e-6
-
-_DEFAULT_SM_SLUGS = "streamManager"
-
-
-def _sm_slug_set() -> frozenset[str]:
-    """SM self-slug set (polarity-flip). Mirrors
-    ``rl.episode_logger._sm_slug_set``; kept inline so ``rl.ope`` stays
-    free of intra-rl imports (Episode is duck-typed ``Any``)."""
-    raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", _DEFAULT_SM_SLUGS)
-    return frozenset(s.strip() for s in raw.split(",") if s.strip())
 
 
 def hitl_agreement_reward(ep: Episode) -> float:
@@ -173,6 +164,13 @@ def load_episodes_from_db(
     # Polarity-flip at the SQL WHERE (CLAUDE.md L42): exclude SM-self
     # project_slug values. NULL project_slug (legacy rows pre-dating the
     # column, already screened by the write-time refusal) is retained.
+    # CLAUDE.md L42's dual-key self-exclusion is upheld via a write-time /
+    # read-time SPLIT, not by dropping half the rule: the
+    # session_id != BRIDGE_SM_SELF_SESSION_ID half is enforced at WRITE time
+    # (episode_logger raises SelfMonitorRefusal) because that env var names
+    # the *current* session and is meaningless against historical rows; only
+    # the project_slug half is durable at read time, so the read-side SQL
+    # WHERE carries it alone.
     sm_slugs = sorted(_sm_slug_set())
     slug_clause = ""
     if sm_slugs:
