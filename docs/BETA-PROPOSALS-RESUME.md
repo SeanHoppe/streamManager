@@ -53,21 +53,28 @@ read endpoints in `dashboard/server.py` (all polarity-guarded, SM-self excluded)
 
 ## 3. How to RESUME batch-3 (the 4)
 
-1. **Research + mockups:** edit `.claude/workflows/sm-proposal-research.js`, set
-   `const ACTIVE_BATCH = 'batch3';` (the BATCH_3 array is already baked in), then
-   run the workflow (Workflow tool, `scriptPath` to that file). It writes 4
-   mockups to `reports/proposals/mockups/` + returns verdicts. **GOTCHA: the
-   Workflow `args` input does NOT thread via `scriptPath` -- you MUST set the
-   `ACTIVE_BATCH` constant, args are ignored.** (Same for build:
-   `ACTIVE_APPROVED` in `sm-proposal-build.js`.)
-2. **Mockup gate:** generate a gallery + present the 4 mockups for operator
-   approval (the operator confirms UI before build -- directive #2).
-3. **Build:** bake a `BATCH3_NEW` array into `sm-proposal-build.js` (the 4, with
-   CONSTRAINED-ADDITIVE buildNotes like the `BATCH2_NEW` array already there),
-   set `ACTIVE_APPROVED = BATCH3_NEW`, run. Components land in `beta/`; build
-   returns 0 shippable / N needsRepair -- **this is a known FALSE-NEGATIVE**: the
-   refuter's `matchesMockup` flags the by-design-unwired state. The components are
-   sound; the "repair" is the main-thread wiring.
+**ALREADY PRE-WIRED (paused mid-setup 2026-06-11):**
+- `.claude/workflows/sm-proposal-research.js` -> `ACTIVE_BATCH = 'batch3'` is
+  ALREADY SET. Just run the workflow (Workflow tool, scriptPath) -> writes 4
+  mockups to `reports/proposals/mockups/` + returns verdicts. (A run was launched
+  then stopped per operator request before it finished -- nothing partial to clean
+  up; just re-run.)
+- `.claude/workflows/sm-proposal-build.js` -> the `BATCH3_NEW` array (the 4, with
+  CONSTRAINED-ADDITIVE read-only/advisory buildNotes) is ALREADY BAKED IN and
+  `ACTIVE_APPROVED = BATCH3_NEW` is ALREADY SET. Just run it after the gate.
+- **GOTCHA still applies:** Workflow `args` does NOT thread via `scriptPath` --
+  the `ACTIVE_BATCH` / `ACTIVE_APPROVED` constants are the selectors.
+
+So the resume sequence is just:
+1. **Research:** run `sm-proposal-research.js` (scriptPath) -> 4 mockups + verdicts.
+2. **Mockup gate:** generate a gallery (see `reports/_gen_index2.cjs` pattern --
+   that temp was cleaned, re-create from git history) + present the 4 mockups for
+   operator approval (directive #2).
+3. **Build:** run `sm-proposal-build.js` (scriptPath; `ACTIVE_APPROVED=BATCH3_NEW`
+   already set). Components land in `beta/`; build returns 0 shippable / N
+   needsRepair -- **known FALSE-NEGATIVE** (refuter `matchesMockup` flags the
+   by-design-unwired state). The components are sound; the "repair" is the
+   main-thread wiring.
 4. **Integrate (main thread):** recover the build data from the run's
    `journal.jsonl` (the aggregate only forwards full data for `shippable`; parse
    `type:'result'` events -> `reports/_build_b3.json`). Then: extract backend

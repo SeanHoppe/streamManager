@@ -133,10 +133,20 @@ const BATCH2_NEW = [
   { key: 'time-machine-governance-replay', num: 48, group: 'session', file: 'reports/proposals/2026-06-11-time-machine-governance-replay.proposal.md', buildNote: _BN + 'A Settings-drawer counterfactual replay viewer over stored decisions (read-only "what would governance have done" framed from the corpus); the live counterfactual engine is deferred -- v1 replays stored decisions read-only.' },
 ];
 
+// Batch-3 (4 gap-fill): governance-semantics features. All READ-ONLY/ADVISORY +
+// CONSTRAINED-ADDITIVE -- they surface/preview from existing data, NEVER edit the
+// rule store / governance.py / call governance.evaluate.
+const BATCH3_NEW = [
+  { key: 'allow-pattern-auto-graduation', num: 1, group: 'hitl', file: 'reports/proposals/2026-06-11-allow-pattern-auto-graduation.proposal.md', buildNote: _BN + 'READ-ONLY + operator-confirmed. Surface learn-mode patterns eligible to graduate to a static ALLOW rule; a "graduate" affordance is ADVISORY -- it does NOT auto-edit the rule store or governance.py. v1 writes the operator confirmation to an additive proposals/graduations table (or a documented disabled "apply from CLI" affordance), reading candidates from existing patterns. EXCLUDE SM-self.' },
+  { key: 'confidence-calibration-loop', num: 8, group: 'monitor', file: 'reports/proposals/2026-06-11-confidence-calibration-loop.proposal.md', buildNote: _BN + 'READ-ONLY calibration view: bucket existing decisions by predicted confidence vs observed outcome (decisions + hitl_overrides), render a calibration curve + reliability readout. Additive read endpoint. NO change to the engine confidence semantics. EXCLUDE SM-self.' },
+  { key: 'policy-preview-chip', num: 21, group: 'hitl', file: 'reports/proposals/2026-06-11-policy-preview-chip.proposal.md', buildNote: _BN + 'READ-ONLY "what would governance do" preview from the CORPUS only: for a draft/selected message, show the likely verdict via a corpus pattern lookup over existing decisions/patterns -- NEVER call governance.evaluate / the live engine. Additive read endpoint. MUST exclude SM-self (polarity: never preview against SM-self corpus).' },
+  { key: 'regret-mining-override-loop', num: 24, group: 'hitl', file: 'reports/proposals/2026-06-11-regret-mining-override-loop.proposal.md', buildNote: _BN + 'READ-ONLY regret view: surface operator overrides where the override diverged from the engine verdict (read hitl_overrides + decisions), to close the feedback loop ADVISORY-only. Additive read endpoint over hitl_overrides, EXCLUDE SM-self. NO writeback to governance / no rule edit.' },
+];
+
 const IN = (args && typeof args === 'object') ? args : {};
 // NOTE: Workflow `args` does NOT thread to the script via scriptPath (verified
-// 2026-06-11). Set ACTIVE_APPROVED here per run (APPROVED_13 | HELD_2 | BATCH2_NEW).
-const ACTIVE_APPROVED = BATCH2_NEW;
+// 2026-06-11). Set ACTIVE_APPROVED here per run (APPROVED_13 | HELD_2 | BATCH2_NEW | BATCH3_NEW).
+const ACTIVE_APPROVED = BATCH3_NEW;
 const APPROVED = (Array.isArray(IN.approved) && IN.approved.length ? IN.approved : ACTIVE_APPROVED).slice(0, 24);
 const TARGET = IN.target || 'dashboard/ui-next/';
 const MOCK_DIR = IN.mockDir || 'reports/proposals/mockups/';
