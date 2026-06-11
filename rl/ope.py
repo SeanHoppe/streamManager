@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -36,6 +37,16 @@ QModel = Callable[[State, Action], float]
 _PROPENSITY_FLOOR = 0.01
 _PROPENSITY_CEIL = 100.0
 _ACTION_TOLERANCE = 1e-6
+
+_DEFAULT_SM_SLUGS = "streamManager"
+
+
+def _sm_slug_set() -> frozenset[str]:
+    """SM self-slug set (polarity-flip). Mirrors
+    ``rl.episode_logger._sm_slug_set``; kept inline so ``rl.ope`` stays
+    free of intra-rl imports (Episode is duck-typed ``Any``)."""
+    raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", _DEFAULT_SM_SLUGS)
+    return frozenset(s.strip() for s in raw.split(",") if s.strip())
 
 
 def hitl_agreement_reward(ep: Episode) -> float:
@@ -158,13 +169,25 @@ def load_episodes_from_db(
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     placeholders = ",".join("?" for _ in sources)
+    params: list[object] = list(sources)
+    # Polarity-flip at the SQL WHERE (CLAUDE.md L42): exclude SM-self
+    # project_slug values. NULL project_slug (legacy rows pre-dating the
+    # column, already screened by the write-time refusal) is retained.
+    sm_slugs = sorted(_sm_slug_set())
+    slug_clause = ""
+    if sm_slugs:
+        slug_placeholders = ",".join("?" for _ in sm_slugs)
+        slug_clause = (
+            f" AND (project_slug IS NULL OR project_slug NOT IN ({slug_placeholders}))"
+        )
+        params.extend(sm_slugs)
     sql = (
         "SELECT episode_id, ts_utc, session_id, trace_id, state_features_json,"
         " action_taken, action_propensity, verdict, confidence, hitl_override,"
         " latency_ms, fr_og_7_pass, budget_violation, source, cycle_tag"
-        f" FROM episodes WHERE source IN ({placeholders})"
+        f" FROM episodes WHERE source IN ({placeholders})" + slug_clause
     )
-    rows = conn.execute(sql, tuple(sources)).fetchall()
+    rows = conn.execute(sql, tuple(params)).fetchall()
     conn.close()
     out: list[dict] = []
     for r in rows:

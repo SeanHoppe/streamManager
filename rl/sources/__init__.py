@@ -37,4 +37,5 @@ class Episode:
     cycle_tag: Optional[str] = None
     hitl_override: Optional[int] = None
     fr_og_7_pass: Optional[int] = None
+    project_slug: str | None = None  # polarity-flip key; matches rl/schema.sql
     provenance: dict = field(default_factory=dict)

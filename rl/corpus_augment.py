@@ -17,6 +17,7 @@ import sqlite3
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+from rl.episode_logger import _sm_slug_set
 from rl.sources import VALID_VERDICTS, Episode
 from rl.sources import cassette as cassette_src
 from rl.sources import probe as probe_src
@@ -39,6 +40,16 @@ class GoldenInTrainingError(AssertionError):
 def _load_real_from_db(db_path: Path) -> list[Episode]:
     if not db_path.exists():
         return []
+    # Polarity-flip at the SQL WHERE (CLAUDE.md L42): exclude SM-self
+    # project_slug values. NULL project_slug (legacy rows pre-dating the
+    # column, already screened by the write-time refusal) is retained.
+    sm_slugs = sorted(_sm_slug_set())
+    slug_placeholders = ",".join("?" for _ in sm_slugs)
+    slug_clause = (
+        f" AND (project_slug IS NULL OR project_slug NOT IN ({slug_placeholders}))"
+        if sm_slugs
+        else ""
+    )
     conn = sqlite3.connect(str(db_path))
     try:
         rows = conn.execute(
@@ -46,6 +57,8 @@ def _load_real_from_db(db_path: Path) -> list[Episode]:
             " action_taken, action_propensity, verdict, confidence,"
             " hitl_override, latency_ms, fr_og_7_pass, budget_violation,"
             " source, cycle_tag FROM episodes WHERE source IN ('live','soak')"
+            + slug_clause,
+            tuple(sm_slugs),
         ).fetchall()
     finally:
         conn.close()

@@ -140,3 +140,42 @@ def test_load_episodes_from_db(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0]["session_id"] == "s1"
     assert rows[0]["state_features"] == {"routing_band": 4}
+
+
+def test_load_episodes_excludes_sm_project_slug(tmp_path: Path):
+    """Polarity-flip at the SQL WHERE (CLAUDE.md L42): SM-slug rows are
+    dropped on read; NULL project_slug rows are retained."""
+    db_path = tmp_path / "ep.db"
+    schema = (Path(__file__).resolve().parents[1]
+              / "rl" / "schema.sql").read_text()
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(schema)
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id,"
+        " state_features_json, action_taken, action_propensity, verdict,"
+        " confidence, latency_ms, budget_violation, source, project_slug)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "ok", "t-ok", "{}",
+         0.75, 1.0, "ALLOW", 0.9, 100.0, 0, "live", "monitored-proj"),
+    )
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id,"
+        " state_features_json, action_taken, action_propensity, verdict,"
+        " confidence, latency_ms, budget_violation, source, project_slug)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "sm", "t-sm", "{}",
+         0.75, 1.0, "ALLOW", 0.9, 100.0, 0, "live", "streamManager"),
+    )
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id,"
+        " state_features_json, action_taken, action_propensity, verdict,"
+        " confidence, latency_ms, budget_violation, source)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "legacy", "t-legacy", "{}",
+         0.75, 1.0, "ALLOW", 0.9, 100.0, 0, "live"),
+    )
+    conn.commit()
+    conn.close()
+    rows = load_episodes_from_db(db_path, sources=("live", "soak"))
+    session_ids = {r["session_id"] for r in rows}
+    assert session_ids == {"ok", "legacy"}  # SM-slug "sm" excluded; NULL kept

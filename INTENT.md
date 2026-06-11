@@ -94,43 +94,42 @@ Desktop orchestration. SM governs messages, not transitions.
 
 ---
 
-## Current cycle posture (as of 2026-05-16)
+## Current cycle posture (as of 2026-05-22; v2.8 Convergence cycle open)
 
 ### Shipped lineage
 
-`v1.0 (POC) → v1.1 (cli_pool) → v1.2 (orchestration ship) → v1.3 (Learn Mode) → v1.5 (sub-phase instrumentation) → v1.6 (cli_dispatch localisation) → v1.7 (Haiku fastpath wired, DORMANT) → v1.8 (content-detection seam) → v1.9 (verdict-fallback + session watcher) → v2.0 (ADR-18 minted; Haiku + verdict-fallback ripped) → v2.1.0 (PPP audit harness ship-gate, 2026-05-11, tag 8303f38)`.
+`v1.0 (POC) -> v1.1 (cli_pool) -> v1.2 (orchestration ship) -> v1.3 (Learn Mode) -> v1.5 (sub-phase instrumentation) -> v1.6 (cli_dispatch localisation) -> v1.7 (Haiku fastpath wired, DORMANT) -> v1.8 (content-detection seam) -> v1.9 (verdict-fallback + session watcher) -> v2.0 (ADR-18 minted; Haiku + verdict-fallback ripped) -> v2.1.0 (PPP audit harness ship-gate, 2026-05-11) -> v2.2.0 (consolidation; gap-4 API-timeout invariant + Amendment C, 2026-05-17) -> v2.3.0 (JsonlTailWorker production wiring; lever ledger 0->1, 2026-05-17) -> v2.4.0 (consolidation; Amendments D/E + #111 close, 2026-05-19) -> v2.5.1 (consolidation + corrective; n=6 alignment-eval mandate, 2026-05-20; v2.5.0 never tagged) -> v2.6.0 (feature; wall-clock instrumentation, ledger 1->2, 2026-05-20) -> v2.7.1 (corrective sub-cycle; Hatch B per-row exclusion + cli_governance timeout-tighten, ledger 2->3, 2026-05-22; v2.7.0 never tagged)`.
 
 ### Two parallel tracks
 
-1. **v2.x main cycle** — governance feature stream. **v2.1.0 SHIPPED.** v2.2 P0 cycle frame **MINTED 2026-05-16 as consolidation cycle** (net LOC ≤ 0). ADR-18 §"Amendments" v2.2 P0 Amendment A (feature-cycle LOC soft target ≤ 1500; closes #130) + Amendment B (Rule 6 memory pre-flight; closes #133) landed in this P0. Carry-forwards from v2.1 P4: dormant `JsonlTailWorker.start()` production wiring DEFERRED v2.3, soak-summary probe-emit counter LANDED PR #163, Sonnet alignment dip Step 1 LANDED PR #161 / Step 2 operator-bound (re-assessed at v2.2 P2 ship-gate), feature-cycle LOC ceiling (see #130).
-2. **v10 RL companion track** — deterministic-Python contextual bandit over L4 confidence threshold. **P0–P3 SHIPPED** (5/7 phases; ~60% MVP). P4 Q4 hold **LIFTED 2026-05-11**; real blocker is now **corpus-fill** (`rl_episodes.db` < 200 live episodes; currently 0). Live subscriber (PR #155) + backfill extractor (PR #156) just landed to enable corpus-fill paths.
+1. **v2.x main cycle** -- governance feature stream. **Latest shipped tag: v2.7.1 (2026-05-22).** v2.8 P0 Convergence-cycle frame **MINTED 2026-05-22** (feature classification recommended; operator picks at P0 fire). Cycle-tip anchor `70e23e5` (v2.8 P0 merge of PR #211; predecessor tag v2.7.1). v2.8 bundle: Path-D synthetic-fixture v10 P5 implementation (P1 landed at PR #214), step (3) env-split (expected to bump lever ledger 3 -> 4), and Seed v2.7-A-CLIP corpus measure. Carry-forward watch seeds into v2.8: Seed v2.4-E (overall p95 regression-flag 10.156s) + Seed v2.4-F (L4 promote-red 22s).
+2. **v10 RL companion track** -- deterministic-Python contextual bandit over L4 confidence threshold. **P0-P3 SHIPPED**; P4 corpus gate CLEARED (200-row threshold passed at v2.3; corpus ~777 episodes at v2.7.1 Run 9). P5 entry-gate found structurally unreachable under deterministic v10.1 policy (filed #177); resolution path = ADR-18 Amendment D (v10.1-mode vs v10.3-mode gate split, landed v2.4) + parallel synthetic-fixture P5 implementation (Path-D, landing across v2.8 P1). True MVP blocker remains an empirical shadow soak closing #112 -> #131 -> #124 / #125.
 
 ### ADR-18 governance regime (in force)
 
 - Rule 1: Surface freeze (FROZEN / EVOLVING / EXPERIMENTAL).
 - Rule 2: DORMANT-N falsify-before-extend (cumulative).
-- Rule 3: Consolidation cycles net LOC ≤ 0; feature cycles target ≤ 1500 LOC (soft, PROVISIONAL through v2.3 P0 per Amendment A; BLOCK at 1.5×); see #130.
+- Rule 3: Consolidation cycles net LOC <= 0; feature cycles target <= 1500 LOC (soft per Amendment A; BLOCK at 1.5x); cycle-tip-anchored LOC measure per Amendment C.
 - Rule 4: Phase budget with retroactive sub-phase amendments.
-- Rule 5: Backlog hard cap.
-- Rule 6 (NEW v2.2 P0): Memory pre-flight at cycle frame (INTENT.md in scope); see #133.
-- `WIRED_LEVER_LEDGER_COUNT` = 0; DORMANT-N gate inert.
+- Rule 5: Backlog hard cap, with Amendment E cycle-handoff exemption.
+- Rule 6 (v2.2 P0): Memory pre-flight at cycle frame (INTENT.md in scope).
+- Amendment D (v2.4): v10 P5 entry-gate split (v10.1-mode vs v10.3-mode).
+- `WIRED_LEVER_LEDGER_COUNT` = 3 production / 0 soak entering v2.8 (first wire since v2.3; bumps at v2.6, v2.7 P1).
 
 ### Held chain (v10)
 
-`#111 (P4) READY corpus-gated → #112 (P5) BLOCKED → #131 (v10.x cycle frame) BLOCKED → #124 + #125 (ADR-18 freeze-lift deliverables) BLOCKED`.
+`#112 (P5) BLOCKED -> #131 (v10.x cycle frame) BLOCKED -> #124 + #125 (ADR-18 freeze-lift deliverables) BLOCKED`. (`#111` P4 CLOSED at v2.4; gate is now empirical-soak, not policy.)
 
 ### Hot zones (current)
 
-- `src/stream_manager/governance.py`, `message_bus.py`, `cli_governance.py`, `model_router.py` — FROZEN pre-CLI seam until #131 cycle frame fires.
-- `rl/` — v10 RL track surfaces; EVOLVING per ADR-18.
-- `dashboard/server.py`, `dashboard/static/index.html` — actively touched per cycle.
-- `tools/soak_driver.py`, `tools/cassette_record.py` — EVOLVING; cassette CI guard pending (#132).
+- `src/stream_manager/governance.py`, `message_bus.py`, `cli_governance.py`, `model_router.py`, `cli_pool.py` -- FROZEN pre-CLI seam; new caller edges re-route to a #131-style freeze-lift proposal.
+- `rl/` -- v10 RL track surfaces; EVOLVING per ADR-18.
+- `dashboard/server.py`, `dashboard/static/index.html` -- actively touched per cycle.
+- `tools/soak_driver.py`, `tools/cassette_record.py`, `tools/ship_gate_runner.py` -- EVOLVING; new bus envelope kinds require same-PR cassette + soak coverage.
 
 ### Authoritative status references
 
-- `docs/v10-mvp-status.md` — v10 track ledger (post-hold-lift).
-- `docs/v2.2-backlog.md` — v2.2 seed list (6 items post-v2.2 P0: remote-CLI monitoring + 5 INTENT.md gap-analysis seeds graduated 2026-05-16).
-- `docs/v2.2-task-plan.md` — v2.2 cycle task plan (consolidation; 2 work phases).
-- `docs/v2.1-backlog.md` §"Carry-forwards from v2.1" — 4 v2.2 cycle-handoff items.
-- `docs/jobs/MASTER.md` — cross-cycle issue tracker.
-- `CHANGELOG.md` — Keep-a-Changelog tagged ship history.
+- `docs/v10-mvp-status.md` -- v10 track ledger.
+- `docs/v2.8-task-plan.md` + `docs/v2.8-next-steps.md` -- current cycle task plan + carry-forwards.
+- `docs/jobs/MASTER.md` -- cross-cycle issue tracker.
+- `CHANGELOG.md` -- Keep-a-Changelog tagged ship history (current latest [2.7.1]).

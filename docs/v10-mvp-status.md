@@ -2,7 +2,7 @@
 
 **Track:** v10 RL companion (parallel to v1.x/v2.x main cycle).
 **Design source:** `docs/v10-rl-design.md` (Accepted v10 P0, 2026-05-07).
-**Authoring date:** 2026-05-08. **Last refresh:** 2026-05-21 (post v2.6.0 ship, `c3a964c`).
+**Authoring date:** 2026-05-08. **Last refresh:** 2026-05-22 (post v2.8 P1 P5-infra ship, `07ee05c`).
 **Peer doc:** `docs/v2.1-p1-scope.md` (v2.1 P1 main-cycle scope).
 
 ---
@@ -32,17 +32,17 @@ Close the streamManager governance loop with a **deterministic-Python contextual
 | **P2** | Corpus augmentation (`rl/corpus_augment.py`, `rl/sources/{cassette,probe,golden,review}.py`) | ✅ SHIPPED | (P2 PR) | ≤ 500 | 100 |
 | **P3** | OPE harness 5-stage gauntlet (`rl/ope.py`, `rl/validate.py`, `rl/cli/validate.py`) | ⚠ SHIPPED with 2 known gaps | #123 (`fa4a55f`) | ≤ 600 | 85 |
 | **P4** | Bandit trainer (Thompson + CMDP + promotion gate) | ✅ SHIPPED + #111 CLOSED | trainer at v2.3 PR #176 (`cf7d003`); close-out at v2.4 P0 PR #179 (`b35e982`) | ≤ 700 | 100 |
-| **P5** | Shadow A/B + ship criteria | 🔒 BLOCKED on Seed v2.6-C (Path-D synthetic-fixture P5; deferred v2.7 — 4th consecutive deferral) | (#112) | ≤ 600 | 0 (docs-side gate cleared via ADR-18 Amendment D) |
+| **P5** | Shadow A/B + ship criteria | [DONE] INFRA SHIPPED (`rl/shadow.py` + `rl/stop_conditions.py` + CLI + soak-driver hook); empirical shadow soak pending (#112) | #214 (`07ee05c`, 2026-05-22) | <= 600 | ~95 (infra complete, 24/24 tests; empirical soak outstanding) |
 
 ### Aggregate v10 track completeness
 
-Phase-weighted (P0 + P0a + P1 + P2 + P4 shipped; P3 partial; P5 docs-gate cleared but impl deferred):
+Phase-weighted (P0 + P0a + P1 + P2 + P4 shipped; P3 partial; P5 infra shipped at #214, empirical shadow soak outstanding):
 
-- **Equal-weighted:** (100×5 + 85 + 0) / 7 = **83.6%**
-- **Foundation-weighted** (P0/P0a/P1/P2/P3 = foundation at 1×, P4/P5 = training+shadow at 1.5×): foundation 96.7% × 5 = 483.5; P4 100% × 1.5 = 150; P5 0% × 1.5 = 0; total 633.5 / (5 + 1.5×2) = ~79.2%.
-- Post-v2.4 baseline sits in the ~80% range (was ~60% pre-v2.4). Gain driven by P4 ship at v2.3 PR #176 + issue #111 close at v2.4 P0 PR #179.
+- **Equal-weighted:** (100x5 + 85 + 95) / 7 = **97.1%**
+- **Foundation-weighted** (P0/P0a/P1/P2/P3 = foundation at 1x, P4/P5 = training+shadow at 1.5x): foundation 96.7% x 5 = 483.5; P4 100% x 1.5 = 150; P5 95% x 1.5 = 142.5; total 776 / (5 + 1.5x2) = ~97.0%.
+- Post-v2.8 P1 baseline sits in the ~95-97% range (was ~80% pre-v2.8 P1). Gain driven by P5 infra ship at #214 (`07ee05c`) on top of P4 ship at v2.3 PR #176 + issue #111 close at v2.4 P0 PR #179.
 
-**v10 MVP completeness: ~80% (track ships at v10.0; P5 implementation deferred to v2.7 via Seed v2.6-C — 4th consecutive cycle deferred; v10.1+ is post-MVP refinement).**
+**v10 MVP completeness: ~95-96% infra (track ships at v10.0; P5 shadow recorder + ship-criteria harness landed at #214 with 24/24 tests; the remaining true MVP blocker is the empirical Tier-3 shadow soak that closes #112 -> #131 -> #124/#125; v10.1+ is post-MVP refinement).**
 
 ---
 
@@ -102,13 +102,15 @@ Phase-weighted (P0 + P0a + P1 + P2 + P4 shipped; P3 partial; P5 docs-gate cleare
 
 - **ADR-18 Amendment D context.** v10 P5 entry-gate split (v10.1-mode vs v10.3-mode) clarified that the original `is_ready_for_shadow()` semantics belong to v10.3 mode; a sibling v10.1-mode predicate covers deterministic-policy (current v10.1) operation. See `docs/adr/ADR-18-mvp-surface-freeze.md` §"Amendments" 2026-05-18 — v2.4 P0 Amendment D. P4 trainer itself remains correct under both modes; the gate split is a P5 entry-condition change, not a P4 trainer change.
 
-### P5 — Shadow A/B + ship criteria (🔒 BLOCKED on Seed v2.6-C Path-D synthetic-fixture P5 implementation — 4th consecutive cycle deferred, 0%)
+### P5 - Shadow A/B + ship criteria ([DONE] INFRA SHIPPED at #214 / `07ee05c`, 2026-05-22; empirical shadow soak outstanding, ~95%)
 
 - Phase prompt: `docs/prompts/v10-orchestration/phase-5-shadow-stop-conditions.md`.
-- Scope: `rl/shadow.py` (ghost-path candidate exec), `rl/cli/shadow.py`, `rl/stop_conditions.py` (6 pre-registered ship criteria), tests, ADR append.
+- Scope: `rl/shadow.py` (ghost-path candidate exec), `rl/cli/shadow.py`, `rl/cli/check_criteria.py`, `rl/stop_conditions.py` (6 pre-registered ship criteria), tests, ADR append.
+- **Implementation shipped at v2.8 P1 PR #214 (`07ee05c`, 2026-05-22 15:11):** `rl/shadow.py` `ShadowRecorder` (non-invasion budget 50 ms, WAL-mode `rl_shadow.db`, split `_dropped` vs `_budget_violations` counters), `rl/stop_conditions.py` six pre-registered ship criteria (`shadow_reward_improvement`, `fr_og_7_violations`, `cand_prod_agreement`, `alignment_pass_rate`, `posterior_ci`, `parameter_drift`; constants frozen, not env-overridable), `rl/cli/{shadow,check_criteria}.py` CLI surfaces, `tools/soak_driver.py` opt-in `--shadow-recorder` + `--shadow-proposal` flags. 24/24 shadow + 30/30 sibling RL tests pass; CodeQL clean. ADR-5 §"v10 shadow overhead" + ADR-18 v2.8 P1 amendment appended.
 - NON-INVASIVE: shadow subscribes to bus, runs candidate in-process, writes `rl_shadow.db`. Never affects production decision flow.
 - Strategy: in-process via `tools/soak_driver.py --shadow-recorder rl_shadow.db --shadow-proposal <path>`. Fallback if `soak_driver` freezes between P3 and P5 = sidecar JSONL-tail post-run write.
 - Exit: shadow run on Tier-3 soak produces (production, candidate, state, ground-truth) tuples; all 6 ship criteria evaluated; ship/no-ship verdict reproducible.
+- **Remaining gap (NOT infra):** the empirical Tier-3 shadow soak that produces real (production, candidate, state, ground-truth) tuples and exercises the criteria checker end-to-end is still outstanding. This is the true MVP blocker - it closes #112 -> #131 -> #124/#125. The synthetic-fixture harness validates the infrastructure offline (`--mode=v10.1` infra-validation only) but does NOT satisfy the pre-registered v10.3 ship criteria; a real Tier-3 soak does (robin owns the criteria read).
 
 #### Docs-side gate cleared via ADR-18 Amendment D (2026-05-18, v2.4 P0)
 
@@ -121,25 +123,25 @@ The original P5 entry gate (`is_ready_for_shadow()` requiring non-baseline `best
 
 See `docs/adr/ADR-18-mvp-surface-freeze.md` §"Amendments" 2026-05-18 — v2.4 P0 Amendment D for full mechanism (sibling `is_ready_for_shadow_v10_1()` method, additive `ready_v10_1` + `mode` keys on `proposals.promotion_gate` envelope, `--mode=v10.1` `soak_run_id` suffix to keep infrastructure-validation runs out of v10.3 writeback promotion accounting).
 
-#### Implementation-side gate: Seed v2.6-C (Path-D synthetic-fixture P5, ~600 LOC, deferred v2.7 — 4th consecutive deferral)
+#### Implementation-side gate: Seed v2.6-C (Path-D synthetic-fixture P5, ~600 LOC) - [DONE] SHIPPED at v2.8 P1 PR #214 (`07ee05c`)
 
-Implementation deferred across **4 consecutive cycles** (v2.4 + v2.5 + v2.5.1 + v2.6 all skipped). Renamed across cycles: Seed v2.4-C → Seed v2.5-C (v2.5 P0 backlog) → Seed v2.6-C (v2.6 P2 close-out per `docs/v2.6-backlog.md` §"Carry-forwards from v2.6" item 1). Phase-5 prompt re-mint per Amendment D gate-split disambiguation header continues to defer alongside. Acceptance items under Amendment D for the bandit/train/phase-5 prompt/shadow-harness side are all DEFERRED v2.7 (see ADR-18 Amendment D acceptance checklist).
+Implementation was deferred across 4 consecutive cycles (v2.4 + v2.5 + v2.5.1 + v2.6), renamed across cycles: Seed v2.4-C -> Seed v2.5-C (v2.5 P0 backlog) -> Seed v2.6-C (v2.6 P2 close-out per `docs/v2.6-backlog.md` section "Carry-forwards from v2.6" item 1). It **landed at v2.8 P1 PR #214 (`07ee05c`, 2026-05-22)** as the Path-D synthetic-fixture P5 implementation: shadow recorder, six-criteria stop-condition harness, two CLI surfaces, and the `soak_driver` hook, with 24/24 shadow tests + 30/30 sibling RL tests passing. The Path-D synthetic-fixture validates the infrastructure offline; it does NOT close #112, because the pre-registered ship criteria require a real Tier-3 shadow soak (`--mode=v10.1` is infra-validation only).
 
-Seed v2.6-C is the current **head-of-chain** for the v10 RL companion track. One v2.7 feature-cycle slot advances the entire downstream tail (#112 → #131 → #124 + #125). Per ADR-18 Amendment A definition, a Path-D synthetic-fixture fire (~600 LOC) requires feature-cycle classification.
+The **remaining head-of-chain blocker** is therefore no longer the P5 implementation - it is the empirical Tier-3 shadow soak. Closing it advances the entire downstream tail (#112 -> #131 -> #124 + #125).
 
 ---
 
 ## 4. Held-chain map
 
-**Chain collapsed from 5-deep → 4-deep at the v2.4 boundary.** Issue #111 (P4 trainer) closed at v2.4 P0 PR #179 (`b35e982`); corpus 200-row gate cleared with margin (608 episodes post v2.6 P2 Run 7). Head-of-chain is now **Seed v2.6-C (Path-D synthetic-fixture P5 implementation, ~600 LOC, deferred v2.7 — 4 consecutive cycles deferred: v2.4 + v2.5 + v2.5.1 + v2.6)**.
+**Chain collapsed from 5-deep to 4-deep at the v2.4 boundary, then the P5-implementation link cleared at v2.8 P1.** Issue #111 (P4 trainer) closed at v2.4 P0 PR #179 (`b35e982`); corpus 200-row gate cleared with margin (608 episodes post v2.6 P2 Run 7). Seed v2.6-C (Path-D synthetic-fixture P5 implementation) **SHIPPED at v2.8 P1 PR #214 (`07ee05c`)**. Head-of-chain is now the **empirical Tier-3 shadow soak** (the only thing that satisfies the pre-registered ship criteria and closes #112).
 
 ```
-Seed v2.6-C (Path-D synthetic-fixture P5 impl, ~600 LOC) — DEFERRED v2.7
-   (4 consecutive cycles deferred: v2.4 + v2.5 + v2.5.1 + v2.6)
-   └─ #112 (P5 shadow) — BLOCKED on Seed v2.6-C (docs-side gate cleared via ADR-18 Amendment D)
-        └─ #131 (v10.x cycle frame: ADR-18 freeze-lift trigger) — BLOCKED on #112
-             ├─ #124 (wire BRIDGE_L4_FALLBACK_CONFIDENCE + un-ADVISORY stage-1) — BLOCKED on #131
-             └─ #125 (restore Ridge-Q DR estimator) — BLOCKED on #131
+Empirical Tier-3 shadow soak (real production/candidate/state/ground-truth tuples) - OUTSTANDING
+   (P5 infra SHIPPED v2.8 P1 PR #214 `07ee05c`; synthetic-fixture --mode=v10.1 validates infra only)
+   \-- #112 (P5 shadow) - BLOCKED on empirical Tier-3 shadow soak
+        \-- #131 (v10.x cycle frame: ADR-18 freeze-lift trigger) - BLOCKED on #112
+             +-- #124 (wire BRIDGE_L4_FALLBACK_CONFIDENCE + un-ADVISORY stage-1) - BLOCKED on #131
+             \-- #125 (restore Ridge-Q DR estimator) - BLOCKED on #131
 ```
 
 Tail-end (#124 + #125) remains constrained to **env-flag wiring only** by ADR-18 surface-freeze (Rule 1) until #131 mints the freeze-lift cycle frame.
@@ -148,7 +150,7 @@ Tail-end (#124 + #125) remains constrained to **env-flag wiring only** by ADR-18
 
 **Trigger conditions for #131 cycle frame mint** (all 3 required):
 
-1. **#112 closed** — bandit + shadow A/B observed under stable production ≥ 1 cycle, ship criteria met. (Now gated on Seed v2.6-C Path-D implementation at v2.7.)
+1. **#112 closed** - bandit + shadow A/B observed under stable production >= 1 cycle, ship criteria met. (P5 infra shipped at v2.8 P1 PR #214; now gated on the empirical Tier-3 shadow soak that satisfies the pre-registered ship criteria.)
 2. **v2.x slot opens** — no overlapping v2.x feature cycle in P0–P3 (concurrent freeze-lifts fragment seam-touch surface).
 3. **#124 + #125 still open** — confirm not retired by alt seam.
 
@@ -163,7 +165,7 @@ When all 3 hold → mint `docs/prompts/v10x-orchestration/phase-0-cycle-frame.md
 | #111 | v10 P4 — Bandit trainer (Thompson + CMDP + promotion gate) | ✅ CLOSED v2.4 P0 PR #179 (`b35e982`); trainer shipped v2.3 PR #176 (`cf7d003`) | — |
 | #118 | `rl_test_helper` schema-parity vs `rl/schema.sql` | ✅ CLOSED (`52e8874`, PR #139) | — |
 | #177 | v10 P5 entry-gate deadlock (Amendment D) | ✅ CLOSED v2.4 P0 PR #179 (`b35e982`) | — |
-| #112 | v10 P5 — Shadow A/B + ship criteria | 🔒 BLOCKED on Seed v2.6-C (Path-D synthetic-fixture P5 impl, deferred v2.7 — 4th consecutive deferral) | v10 chain (head) |
+| #112 | v10 P5 - Shadow A/B + ship criteria | [BLOCKED] on empirical Tier-3 shadow soak (P5 infra SHIPPED v2.8 P1 PR #214 `07ee05c`) | v10 chain (head) |
 | #124 | Wire `BRIDGE_L4_FALLBACK_CONFIDENCE` + promote `_stage_1_golden` from ADVISORY | 🔒 BLOCKED on #131 | v10 chain |
 | #125 | Restore Ridge-Q DR estimator | 🔒 BLOCKED on #131 | v10 chain |
 | #131 | v10.x cycle frame mint trigger | 🔒 BLOCKED on #112 | v10 chain |
@@ -274,7 +276,7 @@ Shadow runs reference manifests by SHA. End-to-end traceability: episode → man
 - Per-issue jobs: `docs/jobs/issue-{111,112,118,124,125,131}.md`.
 - Memory: `project_v10_rl_track.md`; `project_v10_p5_gate_deadlock.md` (Amendment D resolution path; status FILED at v2.4 P0, AMENDMENT-LANDED docs-side, implementation DEFERRED v2.5).
 - ADR-18: `docs/adr/ADR-18-mvp-surface-freeze.md` §"Initial classification"; §"Amendments" 2026-05-18 — **v2.4 P0 Amendment D** (v10 P5 entry-gate split, v10.1-mode vs v10.3-mode).
-- ADR-5: `docs/adr/ADR-5-latency-budget.md` §"v10 logging overhead" + (future) §"v10 shadow overhead".
+- ADR-5: `docs/adr/ADR-5-latency-budget.md` §"v10 logging overhead" + §"v10 shadow overhead" (landed at v2.8 P1 PR #214, `07ee05c`).
 - ADR-17: `docs/adr/ADR-17-soak-tiers.md` (Tier 3 = shadow vehicle).
 - Robin agent: PR #115, commit `24bc1d6`.
 - v2.4 backlog (carries Seed v2.4-C Path-D synthetic-fixture P5 implementation forward): `docs/v2.4-backlog.md` §"Carry-forwards from v2.4" + §"NEW v2.4 ship-gate seeds".
@@ -282,6 +284,7 @@ Shadow runs reference manifests by SHA. End-to-end traceability: episode → man
 - 2026-05-19 status snapshot (Bucket 2 — v10 RL chain): `docs/2026-05-19-status.md`.
 - v2.4 P0 PR #179 (`b35e982`): bundles #111 close + Amendment D + Amendment E.
 - v2.3 PR #176 (`cf7d003`): bandit trainer implementation (P4 code-side ship).
+- v2.8 P1 PR #214 (`07ee05c`, 2026-05-22): Path-D synthetic-fixture P5 implementation (shadow recorder + six-criteria stop-condition harness + 2 CLI surfaces + soak-driver hook + ADR-5 section "v10 shadow overhead" + ADR-18 v2.8 P1 amendment); 24/24 shadow + 30/30 sibling RL tests pass.
 - v2.5 / v2.5.1 cycle close memory (corpus Run 5 absence + Run 6 piggyback; first v2.x corrective sub-phase; Seed v2.4-C → v2.5-C rename): `project_v25_cycle_close.md`.
 - v2.6 cycle close memory (Run 7 piggyback to 608; Seed v2.5-C → v2.6-C rename; lever ledger BUMP 1 → 2; first lever-wire since v2.3): `project_v26_cycle_close.md`.
 
@@ -291,4 +294,4 @@ Shadow runs reference manifests by SHA. End-to-end traceability: episode → man
 
 v10 is a **companion track** to the v1.x/v2.x main cycle. v2.1 P1 (PPP audit harness Layer 1) is independent of v10 P4/P5. PPP `audit.probe` envelopes are NOT logged into `rl_episodes.db` — they are governance trust signals, not bandit observations. v10 episode logger reads from production `governance.evaluate()` outcomes; PPP probe acks resolve a separate provenance question (which JSONL stream is being driven). The two tracks share `MessageBus` SQLite WAL but write to peer tables (`rl_episodes.db` vs `provenance_assertions`).
 
-Cross-cycle sequencing (historical → current): v2.1 P1 landed while v10 P4 was held; no scheduling collision. v10 P4 implementation shipped at v2.3 PR #176 (`cf7d003`); issue #111 closed at v2.4 P0 PR #179 (`b35e982`). v2.5 + v2.5.1 ran as consolidation (v2.5 P2 BLOCKED at S4 Sonnet floor breach → v2.5.1 corrective sub-phase shipped at PR #190 / `c1e9070`); neither sub-phase advanced P5 implementation, and Seed v2.4-C renamed to Seed v2.5-C in `docs/v2.5-backlog.md`. v2.6 ran as feature with Seed v2.5-G step (1) wall-clock instrumentation lever-wire at PR #196 / `7220b33` (first lever-wire since v2.3; ledger 1 → 2); v2.6 P2 shipped at PR #198 / `c3a964c` with Run 7 piggyback bringing the corpus to 608 episodes, but P5 implementation remained deferred and Seed v2.5-C renamed again to Seed v2.6-C per `docs/v2.6-backlog.md` (4th consecutive deferral across v2.4 + v2.5 + v2.5.1 + v2.6). The next operator decision is **v2.7 P0 cycle-type call (consolidation vs feature)** — per Amendment A definition, a Path-D synthetic-fixture fire (Seed v2.6-C ~600 LOC) requires feature classification. A v2.7 feature cycle electing Seed v2.6-C advances P5 implementation, which unblocks #112 → #131 → #124 + #125 in sequence.
+Cross-cycle sequencing (historical -> current): v2.1 P1 landed while v10 P4 was held; no scheduling collision. v10 P4 implementation shipped at v2.3 PR #176 (`cf7d003`); issue #111 closed at v2.4 P0 PR #179 (`b35e982`). v2.5 + v2.5.1 ran as consolidation (v2.5 P2 BLOCKED at S4 Sonnet floor breach -> v2.5.1 corrective sub-phase shipped at PR #190 / `c1e9070`); neither sub-phase advanced P5 implementation, and Seed v2.4-C renamed to Seed v2.5-C in `docs/v2.5-backlog.md`. v2.6 ran as feature with Seed v2.5-G step (1) wall-clock instrumentation lever-wire at PR #196 / `7220b33` (first lever-wire since v2.3; ledger 1 -> 2); v2.6 P2 shipped at PR #198 / `c3a964c` with Run 7 piggyback bringing the corpus to 608 episodes, but P5 implementation remained deferred and Seed v2.5-C renamed again to Seed v2.6-C per `docs/v2.6-backlog.md` (4th consecutive deferral across v2.4 + v2.5 + v2.5.1 + v2.6). **P5 implementation then shipped at v2.8 P1 PR #214 (`07ee05c`, 2026-05-22)** as the Path-D synthetic-fixture P5 implementation (Seed v2.6-C cleared). The remaining open item is the **empirical Tier-3 shadow soak** - the only artefact that satisfies the pre-registered ship criteria and closes #112 -> #131 -> #124 + #125 in sequence; the synthetic-fixture harness validates the infrastructure offline but does not substitute for the real soak.

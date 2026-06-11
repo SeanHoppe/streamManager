@@ -142,3 +142,32 @@ def test_no_self_monitor_episodes(tmp_path: Path,
 def test_golden_holdout_invariant() -> None:
     with pytest.raises(GoldenInTrainingError):
         assemble_training_set(target_n=5, include_golden=True)
+
+
+def test_sql_where_excludes_sm_project_slug(tmp_path: Path) -> None:
+    """Defense-in-depth: even if an SM-slug row reaches rl_episodes.db
+    (write-time refusal bypassed), the corpus read filters it at the SQL
+    WHERE per CLAUDE.md L42. NULL project_slug rows are retained."""
+    import sqlite3 as _sqlite3
+
+    # Build a DB the normal way (NULL project_slug rows).
+    db = _make_real_db(tmp_path, n=10)
+    # Inject one SM-slug row directly, bypassing the write-time guard.
+    conn = _sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO episodes(ts_utc, session_id, trace_id, state_features_json,"
+        " action_taken, action_propensity, verdict, confidence, latency_ms,"
+        " budget_violation, source, project_slug)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("2026-05-01T00:00:00+00:00", "sm-poison-sess", "sm-poison-trace",
+         "{}", 0.7, 1.0, "ALLOW", 0.9, 100.0, 0, "live", "streamManager"),
+    )
+    conn.commit()
+    conn.close()
+
+    out = assemble_training_set(
+        target_n=20, ratio_synthetic=0.0, seed=1, db_path=db,
+        extra_episodes=[],
+    )
+    assert all(ep.session_id != "sm-poison-sess" for ep in out)
+    assert all(ep.trace_id != "sm-poison-trace" for ep in out)

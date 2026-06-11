@@ -139,8 +139,8 @@ class EpisodeLogger:
             " ts_utc, session_id, trace_id, state_features_json,"
             " action_taken, action_propensity, verdict, confidence,"
             " hitl_override, latency_ms, fr_og_7_pass, budget_violation,"
-            " source, cycle_tag"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " source, cycle_tag, project_slug"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 now_utc.astimezone(timezone.utc).isoformat(),
                 session_id,
@@ -156,6 +156,10 @@ class EpisodeLogger:
                 budget_violation,
                 source,
                 cycle_tag,
+                # Persist project_slug so corpus reads can enforce the
+                # polarity-flip at the SQL WHERE (CLAUDE.md L42), in addition
+                # to the write-time refusal above. NULL when absent.
+                project_slug or None,
             ),
         )
         return int(cur.lastrowid or 0)
