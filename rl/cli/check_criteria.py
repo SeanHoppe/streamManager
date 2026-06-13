@@ -20,6 +20,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--shadow-db", type=Path, required=True)
     p.add_argument("--manifests", type=Path, required=True)
     p.add_argument("--reports-dir", type=Path, default=ROOT / "reports")
+    p.add_argument(
+        "--mode", choices=["v10.1", "v10.3"], default="v10.3",
+        help="v10.1 = baseline-vs-baseline infra validation"
+             " (shadow_reward_improvement DORMANT, verdict PASS-INFRA);"
+             " v10.3 = real candidate promotion gate (ADR-18 Amendment D)")
     return p
 
 
@@ -29,17 +34,22 @@ def render_report(report: CriteriaReport, ts: str) -> str:
         f"- Shadow soak_run_ids (window): {', '.join(f'`{r}`' for r in runs)}"
         if runs else "- Shadow soak_run_ids (window): _none_"
     )
+    if report.mode == "v10.1":
+        verdict = "PASS-INFRA" if report.overall_passed else "FAIL"
+    else:
+        verdict = "PASS" if report.overall_passed else "FAIL"
     lines = [
         f"# v10 ship-criteria report — {ts}",
         "",
-        f"- Overall verdict: **{'PASS' if report.overall_passed else 'FAIL'}**",
+        f"- Mode: **{report.mode}**",
+        f"- Overall verdict: **{verdict}**",
         runs_line,
         "",
         "## Per-criterion outcomes",
         "",
     ]
     for c in report.criteria:
-        flag = "PASS" if c.passed else "FAIL"
+        flag = "DORMANT" if c.dormant else ("PASS" if c.passed else "FAIL")
         lines.append(f"- **{c.name}** — {flag}")
         lines.append(f"  - {c.detail}")
     lines.append("")
@@ -49,7 +59,7 @@ def render_report(report: CriteriaReport, ts: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    report = evaluate_criteria(args.shadow_db, args.manifests)
+    report = evaluate_criteria(args.shadow_db, args.manifests, mode=args.mode)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     report_path = args.reports_dir / f"v10-criteria-{ts}.md"

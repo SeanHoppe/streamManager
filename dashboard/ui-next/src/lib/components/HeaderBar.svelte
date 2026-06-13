@@ -70,9 +70,27 @@
     }
   }
 
+  // Map the OS color-scheme preference onto a theme. dark/no-preference -> the
+  // obsidian dark theme; an explicit light preference -> paper. This is the
+  // initial DARK/LIGHT auto-detect: the operator gets a theme matching their
+  // system on first load, before they have ever picked one. Once they pick, the
+  // persisted choice always wins (we never override an explicit selection).
+  function systemTheme() {
+    try {
+      if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+        if (window.matchMedia('(prefers-color-scheme: light)').matches) return 'paper';
+      }
+    } catch (_e) {
+      /* matchMedia unavailable -- fall through to the dark default */
+    }
+    return 'obsidian';
+  }
+
   onMount(() => {
-    // Resolve initial theme: persisted -> existing DOM attr -> default.
-    let initial = 'obsidian';
+    // Resolve initial theme: persisted pick -> existing DOM attr -> OS dark/light
+    // preference -> obsidian default. Persisted always wins so an explicit choice
+    // is never silently overridden by a later OS change.
+    let initial = systemTheme();
     try {
       const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(LS_THEME) : null;
       if (saved && VALID.has(saved)) initial = saved;
@@ -84,7 +102,7 @@
         if (attr && VALID.has(attr)) initial = attr;
       }
     } catch (_e) {
-      /* ignore -- fall back to default */
+      /* ignore -- fall back to the system/default resolution */
     }
     applyTheme(initial);
   });

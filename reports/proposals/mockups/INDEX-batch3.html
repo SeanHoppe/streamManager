@@ -1,0 +1,76 @@
+<!DOCTYPE html><html lang="en" data-theme="obsidian"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>BETA proposals -- batch-3 mockup gate (4 gap-fill)</title>
+<style>
+ :root{--ff:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;--mono:ui-monospace,Consolas,monospace;}
+ body{margin:0;background:#080a0c;color:#b8b098;font-family:var(--ff);padding:28px 24px 80px;}
+ h1{font-size:22px;letter-spacing:.06em;text-transform:uppercase;color:#e8e0cc;margin:0 0 4px;}
+ .lede{font-size:13px;color:#948870;max-width:88ch;line-height:1.6;margin:0 0 8px;}
+ .legend{font-size:12px;color:#948870;margin:10px 0 24px;display:flex;gap:18px;flex-wrap:wrap;}
+ .legend b{color:#e8e0cc;}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:22px;}
+ .card{background:#0c1118;border:1px solid #192030;border-radius:7px;overflow:hidden;display:flex;flex-direction:column;}
+ .card__h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #192030;}
+ .card__t{display:flex;align-items:center;gap:9px;min-width:0;}
+ .key{font-weight:700;color:#e8e0cc;font-size:14px;}
+ .num{font-family:var(--mono);font-size:10px;color:#6b7280;}
+ .vb{font-family:var(--mono);font-size:10px;letter-spacing:.06em;border:1px solid;border-radius:3px;padding:1px 6px;white-space:nowrap;}
+ .open{color:#f59e0b;font-size:12px;text-decoration:none;font-family:var(--mono);white-space:nowrap;}
+ .open:hover{text-decoration:underline;}
+ .title{font-size:12.5px;color:#cbbfa0;margin:10px 14px 2px;font-weight:600;}
+ .sum{font-size:11.5px;color:#948870;line-height:1.5;margin:4px 14px 6px;}
+ .tri{font-size:11px;line-height:1.5;margin:0 14px 10px;padding:7px 9px;border-radius:4px;border:1px solid;}
+ .tri--soft{color:#fcd34d;background:rgba(217,119,6,.08);border-color:rgba(217,119,6,.3);}
+ .tri--ok{color:#86efac;background:rgba(22,163,74,.08);border-color:rgba(22,163,74,.3);}
+ .tri code{font-family:var(--mono);color:#fcd34d;}
+ .framewrap{position:relative;height:300px;border-top:1px solid #192030;overflow:hidden;background:#05080c;}
+ iframe{position:absolute;top:0;left:0;width:200%;height:600px;border:0;transform:scale(.5);transform-origin:top left;}
+</style></head><body>
+ <h1>BETA proposals -- batch-3 mockup gate (4 gap-fill)</h1>
+ <p class="lede">The final 4 gap-fill proposals. Each card is a LIVE 50%-scaled preview of the KingMode mockup; "open full" to interact. Verdict = adversarial 2-refuter pass (unanimous on every row). <b>3 PASS</b> build clean CONSTRAINED-ADDITIVE (default-OFF BETA, additive read endpoints). <b>1 NEEDS-AMENDMENT</b> (allow-pattern-auto-graduation) is HELD -- it is the one proposal that genuinely needs a FROZEN ADR-18 amendment (new <code>pattern_graduated</code> envelope + verdict short-circuit), so it does NOT build constrained-additive.</p>
+ <div class="legend"><span><b>PASS</b> build now (additive, OFF by default)</span><span><b>NEEDS-AMENDMENT</b> HELD -- needs ADR-18 FROZEN amendment first</span></div>
+ <div class="grid">
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">policy-preview-chip</span><span class="num">#21</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./policy-preview-chip.html" target="_blank" rel="noopener">open full -&gt;</a>
+    </header>
+    <p class="title">Policy-preview chip: what governance will do, read from the corpus</p>
+    <p class="sum">The operator sees a quiet, dashed advisory chip mounted directly beneath the SYNC/ASYNC HitlModeToggle that reads the 21k-decision corpus for the selected session&#x27;s command-shapes -- a one-line headline like &quot;CORPUS: 14/15 ALLOW -- mean 0.97 -- L1 -- looks routine, safe to leave ASYNC&quot; with an optional expand to the per-action histogram. </p>
+    <div class="tri tri--ok">clean CONSTRAINED-ADDITIVE (additive read endpoint, default-OFF beta) -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./policy-preview-chip.html" title="policy-preview-chip"></iframe></div>
+  </article>
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">confidence-calibration-loop</span><span class="num">#8</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./confidence-calibration-loop.html" target="_blank" rel="noopener">open full -&gt;</a>
+    </header>
+    <p class="title">Confidence-calibration loop -- make the confidence number mean something</p>
+    <p class="sum">A self-gated &quot;Confidence calibration&quot; observability section inside Settings &gt; BETA features showing a still, bespoke reliability diagram: predicted-confidence deciles plotted against realized operator-agreement (1 - override rate) over the perfect-calibration diagonal, where the measured curve visibly sits 13 points below the diagonal in </p>
+    <div class="tri tri--ok">clean CONSTRAINED-ADDITIVE (additive read endpoint, default-OFF beta) -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./confidence-calibration-loop.html" title="confidence-calibration-loop"></iframe></div>
+  </article>
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">regret-mining-override-loop</span><span class="num">#24</span>
+        <span class="vb" style="color:#16a34a;background:#dcfce7;border-color:#16a34a">PASS</span></div>
+      <a class="open" href="./regret-mining-override-loop.html" target="_blank" rel="noopener">open full -&gt;</a>
+    </header>
+    <p class="title">Regret Mining: Close the Operator-Override Feedback Loop</p>
+    <p class="sum">The operator sees a bespoke left-weighted &quot;regret ledger&quot; of override-divergence clusters ranked hottest-first (each lane: paired ESCALATED/DE-ESCALATED label+color badge, from--&gt;to action flow, an oversized tabular-nums override rate, and a hairline mini-bar paired with the literal &quot;14/14&quot; fraction). Clicking a lane expands an evidence d</p>
+    <div class="tri tri--ok">clean CONSTRAINED-ADDITIVE (additive read endpoint, default-OFF beta) -- build as-is.</div>
+    <div class="framewrap"><iframe loading="lazy" src="./regret-mining-override-loop.html" title="regret-mining-override-loop"></iframe></div>
+  </article>
+  <article class="card">
+    <header class="card__h">
+      <div class="card__t"><span class="key">allow-pattern-auto-graduation</span><span class="num">#1</span>
+        <span class="vb" style="color:#d97706;background:#fef3c7;border-color:#d97706">NEEDS-AMENDMENT</span></div>
+      <a class="open" href="./allow-pattern-auto-graduation.html" target="_blank" rel="noopener">open full -&gt;</a>
+    </header>
+    <p class="title">ALLOW-pattern auto-graduation (learn-mode -&gt; static rule, operator-confirmed)</p>
+    <p class="sum">WHO turns it ON: the monitor-first laptop operator running SM via `claude -p` who watches several NON-SM Claude sessions all day and is tired of re-paying a model call + a glance for the same boring commands (git status, ruff check, pytest -q) that they have rubber-stamped ALLOW dozens of times. They flip &quot;ALLOW-pattern auto-graduation&quot; O</p>
+    <div class="tri tri--soft">HELD: needs a real ADR-18 FROZEN amendment -- new <code>pattern_graduated</code> envelope (+ same-PR cassette/soak coverage) and a verdict-path short-circuit. NOT constrained-additive. Build deferred until operator authors the amendment. (Surface-freeze is law.)</div>
+    <div class="framewrap"><iframe loading="lazy" src="./allow-pattern-auto-graduation.html" title="allow-pattern-auto-graduation"></iframe></div>
+  </article>
+ </div></body></html>

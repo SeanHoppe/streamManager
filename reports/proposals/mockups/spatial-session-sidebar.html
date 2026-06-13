@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<!--
+  KingMode mockup -- BETA feature "spatial-session-sidebar" (#45: Spatial Session
+  Overview sidebar, right-rail coexist mode). Self-contained: inline style + script
+  only. No external assets / CDNs / fonts. System font stack. ASCII-only (dash = "--").
+
+  Previews the REAL ui-next obsidian tokens (dashboard/ui-next/src/styles/theme.css)
+  so the operator can confirm the UI approach BEFORE any code is written (directive #2).
+  Feature shown ON with realistic mock data drawn from the vetted mockDataSpec.
+  Default-OFF, gated `{#if $betaFlags['spatial-session-sidebar']}` in Settings.
+
+  WHERE IT LIVES: a collapsible RIGHT-edge rail, the spatial counterpart to the
+  existing left command-deck rail. It is NOT a 4th frame and NOT a frame replacement
+  -- Frames A/B/C and the left rail are untouched (ADR-18 M1, read-only augmentation).
+  Mounted at the App composition root as a position:fixed right-edge panel, sibling
+  to AwayMode / DecisionOracle.
+
+  G2 polarity: NO SM-own session_id in the fixture; the server self-excludes and the
+    panel footer surfaces `excluded_self` (always >=1 in mock mode).
+  M16 domain-agnostic: every node identity is rendered FROM DATA (project_slug
+    placeholders alpha-svc / beta-app / ... -- never a real governed-target name).
+  M4: every node carries a literal WORD beside its color -- the mode ring color is
+    NEVER the sole signal; the word (OBSERVE/SUGGEST/GUIDE/INTERVENE/BLOCK) is load-
+    bearing. Edge thickness is paired with an "x4" count label; the count is the
+    signal, the line is secondary.
+  M2: the escalation pulse is an outline animation (no color-only state change) and
+    respects prefers-reduced-motion + the FR-UI-9 data-motion override.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Spatial Session Overview sidebar (#45)</title>
+<style>
+  /* ---- REAL obsidian theme tokens (verbatim from theme.css :root + [data-theme=obsidian]) ---- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* The five governance-mode action colors (theme.css :root). Used here ONLY for
+       the MODE RING + a small accent -- never as text-on-color (M4 / AAA intent). */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* fixed paired badge tokens (M4) -- theme-invariant, axe-documented AA pairs. */
+    --badge-ar-fg: #d97706;      --badge-ar-bg: #fef3c7;      --badge-ar-border: #d97706;
+    --badge-obs-fg: #475569;     --badge-obs-bg: #f1f5f9;     --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626; --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+    --badge-warn-fg: #ea580c;    --badge-warn-bg: #ffedd5;    --badge-warn-border: #ea580c;
+    --badge-timeout-fg: #7c3aed; --badge-timeout-bg: #ede9fe; --badge-timeout-border: #c4b5fd;
+
+    /* M17 focus ring: 2px amber, 2px offset (FR-UI focus contract). */
+    --sm-focus: #d97706;
+  }
+  [data-theme="obsidian"] {
+    --bg: #080a0c;
+    --bg-card: #0c1118;
+    --bg-row: #0e141e;
+    --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245,158,11,0.09);
+    --border: #192030;
+    --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098;
+    --text-dim: #948870;
+    --text-ui: #8a8068;
+    --text-bright: #e8e0cc;
+    --accent: #f59e0b;
+    --accent-dim: rgba(245,158,11,0.09);
+    --accent-glow: rgba(245,158,11,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 28px clamp(16px, 4vw, 56px) 64px;
+  }
+
+  /* ---------- header strip ---------- */
+  .strip {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px; margin-bottom: 26px;
+  }
+  .strip__title {
+    font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
+    color: var(--text-bright); margin: 0;
+  }
+  .strip__sub { color: var(--text-dim); font-size: 12.5px; margin: 3px 0 0; max-width: 74ch; }
+  .head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 2px;
+    color: var(--badge-warn-fg); background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+  }
+  .pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .strip__spacer { flex: 1 1 auto; }
+
+  /* inline on/off toggle (client-side wired) */
+  .flag {
+    display: inline-flex; align-items: center; gap: 11px;
+    padding: 8px 13px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-card);
+  }
+  .flag__label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+  .flag__key { font-family: var(--ff-mono); color: var(--text-bright); font-size: 12px; }
+  .switch {
+    position: relative; width: 46px; height: 24px; border-radius: 13px;
+    border: 1px solid var(--border-hi); background: var(--bg-row-alt);
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease; padding: 0;
+  }
+  .switch[aria-checked="true"] { background: var(--accent-dim); border-color: var(--accent); }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text-ui); transition: left 120ms ease, background 120ms ease;
+  }
+  .switch[aria-checked="true"] .switch__knob { left: 24px; background: var(--accent); }
+  .switch__state {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    min-width: 26px; color: var(--text-dim);
+  }
+  .switch[aria-checked="true"] ~ .switch__state { color: var(--accent); }
+  .flag:focus-within .switch { outline: 2px solid var(--sm-focus); outline-offset: 2px; }
+
+  /* ---------- layout: frames-context + the right-rail sidebar + notes ---------- */
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 348px); gap: 24px; align-items: start; }
+  @media (max-width: 1080px) { .stage { grid-template-columns: 1fr; } }
+
+  /* ======================= LEFT: the untouched 3-frame deck (context proof) ======================= */
+  .deck {
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .deck__note {
+    font-family: var(--ff-mono); font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-ui); margin: 0;
+  }
+  .deck__row { display: grid; grid-template-columns: 140px 1fr; gap: 12px; align-items: start; }
+  @media (max-width: 560px) { .deck__row { grid-template-columns: 1fr; } }
+  .ghost-rail {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; display: flex; flex-direction: column; gap: 6px; min-height: 320px;
+  }
+  .ghost-rail__h { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-bright); margin: 0 0 4px; }
+  .ghost-lane {
+    border: 1px solid var(--border); border-left: 2px solid var(--text-dim);
+    border-radius: 4px; padding: 6px 8px; background: var(--bg-row-alt);
+    font-size: 11px; color: var(--text-dim);
+  }
+  .ghost-lane b { color: var(--text); font-weight: 600; }
+  .frames { display: flex; flex-direction: column; gap: 10px; }
+  .frame {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px;
+  }
+  .frame__h {
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-bright);
+    margin: 0 0 6px; display: flex; align-items: center; gap: 8px;
+  }
+  .frame__tag {
+    font-family: var(--ff-mono); font-size: 9px; letter-spacing: 0.1em; color: var(--text-ui);
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px;
+  }
+  .frame p { margin: 0; font-size: 11.5px; color: var(--text-dim); }
+  .frame__scope {
+    margin-top: 6px; font-family: var(--ff-mono); font-size: 11px; color: var(--accent);
+  }
+
+  /* ======================= RIGHT: SpatialSidebar.svelte preview ======================= */
+  .sidebar {
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+  /* the collapse spine (shown when collapsed) -- a thin 28px paired chevron + "MAP" */
+  .spine {
+    display: none;
+    width: 30px; flex: 0 0 30px;
+    flex-direction: column; align-items: center; gap: 10px;
+    padding: 10px 0;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-ui); cursor: pointer;
+  }
+  .is-collapsed .spine { display: flex; }
+  .is-collapsed .sidebar { display: none; }
+  .spine:hover { color: var(--text-bright); border-color: var(--border-hi); }
+  .spine:focus-visible { outline: 2px solid var(--sm-focus); outline-offset: 2px; border-radius: 6px; }
+  .spine__chev { font-size: 14px; }
+  .spine__label {
+    writing-mode: vertical-rl; text-orientation: mixed;
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+  }
+
+  .sidebar__head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  .sidebar__title {
+    margin: 0; font-family: var(--ff-system); font-size: 13px; font-weight: 560;
+    letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-bright); white-space: nowrap;
+  }
+  .sidebar__beta {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+    color: #92400e; background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border);
+    border-radius: 4px; padding: 0 5px;
+  }
+  .sidebar__collapse {
+    margin-left: auto; appearance: none; background: transparent;
+    border: 1px solid var(--border); color: var(--text-ui);
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+    padding: 3px 8px; border-radius: 999px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .sidebar__collapse:hover { color: var(--text-bright); border-color: var(--border-hi); }
+  .sidebar__collapse:focus-visible { outline: 2px solid var(--sm-focus); outline-offset: 2px; }
+
+  /* the BETA caption line, only while flag ON */
+  .sidebar__cap {
+    padding: 5px 12px; font-size: 10.5px; color: var(--text-dim);
+    border-bottom: 1px solid var(--border); background: var(--bg-row-alt); letter-spacing: 0.02em;
+  }
+  .sidebar__cap b { color: var(--badge-warn-fg); font-weight: 700; }
+
+  /* projection toggle + zoom readout */
+  .sidebar__controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 7px 12px; border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  .proj {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden;
+  }
+  .proj button {
+    appearance: none; background: transparent; border: 0; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 9px; color: var(--text-ui);
+  }
+  .proj button[aria-pressed="true"] { background: var(--accent-dim); color: var(--accent); }
+  .proj button:focus-visible { outline: 2px solid var(--sm-focus); outline-offset: -2px; }
+  .zoom-read {
+    margin-left: auto; font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em;
+    color: var(--text-ui);
+  }
+
+  /* the constellation field (2D map) */
+  .field {
+    position: relative; height: 408px; overflow: hidden;
+    background:
+      radial-gradient(circle at 30% 24%, rgba(245,158,11,0.05), transparent 60%),
+      var(--bg);
+    cursor: grab;
+  }
+  .field.is-1d { height: auto; min-height: 120px; cursor: default; overflow-x: auto; }
+  .field__svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .edge { stroke: var(--text-ui); fill: none; opacity: 0.55; }
+  .edge-chip {
+    /* the load-bearing edge label: count word on a slate backing chip for AAA */
+    fill: var(--bg-row-alt); stroke: var(--border);
+  }
+  .edge-chip-txt {
+    fill: var(--text-bright); font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  /* ---- SessionNode.svelte chip (bespoke "session chip", NOT a circle-with-label) ---- */
+  .node {
+    position: absolute; width: 142px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 2px solid transparent;
+    border-radius: 6px;
+    padding: 7px 9px 5px 11px;
+    cursor: pointer; text-align: left;
+    color: inherit; font: inherit;
+    transform: translate(-50%, -50%);
+    transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  }
+  .field.is-1d .node { position: relative; transform: none; width: 100%; }
+  .node:hover, .node.is-hover { background: var(--bg-row-hover); box-shadow: 0 0 0 1px var(--border-hi); }
+  .node:focus-visible { outline: 2px solid var(--sm-focus); outline-offset: 2px; }
+  .node.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+
+  /* the MODE RING: a 2px arc in the band color drawn down the chip's left edge.
+     Color is the SECOND channel only -- the mode WORD is always printed below. */
+  .node__ring {
+    position: absolute; left: -2px; top: 8px; bottom: 8px; width: 2px; border-radius: 2px;
+  }
+  .node--observe   .node__ring { background: var(--c-allow); }
+  .node--suggest   .node__ring { background: var(--c-suggest); }
+  .node--guide     .node__ring { background: var(--c-guide); }
+  .node--intervene .node__ring { background: var(--c-intervene); }
+  .node--block     .node__ring { background: var(--c-block); }
+
+  .node__top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+  .node__slug {
+    font-family: var(--ff-system); font-size: 11px; font-weight: 460; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--text-bright);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  .node__ago { font-family: var(--ff-mono); font-size: 9px; color: var(--text-ui); flex: 0 0 auto; }
+
+  /* the paired MODE badge: literal WORD always present; the color is the small dot. */
+  .node__badges { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 3px 0 4px; }
+  .mode {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; line-height: 1.5;
+    background: var(--bg-row-alt);
+  }
+  .mode__dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+  .node--observe   .mode__dot { background: var(--c-allow); }
+  .node--suggest   .mode__dot { background: var(--c-suggest); }
+  .node--guide     .mode__dot { background: var(--c-guide); }
+  .node--intervene .mode__dot { background: var(--c-intervene); }
+  .node--block     .mode__dot { background: var(--c-block); }
+
+  /* open-HITL amber "ACTION N" chip (rail convention) -- word + count, never a bare dot */
+  .action-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 800; letter-spacing: 0.04em;
+    color: #b45309; background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border); border-radius: 999px; padding: 0 5px; line-height: 1.5;
+  }
+  /* alert chip: STATIC RULE / NEG REGRESSION -- the literal label from the M2 allowlist,
+     plus a pulsing OUTLINE (second channel, never color-only). */
+  .alert-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 800; letter-spacing: 0.04em;
+    color: #b91c1c; background: var(--badge-blocked-bg);
+    border: 1px solid var(--badge-blocked-border); border-radius: 999px; padding: 0 5px; line-height: 1.5;
+  }
+  .node--alert {
+    animation: pulse-outline 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse-outline {
+    0%, 100% { box-shadow: 0 0 0 1px var(--border-hi); }
+    50%      { box-shadow: 0 0 0 3px var(--accent-glow); }
+  }
+
+  /* the 10-point latency SPARKLINE filling the chip's lower third */
+  .node__spark { display: block; width: 100%; height: 22px; margin-top: 2px; }
+  .spark-line { fill: none; stroke: var(--text-ui); stroke-width: 1.4; }
+  .node--block .spark-line, .node--intervene .spark-line { stroke: var(--accent); }
+  .spark-base { stroke: var(--border); stroke-width: 1; }
+
+  /* ---- the hover/focus tooltip-card ---- */
+  .tip {
+    position: absolute; z-index: 20; width: 224px;
+    background: var(--bg-card); border: 1px solid var(--border-hi); border-radius: 6px;
+    padding: 10px 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.5);
+    display: none;
+  }
+  .tip.is-on { display: block; }
+  .tip__slug { font-size: 12px; font-weight: 600; color: var(--text-bright); letter-spacing: 0.04em; }
+  .tip__mode { margin: 4px 0 8px; }
+  .tip__dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0 0 10px; }
+  .tip__dl dt { font-family: var(--ff-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-ui); margin: 0; }
+  .tip__dl dd { margin: 0; font-family: var(--ff-mono); font-size: 11px; color: var(--text); font-variant-numeric: tabular-nums; }
+  .tip__focus {
+    appearance: none; width: 100%; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-dim);
+    border: 1px solid var(--accent); border-radius: 4px; padding: 5px 0;
+  }
+  .tip__focus:hover { background: var(--bg-row-hover); }
+  .tip__focus:focus-visible { outline: 2px solid var(--sm-focus); outline-offset: 2px; }
+
+  /* footer: polarity self-exclude readout + projection hint */
+  .sidebar__foot {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 5px 12px; border-top: 1px solid var(--border); background: var(--bg);
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .sidebar__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); opacity: 0.7; }
+  .sidebar__source { margin-left: auto; color: var(--badge-warn-fg); text-transform: none; letter-spacing: 0; font-size: 10px; }
+
+  /* ---------- design notes column (full-width row under the stage) ---------- */
+  .notes { margin-top: 26px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); letter-spacing: 0.02em; }
+  .card p { margin: 0 0 8px; color: var(--text-dim); font-size: 12.5px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; }
+  .card li { margin-bottom: 5px; }
+  kbd {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; background: var(--bg-row-alt);
+  }
+  code { font-family: var(--ff-mono); font-size: 11.5px; color: var(--accent); }
+
+  .legend { display: flex; flex-direction: column; gap: 8px; }
+  .legend__row { display: flex; align-items: center; gap: 10px; }
+  .legend__why { font-size: 11.5px; color: var(--text-dim); }
+
+  /* OFF state: the whole spatial sidebar renders nothing (no-op gate). */
+  .is-off .sidebar,
+  .is-off .spine,
+  .is-off .sidebar__cap { display: none; }
+  .is-off .sidebar-slot__off { display: flex; }
+  .sidebar-slot__off {
+    display: none; flex-direction: column; gap: 8px; align-items: center; justify-content: center;
+    min-height: 200px; border: 1px dashed var(--border); border-radius: 6px; padding: 20px;
+    color: var(--text-dim); font-size: 12px; text-align: center;
+  }
+  .sidebar-slot__off code { color: var(--text-ui); }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+  /* M17 reduced motion: suppress the escalation pulse + node transitions. */
+  :global(html[data-motion='reduce']) .node--alert { animation: none; }
+  html[data-motion='reduce'] .node--alert,
+  html[data-motion='reduce'] .node { animation: none; transition: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion='allow']) .node--alert { animation: none; }
+    html:not([data-motion='allow']) .node { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ====================== HEADER STRIP ====================== -->
+  <div class="strip">
+    <div>
+      <div class="head-row">
+        <h1 class="strip__title">Spatial Session Overview sidebar</h1>
+        <span class="pill"><span class="pill__dot"></span>BETA -- default OFF</span>
+      </div>
+      <p class="strip__sub">Feature #45 -- toggled in Settings &gt; BETA features &gt; "Monitor &amp; glance-readability"
+        (<code>spatial-session-sidebar</code>). A collapsible RIGHT-edge map: each governed NON-SM session is a node
+        positioned by recency, ringed by its governance mode, carrying a last-10 latency sparkline, and linked to any
+        session that shares a learned L3/L4 cross-session pattern. Read-only complement -- Frames A/B/C and the left
+        rail never move (ADR-18 M1). KingMode mockup; no code written yet.</p>
+    </div>
+    <div class="strip__spacer"></div>
+    <label class="flag">
+      <span class="flag__label">flag <span class="flag__key">spatial-session-sidebar</span></span>
+      <button id="flagSwitch" class="switch" role="switch" aria-checked="true" aria-label="Toggle spatial-session-sidebar feature flag">
+        <span class="switch__knob"></span>
+      </button>
+      <span id="flagState" class="switch__state">ON</span>
+    </label>
+  </div>
+
+  <!-- ====================== STAGE: untouched deck (left) + spatial sidebar (right) ====================== -->
+  <div id="stage" class="stage">
+
+    <!-- ---- LEFT: the existing 3-frame deck + left rail, shown UNTOUCHED (M1 proof) ---- -->
+    <div class="deck">
+      <p class="deck__note">ADR-18 M1 -- the left rail + Frames A/B/C are read-only context here; the spatial sidebar never moves them.</p>
+      <div class="deck__row">
+        <aside class="ghost-rail" aria-label="Left command-deck rail (unchanged)">
+          <p class="ghost-rail__h">Left rail</p>
+          <div class="ghost-lane"><b>alpha-svc</b><br>OBSERVE &middot; ACTION 0</div>
+          <div class="ghost-lane"><b>beta-app</b><br>INTERVENE &middot; ACTION 2</div>
+          <div class="ghost-lane"><b>gamma-lib</b><br>BLOCK &middot; ACTION 1</div>
+          <div class="ghost-lane"><b>delta-cli</b><br>SUGGEST &middot; ACTION 0</div>
+        </aside>
+        <div class="frames">
+          <section class="frame">
+            <h2 class="frame__h">Frame A <span class="frame__tag">decision stream</span></h2>
+            <p>Stays exactly where it is. The sidebar is a read-only second projection, never a 4th frame.</p>
+            <p class="frame__scope" id="frameScope">scope: beta-app (via Focus)</p>
+          </section>
+          <section class="frame">
+            <h2 class="frame__h">Frame B <span class="frame__tag">agents / jobs</span></h2>
+            <p>Untouched. Focusing a node only switches the main picker scope -- the panes follow, the layout does not.</p>
+          </section>
+          <section class="frame">
+            <h2 class="frame__h">Frame C <span class="frame__tag">patterns / HITL</span></h2>
+            <p>Untouched. If the operator never looks right, the deck behaves exactly as before.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---- RIGHT: SpatialSidebar.svelte preview ---- -->
+    <div>
+      <div id="wrap">
+        <!-- collapse spine (paired chevron + MAP), shown only when collapsed -->
+        <button type="button" class="spine" id="spine" aria-expanded="false" aria-label="Expand spatial session overview">
+          <span class="spine__chev" aria-hidden="true">&lsaquo;</span>
+          <span class="spine__label">MAP</span>
+        </button>
+
+        <nav class="sidebar" id="sidebar" aria-label="Spatial session overview">
+          <header class="sidebar__head">
+            <h2 class="sidebar__title">Spatial map</h2>
+            <span class="sidebar__beta">BETA</span>
+            <button type="button" class="sidebar__collapse" id="collapseBtn" aria-expanded="true" aria-label="Collapse spatial session overview">
+              <span aria-hidden="true">&rsaquo;</span> MAP
+            </button>
+          </header>
+
+          <div class="sidebar__cap"><b>BETA</b> -- default OFF, toggled in Settings</div>
+
+          <div class="sidebar__controls">
+            <div class="proj" role="group" aria-label="Field projection">
+              <button type="button" id="proj2d" aria-pressed="true">2D field</button>
+              <button type="button" id="proj1d" aria-pressed="false">1D strip</button>
+            </div>
+            <span class="zoom-read" id="zoomRead">zoom 100% &middot; scroll = zoom, drag = pan</span>
+          </div>
+
+          <div class="field" id="field" role="application" aria-label="Session constellation -- nodes are buttons in recency order; Arrow keys move selection, Enter focuses scope, Escape collapses">
+            <svg class="field__svg" id="edges" aria-hidden="true"><!-- edges injected --></svg>
+            <!-- nodes injected here -->
+            <!-- tooltip-card -->
+            <div class="tip" id="tip" role="dialog" aria-label="Session detail">
+              <div class="tip__slug" id="tipSlug">--</div>
+              <div class="tip__mode" id="tipMode"></div>
+              <dl class="tip__dl" id="tipDl"></dl>
+              <button type="button" class="tip__focus" id="tipFocus">Focus this session</button>
+            </div>
+          </div>
+
+          <footer class="sidebar__foot">
+            <span class="sidebar__self-dot" aria-hidden="true"></span>
+            <span id="selfRead">1 self row excluded (polarity filter)</span>
+            <span class="sidebar__source" id="srcRead">SAMPLE DATA -- representative shape</span>
+          </footer>
+        </nav>
+      </div>
+
+      <!-- OFF placeholder: what the composition root renders when the flag is OFF (nothing). -->
+      <div class="sidebar-slot__off">
+        <div>Spatial sidebar <b>OFF</b></div>
+        <div><code>{#if $betaFlags['spatial-session-sidebar']}</code> is false -- the panel renders nothing and
+          registers no fetch / poller. Flip the switch above to mount it.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================== DESIGN NOTES ====================== -->
+  <div class="notes">
+    <div class="card">
+      <h3>The glance (return-to-desk scan)</h3>
+      <p>Four <code>claude -p</code> sessions live; you stepped away for coffee. The left rail says "3 open
+        actions across 4 sessions" and four near-identical slate lanes. The question in your head is not "how
+        many" -- it is "which one FIRST, and is anything spreading?"</p>
+      <p>Your eye lands on the right rail. The <b>BLOCK</b>-ringed <code>gamma-lib</code> node with a rising
+        sparkline and a pulsing STATIC RULE outline is the one on fire. The thick <b>x4</b> edge between
+        <code>alpha-svc</code> and <code>beta-app</code> says those two converged on 4 of the same learned
+        patterns. No click needed. One Focus and Frame A swings to it.</p>
+    </div>
+
+    <div class="card">
+      <h3>Paired label + color (M4 -- color is never the only channel)</h3>
+      <div class="legend">
+        <div class="legend__row">
+          <span class="mode node--observe" style="position:static"><span class="mode__dot"></span>OBSERVE</span>
+          <span class="legend__why">ring + dot are <code>--c-allow</code>; the WORD is always printed</span>
+        </div>
+        <div class="legend__row">
+          <span class="mode node--intervene" style="position:static"><span class="mode__dot"></span>INTERVENE</span>
+          <span class="legend__why">ring + dot are <code>--c-intervene</code>; word load-bearing</span>
+        </div>
+        <div class="legend__row">
+          <span class="action-chip">ACTION 2</span>
+          <span class="legend__why">amber HITL chip -- word + count, never a bare dot</span>
+        </div>
+        <div class="legend__row">
+          <span class="alert-chip">STATIC RULE</span>
+          <span class="legend__why">label from the M2 ESCALATION_ALLOWLIST + a pulsing OUTLINE (2nd channel)</span>
+        </div>
+      </div>
+      <p style="margin-top:10px">The mode color is used only for the RING and a small dot -- never as text-on-color.
+        The literal word always sits on the high-contrast slate (>=7:1 AAA intent). The "x4" edge count carries a
+        slate backing chip so it stays readable over any node behind the line.</p>
+    </div>
+
+    <div class="card">
+      <h3>Calm + safety contract</h3>
+      <ul>
+        <li>Read-only <code>GET</code>s only -- <code>/api/sessions/spatial-overview</code> +
+          <code>/api/sessions/pattern-edges</code>. No new bus envelope, no frozen surface touched
+          (frozenTouch:false). Both mirror the polarity-filtered <code>/api/sessions/health-digest</code> aggregation.</li>
+        <li><b>G2 polarity:</b> server filters <code>project_slug NOT IN sm_slugs AND session_id != SM_OWN_SESSION_ID</code>;
+          the panel footer surfaces <code>excluded_self</code> (always >=1, even in mock).</li>
+        <li><b>M16:</b> identity is rendered FROM DATA (<code>project_slug</code>) -- placeholder names only
+          (alpha-svc / beta-app / ...), no monitored-project vocabulary.</li>
+        <li><b>M2:</b> the escalation pulse is an outline animation (no color-only change) and respects
+          <code>prefers-reduced-motion</code> + the FR-UI-9 <code>data-motion</code> override.</li>
+        <li>Flag OFF =&gt; the whole sidebar renders nothing and registers no fetch (no-op gate). Flip the switch to see it.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>Keyboard + interaction path (M17)</h3>
+      <ul>
+        <li>Nodes are real <kbd>button</kbd>s in DOM order (most-recent first) -- <kbd>Tab</kbd> walks them.</li>
+        <li><kbd>Arrow</kbd> keys move selection within the field; <kbd>Enter</kbd> / <kbd>Space</kbd> = Focus that
+          session (calls the same guarded <code>selectSession(id)</code> the left rail uses -- structurally refuses SM-self).</li>
+        <li><kbd>Esc</kbd> collapses the panel to the 28px spine (a <kbd>button aria-expanded</kbd> with a paired chevron + "MAP").</li>
+        <li>Scroll = zoom, drag-background = pan; collapsed/expanded + zoom/pan persist to localStorage.</li>
+        <li>On narrow viewports (&lt;55rem, the AppShell left-rail breakpoint) the 2D field reprojects to a 1D
+          horizontal timeline strip -- same nodes, same badges, ordered by last_activity. Try the <b>1D strip</b> toggle.</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="sr-only" id="liveStatus" aria-live="polite"></p>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // -- the deterministic mock from the vetted mockDataSpec (now=1749600000) --
+  var DATA = {
+    now: 1749600000,
+    excluded_self: 1,
+    mock: true,
+    nodes: [
+      { session_id: "sess-c40e", project_slug: "gamma-lib", governance_mode: "BLOCK",     last_activity_ts: 1749599999, open_hitl: 1, agent_slug: "planner",  latency_sparkline: [700,720,690,710,705,2200,2600,3100,5200,6100], alert: "static-rule" },
+      { session_id: "sess-2b91", project_slug: "beta-app",  governance_mode: "INTERVENE", last_activity_ts: 1749599995, open_hitl: 2, agent_slug: "builder",  latency_sparkline: [610,680,940,1320,1880,2410,3050,3600,4100,4720] },
+      { session_id: "sess-7f3a", project_slug: "alpha-svc", governance_mode: "OBSERVE",   last_activity_ts: 1749599980, open_hitl: 0, agent_slug: "reviewer", latency_sparkline: [820,910,760,805,790,840,815,800,795,810] },
+      { session_id: "sess-9d12", project_slug: "delta-cli", governance_mode: "SUGGEST",   last_activity_ts: 1749599900, open_hitl: 0, agent_slug: "",         latency_sparkline: [540,560,520,530,545,538,550,525,535,542] }
+    ],
+    edges: [
+      { from_session_id: "sess-7f3a", to_session_id: "sess-2b91", pattern_count: 4, pattern_hashes: ["h31a","h44c","h58e","h6b2"] },
+      { from_session_id: "sess-2b91", to_session_id: "sess-c40e", pattern_count: 1, pattern_hashes: ["h6b2"] }
+    ]
+  };
+
+  // -- data.js helpers (mirrors SpatialSidebar.data.js exports) --
+  function modeLabel(m) { return String(m || "OBSERVE").toUpperCase(); }
+  function modeClass(m) { return "node--" + modeLabel(m).toLowerCase(); }
+  // bandColorVar(mode) -> CSS var name (used by SVG sparkline stroke decisions)
+  var BAND_VAR = { OBSERVE: "--c-allow", SUGGEST: "--c-suggest", GUIDE: "--c-guide", INTERVENE: "--c-intervene", BLOCK: "--c-block" };
+  function bandColorVar(m) { return BAND_VAR[modeLabel(m)] || "--c-allow"; }
+  // the alert label comes from the canonical M2 ESCALATION_ALLOWLIST (reuse, never redefine)
+  var ESC_LABEL = { "static-rule": "STATIC RULE", "governance_negative_regression": "NEG REGRESSION", "desktop_pause": "PAUSE" };
+
+  // sparklinePath(arr,w,h) -> SVG path d-string (min-max normalised polyline)
+  function sparklinePath(arr, w, h) {
+    if (!arr || !arr.length) return "";
+    var lo = Math.min.apply(null, arr), hi = Math.max.apply(null, arr);
+    var span = (hi - lo) || 1;
+    var step = w / (arr.length - 1);
+    var pts = arr.map(function (v, i) {
+      var x = i * step;
+      var y = h - ((v - lo) / span) * (h - 2) - 1; // 1px pad
+      return x.toFixed(1) + "," + y.toFixed(1);
+    });
+    return "M" + pts.join(" L");
+  }
+
+  function ago(ts) {
+    var s = Math.max(0, DATA.now - ts);
+    if (s < 60) return s + "s ago";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m ago";
+    return Math.floor(m / 60) + "h ago";
+  }
+
+  // ---- 2D layout: position each node by recency (x = most-recent left->right? no:
+  //      newest top-right, older drifting down-left) + activity. Deterministic. ----
+  var FIELD_W = 348, FIELD_H = 408;
+  // hand-placed but recency-ordered so the field reads as a calm constellation.
+  var POS = {
+    "sess-c40e": { x: 0.70, y: 0.24 }, // BLOCK, hottest, newest -> upper area, isolated-right
+    "sess-2b91": { x: 0.40, y: 0.46 }, // INTERVENE, links both
+    "sess-7f3a": { x: 0.24, y: 0.30 }, // OBSERVE
+    "sess-9d12": { x: 0.55, y: 0.74 }  // SUGGEST, oldest -> lower
+  };
+  function nodeCenter(id) {
+    var p = POS[id] || { x: 0.5, y: 0.5 };
+    return { x: p.x * FIELD_W, y: p.y * FIELD_H };
+  }
+
+  var byId = {};
+  DATA.nodes.forEach(function (n) { byId[n.session_id] = n; });
+  // DOM order = most-recent first (Tab order). Sort by last_activity_ts desc.
+  var ORDER = DATA.nodes.slice().sort(function (a, b) { return b.last_activity_ts - a.last_activity_ts; });
+
+  var selectedIdx = 0;
+  var is1d = false;
+
+  // ---------------- render edges (SVG) ----------------
+  function renderEdges() {
+    var svg = $("edges");
+    svg.innerHTML = "";
+    if (is1d) return; // 1D strip drops edges; nodes carry the same data inline
+    DATA.edges.forEach(function (e) {
+      var a = nodeCenter(e.from_session_id), b = nodeCenter(e.to_session_id);
+      var line = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      line.setAttribute("d", "M" + a.x + "," + a.y + " L" + b.x + "," + b.y);
+      line.setAttribute("class", "edge");
+      // thickness scales with pattern_count (the line is secondary; count is the signal)
+      line.setAttribute("stroke-width", String(0.8 + e.pattern_count * 0.9));
+      svg.appendChild(line);
+
+      // midpoint count chip "xN" on a slate backing (AAA over any node behind it)
+      var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      var label = "x" + e.pattern_count;
+      var cw = 10 + label.length * 7;
+      var rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", (mx - cw / 2)); rect.setAttribute("y", (my - 9));
+      rect.setAttribute("width", cw); rect.setAttribute("height", 16);
+      rect.setAttribute("rx", 4); rect.setAttribute("class", "edge-chip");
+      svg.appendChild(rect);
+      var txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      txt.setAttribute("x", mx); txt.setAttribute("y", (my + 3));
+      txt.setAttribute("text-anchor", "middle"); txt.setAttribute("class", "edge-chip-txt");
+      txt.textContent = label;
+      svg.appendChild(txt);
+    });
+  }
+
+  // ---------------- render one node chip ----------------
+  function nodeEl(n, idx) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "node " + modeClass(n.governance_mode) + (n.alert ? " node--alert" : "");
+    btn.setAttribute("data-session-id", n.session_id);
+    btn.setAttribute("data-idx", String(idx));
+    var ariaParts = ["Session " + n.project_slug, "mode " + modeLabel(n.governance_mode), ago(n.last_activity_ts)];
+    if (n.open_hitl > 0) ariaParts.push(n.open_hitl + " action" + (n.open_hitl === 1 ? "" : "s") + " required");
+    if (n.alert) ariaParts.push(ESC_LABEL[n.alert] + " escalation");
+    btn.setAttribute("aria-label", ariaParts.join(", "));
+
+    if (!is1d) {
+      var c = nodeCenter(n.session_id);
+      btn.style.left = c.x + "px";
+      btn.style.top = c.y + "px";
+    }
+
+    var ring = '<span class="node__ring" aria-hidden="true"></span>';
+    var top = '<div class="node__top">' +
+      '<span class="node__slug">' + n.project_slug + '</span>' +
+      '<span class="node__ago">' + ago(n.last_activity_ts) + '</span></div>';
+
+    var badges = '<div class="node__badges">' +
+      '<span class="mode"><span class="mode__dot" aria-hidden="true"></span>' + modeLabel(n.governance_mode) + '</span>';
+    if (n.open_hitl > 0) badges += '<span class="action-chip">ACTION ' + n.open_hitl + '</span>';
+    if (n.alert) badges += '<span class="alert-chip">' + ESC_LABEL[n.alert] + '</span>';
+    badges += '</div>';
+
+    // sparkline svg
+    var d = sparklinePath(n.latency_sparkline, 120, 22);
+    var spark = '<svg class="node__spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">' +
+      '<line class="spark-base" x1="0" y1="21" x2="120" y2="21"></line>' +
+      '<path class="spark-line" d="' + d + '"></path></svg>';
+
+    btn.innerHTML = ring + top + badges + spark;
+
+    btn.addEventListener("click", function () { selectIdx(idx); focusScope(n); });
+    btn.addEventListener("mouseenter", function () { showTip(n, btn); });
+    btn.addEventListener("focus", function () { selectIdx(idx); showTip(n, btn); });
+    btn.addEventListener("mouseleave", function () { /* leave tip until another shows */ });
+    return btn;
+  }
+
+  function render() {
+    var field = $("field");
+    // wipe old node buttons (keep svg + tip)
+    Array.prototype.slice.call(field.querySelectorAll(".node")).forEach(function (el) { el.remove(); });
+    field.classList.toggle("is-1d", is1d);
+    ORDER.forEach(function (n, i) { field.insertBefore(nodeEl(n, i), $("tip")); });
+    renderEdges();
+    updateSelected();
+  }
+
+  // ---------------- selection + tooltip ----------------
+  function nodes() { return Array.prototype.slice.call($("field").querySelectorAll(".node")); }
+  function selectIdx(i) { selectedIdx = i; updateSelected(); }
+  function updateSelected() {
+    nodes().forEach(function (el, i) { el.classList.toggle("is-selected", i === selectedIdx); });
+  }
+
+  function showTip(n, anchor) {
+    var tip = $("tip");
+    $("tipSlug").textContent = n.project_slug;
+    $("tipMode").innerHTML = '<span class="mode ' + modeClass(n.governance_mode) +
+      '" style="position:static"><span class="mode__dot"></span>' + modeLabel(n.governance_mode) + '</span>';
+    var agentTxt = n.agent_slug ? n.agent_slug : "no active agent";
+    var last = n.latency_sparkline[n.latency_sparkline.length - 1];
+    var dl = '<dt>open hitl</dt><dd>' + (n.open_hitl > 0 ? "ACTION " + n.open_hitl : "0 (none)") + '</dd>' +
+             '<dt>agent</dt><dd>' + agentTxt + '</dd>' +
+             '<dt>last seen</dt><dd>' + ago(n.last_activity_ts) + '</dd>' +
+             '<dt>latency</dt><dd>' + last + ' ms (last of 10)</dd>';
+    if (n.alert) dl += '<dt>alert</dt><dd>' + ESC_LABEL[n.alert] + '</dd>';
+    $("tipDl").innerHTML = dl;
+    $("tipFocus").onclick = function () { focusScope(n); };
+
+    // place tip near the anchor, clamped inside the field
+    if (!is1d && anchor) {
+      var fieldRect = $("field").getBoundingClientRect();
+      var aRect = anchor.getBoundingClientRect();
+      var left = aRect.left - fieldRect.left + aRect.width + 8;
+      var top = aRect.top - fieldRect.top;
+      if (left + 224 > fieldRect.width) left = aRect.left - fieldRect.left - 224 - 8;
+      if (left < 4) left = 4;
+      if (top + 180 > fieldRect.height) top = Math.max(4, fieldRect.height - 184);
+      tip.style.left = left + "px";
+      tip.style.top = top + "px";
+    } else {
+      tip.style.left = "8px"; tip.style.top = "8px";
+    }
+    tip.classList.add("is-on");
+  }
+  function hideTip() { $("tip").classList.remove("is-on"); }
+
+  // ---------------- Focus action -> guarded selectSession(id) ----------------
+  function focusScope(n) {
+    // In the real app this calls the SAME guarded store setter the left rail uses,
+    // which structurally refuses the SM-own session. Here we just reflect the scope.
+    $("frameScope").textContent = "scope: " + n.project_slug + " (via Focus)";
+    $("liveStatus").textContent = "Focus -> selectSession(" + n.session_id + "). Frame A/B/C scope switched to " +
+      n.project_slug + "; the panes follow, the layout does not move.";
+  }
+
+  // ---------------- keyboard: Arrow move, Enter/Space focus, Escape collapse ----------------
+  $("field").addEventListener("keydown", function (e) {
+    var n = ORDER.length;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault(); selectedIdx = (selectedIdx + 1) % n; focusSelected();
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault(); selectedIdx = (selectedIdx - 1 + n) % n; focusSelected();
+    } else if (e.key === "Enter" || e.key === " ") {
+      // node buttons handle their own click; this is the field-level fallback
+    } else if (e.key === "Escape") {
+      e.preventDefault(); collapse(true);
+    }
+  });
+  function focusSelected() {
+    var els = nodes();
+    if (els[selectedIdx]) { els[selectedIdx].focus(); }
+  }
+
+  // ---------------- collapse / expand to the spine ----------------
+  function collapse(yes) {
+    $("wrap").classList.toggle("is-collapsed", yes);
+    $("collapseBtn").setAttribute("aria-expanded", String(!yes));
+    $("spine").setAttribute("aria-expanded", String(!yes));
+    if (yes) { hideTip(); $("spine").focus(); $("liveStatus").textContent = "Spatial map collapsed to the 28px spine."; }
+    else { $("liveStatus").textContent = "Spatial map expanded."; }
+  }
+  $("collapseBtn").addEventListener("click", function () { collapse(true); });
+  $("spine").addEventListener("click", function () { collapse(false); });
+
+  // ---------------- 2D <-> 1D projection ----------------
+  function setProjection(one) {
+    is1d = one;
+    $("proj2d").setAttribute("aria-pressed", String(!one));
+    $("proj1d").setAttribute("aria-pressed", String(one));
+    hideTip();
+    render();
+    $("liveStatus").textContent = one
+      ? "1D timeline strip -- same nodes ordered by last_activity, edges dropped, badges unchanged."
+      : "2D constellation field -- nodes positioned by recency, shared-pattern edges shown.";
+  }
+  $("proj2d").addEventListener("click", function () { setProjection(false); });
+  $("proj1d").addEventListener("click", function () { setProjection(true); });
+
+  // ---------------- zoom readout (scroll = zoom, drag = pan; persisted in real app) ----
+  var zoom = 100;
+  $("field").addEventListener("wheel", function (e) {
+    if (is1d) return;
+    e.preventDefault();
+    zoom = Math.max(60, Math.min(180, zoom + (e.deltaY < 0 ? 10 : -10)));
+    $("zoomRead").textContent = "zoom " + zoom + "% -- scroll = zoom, drag = pan";
+    var f = zoom / 100;
+    nodes().forEach(function (el) { el.style.transform = "translate(-50%, -50%) scale(" + f + ")"; });
+  }, { passive: false });
+
+  // ---------------- flag toggle (no-op gate preview) ----------------
+  function toggleFlag() {
+    var sw = $("flagSwitch");
+    var on = sw.getAttribute("aria-checked") === "true";
+    var next = !on;
+    sw.setAttribute("aria-checked", String(next));
+    $("flagState").textContent = next ? "ON" : "OFF";
+    $("stage").classList.toggle("is-off", !next);
+    $("liveStatus").textContent = next
+      ? "spatial-session-sidebar ON -- the right-edge map mounts and reads the two GET endpoints (polarity-filtered)."
+      : "spatial-session-sidebar OFF -- the sidebar renders nothing and registers no fetch (no-op gate).";
+  }
+  $("flagSwitch").addEventListener("click", toggleFlag);
+
+  // ---------------- footer mock-source readout ----------------
+  $("selfRead").textContent = DATA.excluded_self + " self row" + (DATA.excluded_self === 1 ? "" : "s") + " excluded (polarity filter)";
+  $("srcRead").textContent = DATA.mock
+    ? "SAMPLE DATA -- no governed sessions in gov.db yet; representative shape."
+    : "LIVE -- gov.db, polarity-filtered.";
+
+  // initial paint
+  render();
+})();
+</script>
+</body>
+</html>

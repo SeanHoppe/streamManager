@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<!--
+  confidence-chip.html -- KingMode .html MOCKUP for BETA feature
+  "confidence-chip" (#18 Operator Co-Pilot Confidence Chip).
+
+  PURPOSE: let the single monitor-first laptop operator confirm the UI approach
+  BEFORE any code is written (directive #2). This is a STATIC, self-contained
+  preview -- no build step, no external assets, no CDNs, no web fonts. It reuses
+  the REAL ui-next design tokens (theme.css base + calm.css semantic layer +
+  fixed M4 badge tokens) inline so the preview shows the production palette.
+
+  ADR-18 floor honored: 3-frame grammar referenced (this previews the HITL dock
+  inside the escalation Frame); escalation-only foreground; PAIRED label+color
+  everywhere (color is NEVER the only signal); the absolute HITL gate is intact
+  (the chip is advisory-only, M6 -- it pre-commits nothing, removes no button);
+  domain-agnostic (governed-target identity is rendered FROM DATA, no monitored-
+  project vocabulary); a11y-minded (role=button dial with aria-expanded +
+  full aria-label, role=note passive breakdown -- AdvisoryChip precedent).
+
+  POLARITY (G2): mock data is a NON-SM governed session (sess-7f3a); SM never
+  monitors itself. BETA gating: the chip renders ONLY when the flag is ON; the
+  toggle below previews the default-OFF -> ON behavior client-side.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- is two hyphens),
+  no box-drawing characters.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Operator Co-Pilot Confidence Chip</title>
+<style>
+  /* ======================================================================
+     TOKEN LAYER -- lifted verbatim from dashboard/ui-next/src/styles
+     (theme.css obsidian + calm.css semantic aliases + fixed M4 badge tokens).
+     Reproduced inline so this mockup previews the REAL tokens with no build.
+  ====================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed M4 badge tokens -- theme-invariant; ALWAYS paired with a label */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+
+    /* spacing + radius modular scale (calm.css) */
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+    --t-calm: 180ms ease;
+    --sev-quiet-track: 0.06em;
+  }
+
+  /* THEME: OBSIDIAN (default) -- dark industrial telemetry, amber glow */
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* calm.css semantic aliases over the theme base */
+  :root {
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-row:    var(--bg-row);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-accent-glow:    var(--accent-glow);
+  }
+
+  /* ======================================================================
+     PAGE CHROME
+  ====================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    -webkit-font-smoothing: antialiased;
+    padding: var(--space-6);
+  }
+
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  /* -- HEADER STRIP: feature title + BETA pill + inline on/off toggle ------ */
+  .mock-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    padding-bottom: var(--space-5);
+    border-bottom: 1px solid var(--calm-hairline);
+    margin-bottom: var(--space-6);
+  }
+  .mock-head__title {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 750;
+    letter-spacing: -0.01em;
+    color: var(--calm-ink-loud);
+  }
+  .mock-head__sub {
+    margin: var(--space-2) 0 0 0;
+    font-size: var(--fs-meta);
+    color: var(--calm-ink-quiet);
+    max-width: 46ch;
+  }
+  .mock-head__ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-3); }
+
+  /* BETA pill -- paired text label + amber color (M4: never color alone) */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--accent-dim);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-soft);
+    padding: var(--space-2) var(--space-3);
+    white-space: nowrap;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--badge-ar-border);
+  }
+
+  /* inline flag toggle (client-side) */
+  .flag {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.04em;
+    color: var(--calm-ink-chrome);
+  }
+  .flag__state { min-width: 3.5ch; text-align: right; font-weight: 700; }
+  .flag__state.is-on  { color: var(--badge-ar-fg); }
+  .flag__state.is-off { color: var(--calm-ink-quiet); }
+  .switch {
+    appearance: none;
+    position: relative;
+    width: 42px; height: 22px;
+    border-radius: 11px;
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    cursor: pointer;
+    transition: background var(--t-calm), border-color var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--calm-ink-quiet);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch:checked {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .switch:checked::after {
+    transform: translateX(20px);
+    background: var(--badge-ar-border);
+  }
+  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* settings-path annotation -- the operator must SEE the gated nature */
+  .gated-note {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    letter-spacing: 0.02em;
+  }
+
+  /* -- FRAME / DOCK context labels ---------------------------------------- */
+  .frame-label {
+    display: flex; align-items: baseline; gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+  .frame-label__kicker {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--calm-ink-quiet);
+  }
+  .frame-label__name {
+    font-size: var(--fs-meta);
+    font-weight: 600;
+    color: var(--calm-ink-chrome);
+  }
+
+  /* ======================================================================
+     SEVERITY TYPE SCALE (calm.css) -- weight reinforces, never the sole signal
+  ====================================================================== */
+  .sev-quiet { font-weight: 300; letter-spacing: var(--sev-quiet-track); color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums; }
+  .sev-base  { font-weight: 400; letter-spacing: 0.02em; color: var(--calm-ink); font-variant-numeric: tabular-nums; }
+
+  /* ======================================================================
+     HITL PENDING ROW (HitlPendingRow.svelte grammar) -- amber left rail spine
+  ====================================================================== */
+  .hpr {
+    display: flex; flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    background: var(--calm-surface-row);
+    border: 1px solid var(--calm-hairline);
+    border-left: 3px solid var(--badge-ar-border);  /* asymmetric amber spine */
+    border-radius: var(--radius-soft);
+  }
+  .hpr__head { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+
+  /* M4 ACTION REQUIRED badge -- paired label + amber color */
+  .badge-ar {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-family: var(--ff-mono);
+    font-size: var(--fs-badge);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+    border-radius: var(--radius-sharp);
+    padding: 3px var(--space-3);
+  }
+  .hpr__attr { display: inline-flex; align-items: baseline; gap: var(--space-2); }
+  .hpr__attr-tag {
+    font-size: var(--fs-chrome); text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--calm-ink-quiet);
+  }
+  .hpr__attr-val {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-chrome);
+  }
+  .hpr__reason { margin: 0; font-size: var(--fs-body); line-height: var(--lh-body); color: var(--calm-ink); }
+
+  /* M9 countdown bar (static preview) */
+  .hpr__countdown { width: 100%; }
+  .cd {
+    display: flex; align-items: center; gap: var(--space-3);
+  }
+  .cd__track {
+    position: relative; flex: 1 1 auto; height: 4px;
+    background: var(--calm-surface-alt);
+    border-radius: 2px; overflow: hidden;
+  }
+  .cd__fill {
+    position: absolute; inset: 0 auto 0 0;
+    width: 62%; background: var(--badge-ar-border);
+  }
+  .cd__readout {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-chrome); font-variant-numeric: tabular-nums;
+    min-width: 7ch; text-align: right;
+  }
+
+  /* ======================================================================
+     CONFIDENCE CHIP (HitlRecommendationChip + ConfidenceDial + Breakdown)
+     -- the one element that leans TOWARD the operator. Larger than any other
+     dock element to earn the co-pilot role. Left-anchored, asymmetric.
+  ====================================================================== */
+  .chip {
+    display: flex;
+    align-items: stretch;
+    gap: var(--space-5);
+    /* shares the row's amber left-rail grammar -- part of the lean-forward
+       spine, not a bolt-on widget */
+    border-left: 3px solid var(--badge-ar-border);
+    background: var(--calm-accent-wash);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4) var(--space-5);
+    margin-bottom: var(--space-3);
+  }
+
+  /* the dial column -- left-anchored, the largest dock element */
+  .chip__dialwrap { flex: 0 0 auto; }
+  .dial {
+    appearance: none;
+    display: block;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 50%;
+  }
+  .dial:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .dial svg { display: block; }
+  .dial__pct {
+    font-family: var(--ff-mono);
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    fill: var(--calm-ink-loud);   /* >= 7:1 target on the dock surface */
+  }
+  .dial__pctsign {
+    font-family: var(--ff-mono);
+    font-weight: 600;
+    fill: var(--calm-ink-chrome);
+  }
+
+  /* the recommendation column -- to the right of the dial */
+  .chip__body {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; flex-direction: column; justify-content: center;
+    gap: var(--space-2);
+  }
+  .chip__tagrow { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+  .chip__tag {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  /* the literal recommend verb -- paired text, carries the signal w/o color */
+  .chip__verb {
+    font-family: var(--ff-system);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--calm-ink-loud);
+    letter-spacing: 0.01em;
+  }
+  .chip__verb-action { color: var(--badge-ar-fg); }
+  .chip__prose {
+    font-size: var(--fs-meta);
+    color: var(--calm-ink);
+  }
+  .chip__hint {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    letter-spacing: 0.02em;
+  }
+  .kbd {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    color: var(--calm-ink-chrome);
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+
+  /* ======================================================================
+     CONFIDENCE BREAKDOWN -- calm height reveal (mirrors OVERRIDE reveal).
+     role=note passive (AdvisoryChip precedent) -- never role=alert.
+  ====================================================================== */
+  .breakdown {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition: max-height var(--t-calm), opacity var(--t-calm), margin var(--t-calm);
+    border-left: 1px dashed var(--calm-hairline-hi);
+    margin: 0 0 0 var(--space-2);
+    padding-left: 0;
+  }
+  .breakdown.is-open {
+    max-height: 280px;
+    opacity: 1;
+    margin: var(--space-3) 0 var(--space-1) var(--space-2);
+    padding-left: var(--space-5);
+  }
+  .breakdown__head {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--calm-ink-quiet);
+    margin-bottom: var(--space-3);
+  }
+  .bar {
+    display: grid;
+    grid-template-columns: 14ch 1fr 4ch;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .bar__label {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-meta);
+    color: var(--calm-ink);          /* literal source label -- not color-only */
+  }
+  .bar__track {
+    height: 8px;
+    background: var(--calm-surface-alt);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bar__fill {
+    height: 100%;
+    background: var(--badge-ar-border);
+    border-radius: 2px;
+  }
+  /* amber spectrum: heavier weight = richer amber. Reinforcement only --
+     every bar still carries its literal weight number to the right. */
+  .bar__fill.w-40 { background: #d97706; }
+  .bar__fill.w-35 { background: #e08a1e; }
+  .bar__fill.w-15 { background: #eaa64f; }
+  .bar__fill.w-10 { background: #f0bd7a; }
+  .bar__pct {
+    font-family: var(--ff-mono);
+    font-size: var(--fs-meta);
+    font-weight: 700;
+    color: var(--calm-ink-loud);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .breakdown__foot {
+    font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+    font-style: italic;
+    margin-top: var(--space-2);
+  }
+
+  /* ======================================================================
+     ADVISORY CHIP (M8) -- the quieter whisper BELOW the co-pilot chip.
+     Dashed non-verdict hairline, passive role=note.
+  ====================================================================== */
+  .adv-chip {
+    display: flex; align-items: baseline; gap: var(--space-3);
+    width: 100%;
+    border: 1px dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    background: var(--calm-accent-wash);
+    padding: var(--space-2) var(--space-4);
+    margin: 0 0 var(--space-3) 0;
+  }
+  .adv-chip__tag {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--calm-ink-quiet);
+  }
+  .adv-chip__bias {
+    flex: 1 1 auto; font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+    font-style: italic;
+  }
+  .adv-chip__conf {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums;
+  }
+
+  /* ======================================================================
+     ACTION GROUP (M6) -- APPROVE / OVERRIDE / DISMISS. Gate intact.
+  ====================================================================== */
+  .hpr__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-1); }
+  .hpr__btn {
+    appearance: none;
+    font-family: var(--ff-system);
+    font-size: var(--fs-meta);
+    font-weight: 600;
+    line-height: 1;
+    padding: 8px 16px;
+    border-radius: var(--radius-sharp);
+    cursor: pointer;
+    transition: background var(--t-calm), border-color var(--t-calm), color var(--t-calm);
+  }
+  .hpr__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hpr__btn--approve {
+    background: var(--badge-ar-border); color: #fffbeb; border: 1px solid #b45309;
+  }
+  .hpr__btn--approve:hover { background: #b45309; }
+  .hpr__btn--override {
+    background: transparent; color: var(--calm-ink); border: 1px solid var(--calm-hairline);
+  }
+  .hpr__btn--override:hover { border-color: var(--calm-accent); color: var(--calm-ink-loud); }
+  .hpr__btn--ghost {
+    background: transparent; color: var(--calm-ink-quiet); border: 1px solid transparent;
+  }
+  .hpr__btn--ghost:hover { color: var(--calm-ink); border-color: var(--calm-hairline); }
+
+  /* OFF-state explanatory placeholder where the chip would be */
+  .chip-off {
+    border: 1px dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4) var(--space-5);
+    margin-bottom: var(--space-3);
+    color: var(--calm-ink-quiet);
+    font-size: var(--fs-meta);
+    background: transparent;
+  }
+  .chip-off code { font-family: var(--ff-mono); color: var(--calm-ink-chrome); }
+
+  /* hidden util that preserves accessibility */
+  [hidden] { display: none !important; }
+
+  /* legend / footnote */
+  .legend {
+    margin-top: var(--space-7);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--calm-hairline);
+    font-size: var(--fs-meta);
+    color: var(--calm-ink-quiet);
+  }
+  .legend h2 {
+    font-size: var(--fs-meta);
+    font-family: var(--ff-mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-3) 0;
+  }
+  .legend ul { margin: 0; padding-left: 1.2em; }
+  .legend li { margin-bottom: var(--space-2); }
+  .legend strong { color: var(--calm-ink); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- =================================================================
+       HEADER STRIP: title + BETA pill + inline on/off toggle (client-side)
+  ================================================================== -->
+  <header class="mock-head">
+    <div>
+      <h1 class="mock-head__title">Operator Co-Pilot Confidence Chip</h1>
+      <p class="mock-head__sub">
+        One glance shows the engine's top recommendation, how confident it is,
+        and why -- so routine SYNC approvals collapse to a single Ctrl+Enter,
+        while OVERRIDE stays exactly as available as it is today.
+      </p>
+    </div>
+    <div class="mock-head__ctrl">
+      <span class="beta-pill"><span class="beta-pill__dot" aria-hidden="true"></span>BETA</span>
+      <label class="flag">
+        <span>confidence-chip</span>
+        <input id="flagSwitch" class="switch" type="checkbox" checked
+               role="switch" aria-label="Toggle confidence-chip beta feature" />
+        <span id="flagState" class="flag__state is-on">ON</span>
+      </label>
+      <span class="gated-note">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    </div>
+  </header>
+
+  <!-- =================================================================
+       FRAME / DOCK context -- this previews the HITL dock inside the
+       escalation Frame (ADR-18 3-frame grammar). One pending row shown.
+  ================================================================== -->
+  <div class="frame-label">
+    <span class="frame-label__kicker">Frame -- Escalation</span>
+    <span class="frame-label__name">HITL dock / SYNC mode / 1 pending</span>
+  </div>
+
+  <!-- THE PENDING ROW (HitlPendingRow grammar) -->
+  <article class="hpr" data-hitl-mode="on">
+    <header class="hpr__head">
+      <span class="badge-ar" aria-label="ACTION REQUIRED: new pattern, no prior override">
+        ACTION REQUIRED
+      </span>
+      <span class="hpr__attr">
+        <span class="hpr__attr-tag" aria-hidden="true">session</span>
+        <span class="hpr__attr-val">sess-7f3a</span>
+      </span>
+    </header>
+
+    <p class="hpr__reason sev-base">new pattern, no prior override</p>
+
+    <!-- M9 countdown (static preview) -->
+    <div class="hpr__countdown">
+      <div class="cd" role="img" aria-label="HITL countdown -- 37 seconds remaining">
+        <div class="cd__track"><div class="cd__fill"></div></div>
+        <span class="cd__readout">37s left</span>
+      </div>
+    </div>
+
+    <!-- ===========================================================
+         CONFIDENCE CHIP -- renders ONLY when the flag is ON.
+         When OFF, the .chip-off placeholder explains the no-op.
+    ============================================================ -->
+    <div id="chipOn">
+      <div class="chip">
+        <div class="chip__dialwrap">
+          <!-- ConfidenceDial: role=button, aria-expanded, full aria-label.
+               Partial 270deg arc (gap toward lower-left) -- NOT a full donut. -->
+          <button
+            id="dial"
+            class="dial"
+            type="button"
+            aria-expanded="false"
+            aria-controls="breakdown"
+            aria-label="Confidence 78 percent, recommend approve; activate for source breakdown">
+            <svg width="124" height="124" viewBox="0 0 124 124" role="presentation" aria-hidden="true">
+              <!-- track arc: 270deg, gap toward lower-left (bespoke, not a ring) -->
+              <path d="M 27.7 96.3 A 48 48 0 1 1 96.3 96.3"
+                    fill="none" stroke="#192030" stroke-width="11" stroke-linecap="round"/>
+              <!-- value arc: 78% of the 270deg sweep, rich amber high-end.
+                   dasharray = 0.78 * arc-length (about 226) then the remainder. -->
+              <path id="dialArc" d="M 27.7 96.3 A 48 48 0 1 1 96.3 96.3"
+                    fill="none" stroke="#d97706" stroke-width="11" stroke-linecap="round"
+                    stroke-dasharray="176.4 226" />
+              <!-- percentage inset in the arc gap, heavy tabular mono -->
+              <text x="62" y="60" text-anchor="middle" class="dial__pct" font-size="30">78</text>
+              <text x="62" y="60" text-anchor="middle" class="dial__pctsign" font-size="30" dx="22">%</text>
+              <text x="62" y="82" text-anchor="middle" class="dial__pctsign" font-size="9"
+                    style="letter-spacing:0.16em">CONFIDENCE</text>
+            </svg>
+          </button>
+        </div>
+
+        <div class="chip__body">
+          <div class="chip__tagrow">
+            <span class="chip__tag" aria-hidden="true">Co-Pilot recommends</span>
+          </div>
+          <!-- PAIRED text signal: literal verb carries meaning without color -->
+          <div class="chip__verb">recommend <span class="chip__verb-action">APPROVE</span></div>
+          <div class="chip__prose">matches 12 prior approvals on a recency-decayed pattern</div>
+          <div class="chip__hint">
+            <span class="kbd">Ctrl+Enter</span> approve &middot;
+            <span class="kbd">Enter</span> on dial = why &middot;
+            <span class="kbd">Esc</span> dissent (OVERRIDE)
+          </div>
+        </div>
+      </div>
+
+      <!-- ConfidenceBreakdown: passive role=note, height reveal. Each bar
+           pairs a literal source label + weight percent (never color-only). -->
+      <div id="breakdown" class="breakdown" role="note"
+           aria-label="Confidence source breakdown -- blended from four frozen source weights">
+        <div class="breakdown__head">Why 78% -- blended source weights</div>
+
+        <div class="bar">
+          <span class="bar__label">graph_pattern</span>
+          <span class="bar__track"><span class="bar__fill w-40" style="width:40%"></span></span>
+          <span class="bar__pct">40%</span>
+        </div>
+        <div class="bar">
+          <span class="bar__label">hitl_override</span>
+          <span class="bar__track"><span class="bar__fill w-35" style="width:35%"></span></span>
+          <span class="bar__pct">35%</span>
+        </div>
+        <div class="bar">
+          <span class="bar__label">static_rule</span>
+          <span class="bar__track"><span class="bar__fill w-15" style="width:15%"></span></span>
+          <span class="bar__pct">15%</span>
+        </div>
+        <div class="bar">
+          <span class="bar__label">project_context</span>
+          <span class="bar__track"><span class="bar__fill w-10" style="width:10%"></span></span>
+          <span class="bar__pct">10%</span>
+        </div>
+
+        <p class="breakdown__foot">
+          Frozen SuggestionWeights defaults. Advisory only -- this does not
+          pre-commit the gate. Esc collapses and returns focus to OVERRIDE.
+        </p>
+      </div>
+    </div>
+
+    <!-- OFF-state placeholder: shown when the flag is OFF (default). -->
+    <div id="chipOff" class="chip-off" hidden>
+      Confidence chip is OFF. The HITL row renders exactly as it does today --
+      no dial, no extra poller or SSE handler (pure no-op behind
+      <code>{#if $betaFlags['confidence-chip']}</code>). Flip the flag ON above
+      to preview the co-pilot chip.
+    </div>
+
+    <!-- M8 advisory chip -- the quieter whisper BELOW the co-pilot chip. -->
+    <div class="adv-chip" role="note"
+         aria-label="advisory only -- operator decision still required: likely-safe">
+      <span class="adv-chip__tag" aria-hidden="true">ADVISORY</span>
+      <span class="adv-chip__bias">likely-safe</span>
+      <span class="adv-chip__conf" aria-hidden="true">~71%</span>
+    </div>
+
+    <!-- M6 action group -- the absolute gate, UNCHANGED. -->
+    <div class="hpr__actions" role="group" aria-label="HITL decision">
+      <button id="approveBtn" type="button" class="hpr__btn hpr__btn--approve"
+              aria-label="Approve: new pattern, no prior override">Approve</button>
+      <button id="overrideBtn" type="button" class="hpr__btn hpr__btn--override"
+              aria-label="Override: new pattern, no prior override">Override</button>
+      <button type="button" class="hpr__btn hpr__btn--ghost"
+              aria-label="Dismiss: new pattern, no prior override">Dismiss</button>
+    </div>
+  </article>
+
+  <!-- live confirmation line so the operator SEES the one-tap commit fire -->
+  <p id="committedLine" class="gated-note" style="margin-top:var(--space-4)" aria-live="polite"></p>
+
+  <!-- =================================================================
+       LEGEND -- what the operator is looking at + the contract guarantees.
+  ================================================================== -->
+  <div class="legend">
+    <h2>What this mockup shows</h2>
+    <ul>
+      <li><strong>Glance path:</strong> the amber partial-arc dial (78%) plus the
+        paired label <strong>recommend APPROVE</strong> -- if the number is high
+        and the verb matches your gut, you are done glancing.</li>
+      <li><strong>One-tap:</strong> <span class="kbd">Ctrl+Enter</span> fires the
+        SAME commit('approve') the amber Approve button already calls -- no new
+        mutation surface (M10).</li>
+      <li><strong>Audit why:</strong> click the dial (or Enter/Space) to reveal
+        the breakdown -- four frozen source weights (graph_pattern 40 /
+        hitl_override 35 / static_rule 15 / project_context 10), each paired with
+        its literal label + percent.</li>
+      <li><strong>Dissent is one key away:</strong> <span class="kbd">Esc</span>
+        collapses the breakdown and drops focus onto OVERRIDE (M6).</li>
+      <li><strong>Advisory-only:</strong> the chip never removes or pre-commits
+        the gate -- APPROVE / OVERRIDE / DISMISS stay exactly as today.</li>
+      <li><strong>Paired label+color (M4):</strong> every state carries text --
+        a colorblind operator reads the verb + number; amber only reinforces.</li>
+      <li><strong>Beta-gated:</strong> renders only behind the flag; OFF is a
+        pure no-op (no poller, no SSE handler).</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  // ====================================================================
+  // CLIENT-SIDE ONLY. No network, no external assets. Previews the gated
+  // on/off behavior + the key interactions so the operator can click through.
+  // ====================================================================
+  (function () {
+    var flagSwitch = document.getElementById('flagSwitch');
+    var flagState  = document.getElementById('flagState');
+    var chipOn     = document.getElementById('chipOn');
+    var chipOff    = document.getElementById('chipOff');
+    var dial       = document.getElementById('dial');
+    var breakdown  = document.getElementById('breakdown');
+    var dialArc    = document.getElementById('dialArc');
+    var approveBtn = document.getElementById('approveBtn');
+    var overrideBtn= document.getElementById('overrideBtn');
+    var committed  = document.getElementById('committedLine');
+    var row        = document.querySelector('.hpr');
+
+    // -- BETA flag gate: ON shows the chip; OFF is a pure no-op placeholder. --
+    function applyFlag() {
+      var on = flagSwitch.checked;
+      flagState.textContent = on ? 'ON' : 'OFF';
+      flagState.classList.toggle('is-on', on);
+      flagState.classList.toggle('is-off', !on);
+      chipOn.hidden = !on;
+      chipOff.hidden = on;
+      if (!on) { collapse(); }   // OFF tears down the breakdown -- no-op-when-off
+    }
+    flagSwitch.addEventListener('change', applyFlag);
+
+    // -- ConfidenceBreakdown reveal/collapse (mirrors the OVERRIDE reveal) ----
+    function expand() {
+      breakdown.classList.add('is-open');
+      dial.setAttribute('aria-expanded', 'true');
+    }
+    function collapse() {
+      breakdown.classList.remove('is-open');
+      dial.setAttribute('aria-expanded', 'false');
+    }
+    function toggleBreakdown() {
+      if (breakdown.classList.contains('is-open')) { collapse(); }
+      else { expand(); }
+    }
+
+    // dial = role=button: click + Enter/Space toggle the breakdown.
+    dial.addEventListener('click', toggleBreakdown);
+    dial.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        toggleBreakdown();
+      }
+    });
+
+    // -- The one-tap commit. Ctrl+Enter anywhere in the row = approve (the
+    //    SAME path the Approve button calls -- M10, no new mutation surface). --
+    function fireApprove(via) {
+      committed.textContent =
+        'commit(approve, action) fired via ' + via +
+        ' -- row would optimistically resolve and leave the dock (M10).';
+      approveBtn.disabled = true;
+      overrideBtn.disabled = true;
+      row.style.opacity = '0.45';
+      row.style.filter = 'grayscale(0.5)';
+    }
+    approveBtn.addEventListener('click', function () { fireApprove('Approve button'); });
+
+    // Esc collapses the breakdown AND moves focus to OVERRIDE -- dissent is
+    // always one keystroke away (M6).
+    row.addEventListener('keydown', function (e) {
+      if (!flagSwitch.checked) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        fireApprove('Ctrl+Enter');
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (breakdown.classList.contains('is-open')) {
+          collapse();
+          overrideBtn.focus();
+          e.preventDefault();
+        }
+      }
+    });
+
+    // boot
+    applyFlag();
+  })();
+</script>
+</body>
+</html>

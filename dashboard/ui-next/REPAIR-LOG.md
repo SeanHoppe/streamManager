@@ -284,3 +284,164 @@ axe 0 serious/critical -- **BOTH PASS as of 2026-06-10**.
 **Promotion** of `ui-next/` over `dashboard/static/index.html` is a SEPARATE
 future v2.x cycle frame (sets LOC anchor + EVOLVING reclass + full ship-gate)
 per ADR-20 SS2. This spike CANNOT block ship-gate.
+
+## Resume pass -- M16 contract un-RED + S2 runner + paper AA (2026-06-13)
+
+Resumed from UI-DESIGN-SPEC.md. Determined where work stopped: after the
+beta-proposals batches (committed) the spike's own S2 render-validator was RED
+and the M17 axe gate had a latent paper-theme regression. Both fixed; all three
+gates GREEN.
+
+1. **M16 contamination -- the S2 validator was RED (BLOCKER).** The M16
+   "no monitored-project vocabulary" test failed: four files contained the
+   literal off-limits monitored-project repo name (a CLAUDE.md zero-contamination
+   + firewall breach that landed with the beta batch):
+   - `SoakPanel-data.js` hard-coded the repo name as a `FIREWALL_CWD_FRAGMENTS`
+     entry (LOGIC) + a mock cwd under that path (FIXTURE) -- the file's own
+     header CLAIMED M16-clean while violating it.
+   - `api.js`, `AmbientSoakTask.svelte`, `SoakPanel.svelte` named the same repo
+     in firewall comments (references, but the M16 scan is zero-tolerance).
+   Fix: the firewall fragment is GENERIC placeholder `['walled-repo']` (real
+   list = operator/server config, injected as data -- no governed-target name in
+   the UI taxonomy); mock cwd -> `/home/op/vs/walled-repo`; comments genericized
+   to "off-limits monitored-project cwd". `node --test` now **28/28 PASS**
+   including M16. No test asserted on the literal, so behaviour is unchanged
+   (the firewalled mock row still classifies `firewalled`).
+
+2. **S2 validator runner wired.** `package.json` had no `test` script (REPAIR-LOG
+   flagged this as a pre-promotion gap). Added `"test": "node --test
+   test/render-validator.test.js"` (file-direct -- Node 24 rejects the bare-dir
+   `node --test test/` form). The M1/M2/M4/M6/M15/M16 contract is now a real
+   `npm test` gate, not a hand-run command.
+
+3. **Paper-theme AA regression fixed (M17 / D4-012).** The uncommitted theme
+   toggle work added `systemTheme()` (HeaderBar): the OS `prefers-color-scheme:
+   light` now auto-selects the PAPER theme on first load. That made the headless
+   axe gate render paper for the first time, surfacing two real AA failures the
+   static PAPER-CONTRAST.md analysis had not covered (action-palette colors used
+   as small TEXT): `.rail__all--active` accent text 4.05:1 and `.repl__note--err`
+   intervene text 3.24:1. Fixed AA-clean WITHOUT touching the frozen accents:
+   a new paper-only `--calm-accent-text: #9b1c13` for accent text (border/wash
+   keep frozen #c0392b), and paper `--c-intervene` #ea580c -> #c2410c. Cascade
+   gotcha hit + fixed: a `:root` default for the new token, declared AFTER the
+   `[data-theme=paper]` block at equal specificity, clobbered the paper value
+   (later-source-wins) -- removed it and let the component `var()` fallback cover
+   obsidian/phosphor. Documented in PAPER-CONTRAST.md SS3a + SS7.
+
+### Verified (all three gates, main-thread)
+
+- `npm run build`: exit 0.
+- `npm test` (S2 render-validator): **28/28 PASS** (M16 green).
+- `npm run axe` (M17, paper rendered DOM): **0 serious/critical** (was 1 serious,
+  2 nodes). `reports/axe-latest.md` 2026-06-13.
+
+## Resume pass 2 -- M11/M12 FR-PPP audit surface MOUNTED (2026-06-13)
+
+Closed the increment flagged above. The three FR-PPP leaves are now composed
+into a live host and surfaced in Frame A beside the HITL dock.
+
+1. **New host `AuditDock.svelte` (M11/M12).** The audit peer of `HitlDock`. It
+   correlates the two halves of a Layer-1 probe -- the `audit_probe`-kind HITL
+   pending row (seeded from `/api/hitl/pending`; its message `content` carries
+   the probe_id, `id` is the hitl_id) with its `audit.probe` SSE envelope (keyed
+   on probe_id, carries `candidate_streams`) -- and hands BOTH to `AuditProbeRow`.
+   It owns the Layer-2 canary state machine (`audit.canary_emit` -> pending,
+   `audit.canary_observed` -> observed/auto-clear 1.5s, `audit.probe_failure` ->
+   failed+reason) feeding `CanaryEchoRow`, and the Layer-3 `audit.hallucination_
+   detected` alarm feeding `HallucinationAlert` (rendered FIRST so a parser-
+   correctness alarm is never buried). The only mutation is the operator
+   "Run audit probe" button (`GET /api/sm-probe?session_id&force=1`); everything
+   else is post-hoc off the bus (M18). M15 self-exclude on the seeded rows; M16
+   clean (no monitored-project vocabulary; all ids/paths/nonces FROM DATA).
+
+2. **`HitlDock` excludes `trigger_reason==='audit_probe'`.** So a probe renders
+   in exactly one place (AuditDock as `AuditProbeRow`), never double-rendered as
+   a generic HITL row. One-line predicate add.
+
+3. **`App.svelte` mounts `AuditDock`** in Frame A's `pending` slot, after
+   `HitlDock` (the FR-PPP surface lives in the HITL panel per spec SS3d).
+
+4. **`render-validator` +7 M11/M12 tests** (radio candidate list + none-of-the-
+   above, session_id validation, ack provenance brain_id+prompt_hash, canary
+   nonce+CountdownBar+1.5s auto-clear+failure reason, hallucination no-auto-clear
+   operator-dismiss, 5-event subscription, single-render exclusion). 28 -> 35.
+
+5. **Adversarial review (ultracode workflow, 5 lenses, 14 raw -> 6 confirmed) ->
+   all 6 fixed before gate:**
+   - **[critical] `runProbe` POSTed a GET-only route.** Called `getProbe({...,
+     post:true})` -> `POST /api/sm-probe` -> 405 (server registers `@app.get`
+     only; the sole POST is `/api/sm-probe/ack`). The surface's one mutation
+     failed 100%. Fixed: GET + `force:true`.
+   - **[med] dead 503 branch.** The `res.error` calm-message path was unreachable
+     (`getJSON`/`postJSON` throw on non-2xx before parsing the body). Fixed: catch
+     the throw, detect 503, render a calm "issued but not delivered" line.
+   - **[med] re-seed race + amplification.** `onProbe` fired a `getHitlPending`
+     GET per `audit.probe` event with no in-flight guard (slower-earlier could
+     clobber fresher rows). Fixed: monotonic seq guard on `seed()` (latest wins)
+     + skip the re-seed when the envelope's probe_id already correlates to a held
+     row (cache alone re-renders it).
+   - **[med] scope-bleed of the global leaves.** Documented as intentional: the
+     canary/hallucination envelopes carry NO session_id, so they are process-
+     global and must NOT be hidden by the operator's session scope (an alarm must
+     never be scope-suppressed). Only the Layer-1 rows are session-scoped;
+     `openCount` == on-screen count; badge reason names all three kinds.
+   - **[low] loading flicker.** Bus-driven re-seeds set `loading=true`, flickering
+     the empty-state line on live traffic. Fixed: `quiet` seeds after first load.
+   - **[low] no bus backstop for new probe rows.** Added a `hitl_sync_queued`
+     subscription (peer to `HitlDock.onSyncQueued`) that reconciles audit_probe
+     rows even if the `audit.probe` envelope is missed in a reconnect gap.
+
+### Verified (all three gates, main-thread, post-fix)
+
+- `npm run build`: exit 0 (189 modules; AuditDock + 3 leaves + CountdownBar
+  compiled in).
+- `npm test` (S2 render-validator): **35/35 PASS** (M11/M12 added; M16 green).
+- `npm run axe` (M17, paper rendered DOM): **0 serious/critical**.
+  `reports/axe-latest.md` 2026-06-13T06:15.
+
+## Resume pass 3 -- M11/M12 live probe round-trip VERIFIED (2026-06-13)
+
+The pass-2 deferral (a live probe/canary/hallucination flow vs the real server)
+is now CLOSED with a live integration harness.
+
+- `tools/audit_ui_roundtrip_harness.py` -- boots the REAL `dashboard.server:app`
+  in-process on a fresh temp `GOV_DB` + empty `BRIDGE_PROJECTS_DIR` (worker tails
+  nothing -> zero firewall surface), waits for the browser's `/events` SSE
+  subscriber to attach, then drives the full FR-PPP sequence:
+    * `audit.probe` + `audit.canary_emit` via the REAL governance seams
+      (`GovernanceEngine.emit_audit_probe` / `.emit_audit_canary`) -- the same
+      calls `/api/sm-probe` + the ack auto-emit make; the HITL row is a real
+      `hitl_pending` row read back over `/api/hitl/pending`.
+    * `audit.canary_observed` + `audit.hallucination_detected` via the SAME
+      `bus.write_envelope(...)` seam `jsonl_tail` uses (the live-LLM nonce echo /
+      decoy-path tail is python-unit-covered: `tests/test_audit_canary_observe.py`
+      + `tests/test_audit_hallucination_detect.py`).
+  Fixture vocabulary is generic synthetic (M16): `demo-stream-alpha/beta`,
+  `decoy-negative-control.jsonl`, `governed-fixture-session-001`.
+- `test/audit-roundtrip.spec.mjs` -- self-contained puppeteer observer: spawns
+  the harness + (re)uses the vite dev proxy (4317 -> 8765), then asserts the
+  AuditDock DOM transitions live. **13/13 assertions PASS** (`delivered=1` =
+  real browser subscriber on every event):
+    * M11 -- AuditProbeRow radio candidate list (3 inputs = 2 data candidates +
+      none-of-the-above) rendered FROM the envelope; SIGN affordance present;
+      M11 session guard exercised LIVE (SIGN under ALL scope surfaces the inline
+      "Select a session before signing this probe." validation, no POST).
+    * M12 -- CanaryEchoRow pending (nonce from data + countdown progressbar) ->
+      observed CONFIRMED; HallucinationAlert literal "HALLUCINATION DETECTED" +
+      decoy-path forensic evidence + `role="alert"` + operator-dismiss removes
+      the card.
+  Run: `node test/audit-roundtrip.spec.mjs` (NOT part of `npm test`; it is a
+  live integration spec). No orphan processes (taskkill tree teardown; 8765
+  free after).
+- Re-gated GREEN after adding the spec: `npm test` **35/35** (M16 scan clean
+  with the new `.mjs` under `test/`).
+
+### Still NOT done
+
+- A true live-LLM canary echo (a running non-SM `claude` session that types the
+  nonce back so `jsonl_tail._check_canary_match` fires on a real transcript) is
+  still synthetic here -- substituted via the worker's own `write_envelope`
+  seam. That end of the seam is python-unit-covered; wiring a live session into
+  the browser round-trip would need the watcher to surface the fixture as a
+  governed target (out of scope for a UI-transport check).
+- Spike remains EXPERIMENTAL; promotion to the live dashboard is a separate v2.x.

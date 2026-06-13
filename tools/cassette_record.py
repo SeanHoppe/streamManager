@@ -372,6 +372,34 @@ def _record_ppp_envelopes(
     ] + decoy_rows
 
 
+def _record_pattern_graduated_envelope(
+    bus: MessageBus, session_id: str, idx: int,
+) -> list[dict]:
+    """ADR-18 Amendment F: record one synthetic ``pattern_graduated``
+    audit envelope so cassette replay covers the kind
+    (``feedback_cassette_must_cover_new_envelopes.md``). Cold-path,
+    audit-only — emitted once per graduation (operator confirm), NEVER on
+    the verdict hot path. Generic protocol vocab only (M16)."""
+    import hashlib
+
+    issued_at = time.time()
+    canonical_text = "git status"
+    shape_hash = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "shape_hash": shape_hash,
+        "canonical_text": canonical_text,
+        "n_allow": 42,
+        "mean_confidence": 0.97,
+        "n_override": 0,
+        "n_block_ever": 0,
+        "excluded_self": 0,
+        "confirmed_by": "operator",
+        "graduated_ts": issued_at,
+    }
+    bus.write_envelope("pattern_graduated", payload)
+    return [{"idx": idx, "kind": "pattern_graduated", "envelope": payload}]
+
+
 def _record_decoy_envelopes(
     bus: MessageBus, start_idx: int, issued_at: float,
 ) -> list[dict]:
@@ -615,6 +643,16 @@ def main() -> int:
                     fp.flush()
                     written += 1
                 print(f"[cassette] PPP: {len(ppp_rows)} envelope(s) recorded")
+                # ADR-18 Amendment F: cold-path pattern_graduated audit
+                # envelope (rides the same PPP-pump opt-out).
+                grad_rows = _record_pattern_graduated_envelope(
+                    bus, session_id, ppp_idx + len(ppp_rows))
+                for row in grad_rows:
+                    fp.write(json.dumps(row) + "\n")
+                    fp.flush()
+                    written += 1
+                print(
+                    f"[cassette] pattern_graduated: {len(grad_rows)} recorded")
     finally:
         try:
             if cli_pool_obj is not None:

@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en" data-theme="obsidian" data-motion="allow">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Regret Mining -- KingMode mockup (BETA)</title>
+<!--
+  regret-mining-override-loop.html -- self-contained KingMode mockup.
+
+  Previews BETA feature #24 "Regret Mining: Close the Operator-Override
+  Feedback Loop" BEFORE any Svelte code is written, so the operator can confirm
+  the UI approach. Single file: inline <style> + inline <script>, no external
+  assets / CDNs / fonts (system font stack). Tokens are lifted VERBATIM from
+  dashboard/ui-next/src/styles/theme.css (obsidian theme) so this previews the
+  REAL palette.
+
+  ADR-18 MUST floor honoured: post-hoc analytics surface, NEVER foreground /
+  verdict hot path; paired label+color badges everywhere (color is never the
+  sole signal); read-only -- "Draft as proposal" composes operator-facing
+  markdown and WRITES NOTHING server-side; absolute HITL gate untouched;
+  domain-agnostic (cluster identity + governed-target render FROM DATA);
+  polarity self-exclusion ("excluded N SM-self rows") shown as a visible
+  feature; mock:true rendered as a visible DEMO DATA state. ASCII-only:
+  dash is rendered as "--".
+-->
+<style>
+  /* ----------------------------------------------------------------------
+     TOKENS -- lifted verbatim from theme.css (obsidian) + the M4 fixed
+     badge palette. This mockup pins obsidian so the preview is stable.
+  ---------------------------------------------------------------------- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+  }
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+  /* M4 fixed badge palette (theme-invariant). */
+  :root {
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-warn-fg:    #ea580c;
+    --badge-warn-bg:    #ffedd5;
+    --badge-warn-border:#ea580c;
+
+    --focus-ring-color: #d97706;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 540px at 88% -8%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 28px 22px 80px;
+  }
+
+  .wrap { max-width: 940px; margin: 0 auto; }
+
+  /* ---- stage chrome above the pane (so the toggle is demonstrable) ---- */
+  .stage-bar {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin: 0 0 22px;
+    color: var(--text-dim); font-size: 12px;
+  }
+  .stage-bar__crumb { font-family: var(--ff-mono); letter-spacing: 0.04em; }
+  .stage-bar__crumb b { color: var(--text-bright); font-weight: 600; }
+  .stage-bar__spacer { flex: 1 1 auto; }
+  .stage-bar__note { font-style: italic; }
+
+  /* ----------------------------------------------------------------------
+     PANE SHELL -- a Frame-A card. Left-weighted, asymmetric. Bespoke, not
+     a generic table.
+  ---------------------------------------------------------------------- */
+  .pane {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(245,158,11,0.05), transparent 120px),
+      var(--bg-card);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--accent-glow);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  /* header strip: title + BETA pill + inline on/off toggle */
+  .pane__head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: 18px;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .pane__titlewrap { min-width: 0; }
+  .pane__kicker {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--text-ui); margin: 0 0 6px;
+  }
+  .pane__title {
+    margin: 0; font-size: 25px; line-height: 1.05; font-weight: 800;
+    letter-spacing: -0.01em; color: var(--text-bright);
+  }
+  .pane__title .grad {
+    background: linear-gradient(92deg, var(--accent), #ffd27a);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .pane__sub {
+    margin: 8px 0 0; font-size: 12.5px; color: var(--text-dim); max-width: 56ch;
+  }
+
+  .pane__ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--ff-mono); font-size: 10.5px; letter-spacing: 0.04em;
+    color: var(--badge-warn-fg);
+    background: rgba(234, 88, 12, 0.10);
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+  }
+  .beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* inline on/off switch */
+  .switch { display: inline-flex; align-items: center; gap: 9px; }
+  .switch__label { font-size: 11.5px; color: var(--text-dim); }
+  .switch__label b { color: var(--text-bright); font-weight: 700; font-family: var(--ff-mono); }
+  .switch__btn {
+    --on: 0;
+    position: relative; width: 46px; height: 25px; flex: 0 0 auto;
+    border-radius: 999px; cursor: pointer; padding: 0;
+    border: 1px solid var(--border);
+    background: var(--bg-row);
+    transition: background .18s, border-color .18s;
+  }
+  .switch__btn[aria-checked="true"] {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 19px; height: 19px;
+    border-radius: 50%; background: var(--text-ui);
+    transition: transform .18s, background .18s;
+  }
+  .switch__btn[aria-checked="true"] .switch__knob {
+    transform: translateX(21px); background: var(--accent);
+  }
+  .switch__btn:focus-visible { outline: 2px solid var(--focus-ring-color); outline-offset: 2px; }
+
+  /* meta strip: standing annotations (polarity, demo, window) */
+  .metastrip {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 11px 24px; border-bottom: 1px solid var(--border);
+    background: var(--bg-row-alt);
+    font-size: 11.5px; color: var(--text-dim);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--ff-mono); font-size: 10.5px; letter-spacing: 0.03em;
+    border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px;
+    color: var(--text-dim);
+  }
+  .chip b { color: var(--text-bright); font-weight: 600; }
+  .chip--demo { color: var(--badge-warn-fg); border-color: var(--badge-warn-border); border-style: dashed; }
+  .chip--demo .chip__dot { background: currentColor; }
+  .chip--polarity { color: var(--accent); border-color: var(--border-hi); }
+  .chip__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-ui); }
+  .metastrip__spacer { flex: 1 1 auto; }
+
+  /* ---- standing advisory line (read-only contract, always visible) ---- */
+  .advisory {
+    display: flex; align-items: flex-start; gap: 9px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--text);
+    background: rgba(245, 158, 11, 0.04);
+  }
+  .advisory svg { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
+  .advisory b { color: var(--text-bright); }
+
+  /* ----------------------------------------------------------------------
+     THE REGRET LEDGER -- each cluster is a horizontal lane, NOT a table row.
+     fat left gutter (direction badge) | asymmetric middle (oversized rate) |
+     thin right rail (hairline mini-bar + literal "14/14").
+  ---------------------------------------------------------------------- */
+  .ledger { padding: 8px 14px 16px; }
+  .ledger__caption {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 12px 10px 8px; gap: 12px;
+  }
+  .ledger__caption h2 {
+    margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--text-ui);
+  }
+  .ledger__caption .rank-hint { font-size: 11px; color: var(--text-dim); font-style: italic; }
+
+  .lane {
+    position: relative;
+    display: grid;
+    grid-template-columns: 220px 1fr 168px;
+    align-items: stretch;
+    gap: 0;
+    width: 100%;
+    text-align: left;
+    background: var(--bg-row);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    margin: 9px 0;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    transition: border-color .16s, background .16s, transform .16s;
+  }
+  .lane:hover { background: var(--bg-row-hover); border-color: var(--border-hi); }
+  .lane:focus-visible { outline: 2px solid var(--focus-ring-color); outline-offset: 2px; }
+  /* the hottest cluster is visually anchored with a heavier hairline + glow */
+  .lane.is-hot {
+    border-color: var(--badge-ar-border);
+    box-shadow: inset 3px 0 0 0 var(--accent), 0 0 0 1px rgba(245,158,11,0.18);
+  }
+  .lane.is-cool { opacity: 0.86; }
+
+  /* left gutter -- the paired direction badge + from->to */
+  .lane__gutter {
+    padding: 16px 14px 16px 18px;
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 9px; justify-content: center;
+  }
+  .lane.is-hot .lane__gutter { border-right-color: rgba(245,158,11,0.22); }
+
+  .flow {
+    font-family: var(--ff-mono); font-size: 12px; letter-spacing: 0.02em;
+    color: var(--text-bright);
+  }
+  .flow .arr { color: var(--text-ui); padding: 0 4px; }
+  .flow .to { color: var(--accent); }
+
+  /* M4 paired label+color badge primitive (mirrors .ar-badge) */
+  .ar-badge {
+    display: inline-flex; align-items: center; gap: 5px; align-self: flex-start;
+    font-family: var(--ff-system); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase; padding: 4px 9px;
+    white-space: nowrap; border-radius: 2px; line-height: 1;
+  }
+  .ar-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  /* ESCALATED = operator made it stricter -- WARN variant (amber, dashed). */
+  .ar-escalated { color: #9a3412; background: var(--badge-warn-bg); border: 1px dashed var(--badge-warn-border); }
+  /* DE-ESCALATED = operator relaxed it -- OBSERVING variant (slate, solid). */
+  .ar-deescalated { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+
+  .dirtext { font-size: 11.5px; color: var(--text-dim); }
+  .dirtext b { color: var(--text-bright); font-variant-numeric: tabular-nums; font-family: var(--ff-mono); }
+
+  /* middle column -- identity + oversized rate (the one number that earns size) */
+  .lane__mid { padding: 16px 18px; display: flex; align-items: center; gap: 18px; min-width: 0; }
+  .rate {
+    font-family: var(--ff-mono); font-variant-numeric: tabular-nums;
+    font-size: 38px; line-height: 0.95; font-weight: 800; letter-spacing: -0.02em;
+    color: var(--text-bright); flex: 0 0 auto;
+  }
+  .lane.is-hot .rate { color: var(--accent); text-shadow: 0 0 22px var(--accent-glow); }
+  .rate small { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
+    color: var(--text-ui); text-transform: uppercase; margin-top: 4px; }
+  .ident { min-width: 0; }
+  .ident__id {
+    font-family: var(--ff-mono); font-size: 13.5px; color: var(--text-bright);
+    letter-spacing: 0.02em;
+  }
+  .ident__dim { font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-ui); }
+  .ident__sample {
+    margin-top: 6px; font-size: 12px; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 38ch;
+  }
+  .ident__sample .q { color: var(--text); font-style: italic; }
+
+  /* right rail -- hairline mini-bar + literal "14/14" (bar never alone) */
+  .lane__rail {
+    padding: 16px 18px; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; justify-content: center; gap: 8px;
+  }
+  .lane.is-hot .lane__rail { border-left-color: rgba(245,158,11,0.22); }
+  .frac {
+    font-family: var(--ff-mono); font-variant-numeric: tabular-nums;
+    font-size: 14px; color: var(--text-bright); letter-spacing: 0.02em;
+  }
+  .frac small { color: var(--text-ui); font-size: 11px; }
+  .minibar {
+    position: relative; height: 8px; border-radius: 999px;
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border); overflow: hidden;
+  }
+  .minibar__fill {
+    position: absolute; inset: 0 auto 0 0; height: 100%;
+    background: linear-gradient(90deg, var(--accent), #ffce7a);
+    border-right: 1px solid rgba(0,0,0,0.4);
+  }
+  .lane.is-cool .minibar__fill { background: var(--text-ui); }
+  .rail__n { font-size: 10.5px; color: var(--text-dim); }
+  .lane__chev {
+    position: absolute; right: 12px; top: 12px; color: var(--text-ui);
+    transition: transform .16s; font-size: 12px;
+  }
+  .lane[aria-expanded="true"] .lane__chev { transform: rotate(90deg); color: var(--accent); }
+
+  /* ----------------------------------------------------------------------
+     EVIDENCE DRAWER (expanded per cluster)
+  ---------------------------------------------------------------------- */
+  .drawer {
+    margin: -4px 4px 12px; padding: 0;
+    border: 1px solid var(--border-hi); border-top: 0;
+    border-radius: 0 0 9px 9px;
+    background: var(--bg-row-alt);
+    overflow: hidden;
+  }
+  html[data-motion="allow"] .drawer { animation: drawerIn 150ms ease-out; }
+  @keyframes drawerIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+  .drawer__head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+  }
+  .drawer__head h3 { margin: 0; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-ui); font-weight: 700; }
+  .drawer__count { font-size: 11.5px; color: var(--text-dim); font-family: var(--ff-mono); }
+  .drawer__spacer { flex: 1 1 auto; }
+
+  .ev { display: flex; flex-direction: column; }
+  .ev__row {
+    display: grid; grid-template-columns: 150px auto 1fr; gap: 12px; align-items: baseline;
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+  }
+  .ev__row:last-child { border-bottom: 0; }
+  .ev__ts { font-family: var(--ff-mono); font-size: 11px; color: var(--text-ui); }
+  .ev__flow { font-family: var(--ff-mono); font-size: 11.5px; color: var(--text-bright); white-space: nowrap; }
+  .ev__flow .arr { color: var(--text-ui); padding: 0 3px; }
+  .ev__flow .to { color: var(--accent); }
+  .ev__body { min-width: 0; }
+  .ev__content { font-size: 12.5px; color: var(--text); }
+  .ev__note { margin-top: 3px; font-size: 11.5px; color: var(--text-dim); }
+  .ev__note .lbl { color: var(--text-ui); font-family: var(--ff-mono); }
+  .ev__note.is-empty { font-style: italic; color: var(--text-ui); }
+  .ev__sess { font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-ui); }
+
+  .drawer__foot {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 18px; background: var(--bg-card);
+    border-top: 1px solid var(--border);
+  }
+  .drawer__advisory { font-size: 11.5px; color: var(--text-dim); flex: 1 1 240px; min-width: 200px; }
+  .drawer__advisory b { color: var(--text-bright); }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--ff-system); font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.02em; border-radius: 6px; padding: 8px 14px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+    transition: color .16s, border-color .16s, background .16s;
+  }
+  .btn:hover { color: var(--text-bright); border-color: var(--border-hi); background: var(--accent-dim); }
+  .btn:focus-visible { outline: 2px solid var(--focus-ring-color); outline-offset: 2px; }
+  .btn--primary { color: #1a1206; background: var(--accent); border-color: var(--badge-ar-border); font-weight: 700; }
+  .btn--primary:hover { color: #1a1206; background: #ffb01f; }
+  .btn svg { width: 14px; height: 14px; }
+
+  /* draft markdown reveal */
+  .draft {
+    margin: 0 18px 16px; border: 1px solid var(--border-hi); border-radius: 8px;
+    overflow: hidden; background: var(--bg-card);
+  }
+  html[data-motion="allow"] .draft { animation: drawerIn 150ms ease-out; }
+  .draft__head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; border-bottom: 1px solid var(--border); background: var(--bg-row);
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-ui); letter-spacing: 0.04em;
+  }
+  .draft__head .ar-badge { margin-left: auto; }
+  .draft pre {
+    margin: 0; padding: 14px 16px; font-family: var(--ff-mono); font-size: 12px;
+    line-height: 1.55; color: var(--text); white-space: pre-wrap; word-break: break-word;
+  }
+  .draft__foot { display: flex; gap: 9px; padding: 0 16px 14px; flex-wrap: wrap; }
+
+  /* OFF state -- the gate. */
+  .offstate {
+    padding: 40px 24px; text-align: center; color: var(--text-dim);
+  }
+  .offstate b { color: var(--text-bright); }
+  .offstate code { font-family: var(--ff-mono); color: var(--accent); }
+
+  .footnote {
+    margin: 22px auto 0; max-width: 940px; font-size: 11px; color: var(--text-ui);
+    line-height: 1.7;
+  }
+  .footnote code { color: var(--text-dim); }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion="allow"]) .drawer,
+    html:not([data-motion="allow"]) .draft { animation: none; }
+  }
+  @media (max-width: 760px) {
+    .lane { grid-template-columns: 1fr; }
+    .lane__gutter { border-right: 0; border-bottom: 1px solid var(--border); }
+    .lane__rail { border-left: 0; border-top: 1px solid var(--border); }
+    .ev__row { grid-template-columns: 1fr; }
+    .pane__head { grid-template-columns: 1fr; }
+    .pane__ctrl { align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="stage-bar">
+      <span class="stage-bar__crumb">Frame A <b>/ Reflective</b> / Regret Mining</span>
+      <span class="stage-bar__spacer"></span>
+      <span class="stage-bar__note">mockup -- previews the pane before any code is written</span>
+    </div>
+
+    <section class="pane" id="pane" aria-labelledby="pane-title">
+      <!-- HEADER: title + BETA pill + inline on/off toggle -->
+      <div class="pane__head">
+        <div class="pane__titlewrap">
+          <p class="pane__kicker">Operator-override feedback loop</p>
+          <h1 class="pane__title" id="pane-title">Regret <span class="grad">Mining</span></h1>
+          <p class="pane__sub">
+            Where governance and you keep disagreeing -- ranked, so you can fix the
+            worst cluster ONCE as advisory bias instead of re-correcting it forever.
+            Post-hoc and read-only; never on the verdict hot path.
+          </p>
+        </div>
+        <div class="pane__ctrl">
+          <span class="beta-pill">
+            <span class="beta-pill__dot"></span>
+            BETA -- default OFF, toggled in Settings &gt; BETA features
+          </span>
+          <span class="switch">
+            <span class="switch__label">Regret Mining <b id="state-word">ON</b></span>
+            <button
+              id="toggle"
+              class="switch__btn"
+              role="switch"
+              aria-checked="true"
+              aria-label="Toggle Regret Mining beta feature"
+            >
+              <span class="switch__knob" aria-hidden="true"></span>
+            </button>
+          </span>
+        </div>
+      </div>
+
+      <!-- ON content (gated). When OFF, #on-content is hidden, #off-content shows. -->
+      <div id="on-content">
+        <!-- META STRIP: window, polarity self-exclusion, demo-data, totals -->
+        <div class="metastrip">
+          <span class="chip"><span class="chip__dot"></span>window <b>30d</b></span>
+          <span class="chip"><span class="chip__dot"></span>overrides <b>41</b></span>
+          <span class="chip chip--polarity" title="Polarity self-exclusion (G2): SM never mines its own session.">
+            <span class="chip__dot"></span>excluded <b>3</b> SM-self rows
+          </span>
+          <span class="metastrip__spacer"></span>
+          <span class="chip chip--demo" id="demo-chip" title="Rendered when /api/governance/regret returns mock:true (fresh DB / server down).">
+            <span class="chip__dot"></span>DEMO DATA -- mock:true
+          </span>
+        </div>
+
+        <!-- standing read-only advisory line -->
+        <div class="advisory">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          <span>
+            <b>Advisory only.</b> Drafting a candidate never changes a verdict, never
+            writes the decisions table, and never bypasses the HITL gate. The bias
+            write-back is deferred out of this read-only v1.
+          </span>
+        </div>
+
+        <!-- THE REGRET LEDGER -->
+        <div class="ledger">
+          <div class="ledger__caption">
+            <h2>Divergence clusters</h2>
+            <span class="rank-hint">ranked by override-rate x volume -- hottest on top</span>
+          </div>
+          <div id="lanes"></div>
+        </div>
+      </div>
+
+      <!-- OFF content -->
+      <div id="off-content" hidden>
+        <div class="offstate">
+          <p><b>Regret Mining is OFF.</b></p>
+          <p>
+            When OFF this pane renders nothing and registers no poller, SSE handler,
+            or timer -- zero runtime cost. Flip it ON in
+            <code>Settings &gt; BETA features</code> (group: hitl), or use the toggle
+            above to preview.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <p class="footnote">
+      Mock endpoints previewed: <code>GET /api/governance/regret</code> and
+      <code>GET /api/governance/regret/{cluster_key}/evidence</code> -- both additive
+      read-only. Cluster identity (matched_hash / routing layer), the governed-target
+      slug, and override directions all render FROM DATA -- domain-agnostic, no
+      monitored-project vocabulary baked in. Polarity: rows where
+      <code>project_slug IN {streamManager}</code> or <code>session_id == self</code>
+      are excluded server-side (shown as "excluded N SM-self rows").
+    </p>
+  </div>
+
+  <!-- polite live region for the read-only draft outcome (assistive tech) -->
+  <p class="sr-only" role="status" aria-live="polite" id="live"></p>
+
+<script>
+(function () {
+  "use strict";
+
+  // ----------------------------------------------------------------------
+  // MOCK DATA -- verbatim from the vetted mockDataSpec (mock:true path).
+  // ----------------------------------------------------------------------
+  var REGRET = {
+    generated_at: "2026-06-11T09:18:04Z",
+    window_days: 30,
+    excluded_self: 3,
+    own_session_id: "sess-sm-self-0001",
+    total_overrides: 41,
+    mock: true,
+    clusters: [
+      { cluster_key: "h:9f2c1a", label_dim: "matched_hash", identity: "9f2c1a", layer: 2,
+        n_decisions: 14, n_overridden: 14, override_rate: 1.0,
+        dominant_direction: "ESCALATED", direction_label: "you ESCALATED 14/14",
+        from_action: "SUGGEST", to_action: "APPROVE",
+        sample_content: "reuse the prior credential pattern", project_slug: "demo-target" },
+      { cluster_key: "h:3b7e40", label_dim: "matched_hash", identity: "3b7e40", layer: 3,
+        n_decisions: 11, n_overridden: 8, override_rate: 0.73,
+        dominant_direction: "DE-ESCALATED", direction_label: "you DE-ESCALATED 8/11",
+        from_action: "INTERVENE", to_action: "DISMISS",
+        sample_content: "force-push to the shared branch", project_slug: "demo-target" },
+      { cluster_key: "layer:1", label_dim: "layer", identity: "L1", layer: 1,
+        n_decisions: 22, n_overridden: 6, override_rate: 0.27,
+        dominant_direction: "ESCALATED", direction_label: "you ESCALATED 6/22",
+        from_action: "GUIDE", to_action: "APPROVE",
+        sample_content: "rm -rf the build cache", project_slug: "demo-target" }
+    ]
+  };
+
+  // /evidence -- keyed by cluster_key. The spec gives one detailed example;
+  // the other clusters fall back to a synthesized-from-cluster mock so every
+  // lane is clickable in the preview.
+  var EVIDENCE = {
+    "h:9f2c1a": {
+      cluster_key: "h:9f2c1a", mock: true,
+      overrides: [
+        { decision_id: "d-7741", timestamp: "2026-06-11T09:14:02Z", original_action: "SUGGEST", override_action: "APPROVE", note: "fine in this repo", session_id: "sess-demo-7f3a", project_slug: "demo-target", content: "reuse the prior credential pattern" },
+        { decision_id: "d-7702", timestamp: "2026-06-10T17:51:20Z", original_action: "SUGGEST", override_action: "APPROVE", note: null, session_id: "sess-demo-7f3a", project_slug: "demo-target", content: "reuse the prior credential pattern" }
+      ],
+      draft_markdown:
+        "## Advisory-bias candidate -- matched_hash 9f2c1a\n" +
+        "- governance: SUGGEST | operator: APPROVE | 14/14 (100%)\n" +
+        "- proposed: raise advisory bias toward APPROVE for this shape (HITL gate unchanged)\n" +
+        "- NEVER auto-applies; operator review required.\n"
+    }
+  };
+
+  // Synthesize a minimal evidence payload for clusters the spec did not
+  // enumerate, so the preview stays fully clickable (mock fallback).
+  function evidenceFor(cluster) {
+    if (EVIDENCE[cluster.cluster_key]) return EVIDENCE[cluster.cluster_key];
+    var pct = Math.round(cluster.override_rate * 100);
+    return {
+      cluster_key: cluster.cluster_key, mock: true,
+      overrides: [
+        { decision_id: "d-" + cluster.identity + "-a", timestamp: "2026-06-11T08:40:10Z",
+          original_action: cluster.from_action, override_action: cluster.to_action, note: "recurring -- same shape",
+          session_id: "sess-demo-7f3a", project_slug: cluster.project_slug, content: cluster.sample_content },
+        { decision_id: "d-" + cluster.identity + "-b", timestamp: "2026-06-10T22:05:55Z",
+          original_action: cluster.from_action, override_action: cluster.to_action, note: null,
+          session_id: "sess-demo-7f3a", project_slug: cluster.project_slug, content: cluster.sample_content }
+      ],
+      draft_markdown:
+        "## Advisory-bias candidate -- " + cluster.label_dim + " " + cluster.identity + "\n" +
+        "- governance: " + cluster.from_action + " | operator: " + cluster.to_action +
+        " | " + cluster.n_overridden + "/" + cluster.n_decisions + " (" + pct + "%)\n" +
+        "- proposed: raise advisory bias toward " + cluster.to_action + " for this shape (HITL gate unchanged)\n" +
+        "- NEVER auto-applies; operator review required.\n"
+    };
+  }
+
+  // ----------------------------------------------------------------------
+  // helpers
+  // ----------------------------------------------------------------------
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function pct(rate) { return Math.round(rate * 100) + "%"; }
+
+  // ESCALATED (operator made it stricter) -> WARN variant; DE-ESCALATED -> OBSERVING.
+  function dirBadge(dir) {
+    if (dir === "ESCALATED") return { cls: "ar-escalated", label: "ESCALATED" };
+    return { cls: "ar-deescalated", label: "DE-ESCALATED" };
+  }
+
+  // hotness rank = override_rate * volume; the top one is "hot".
+  function rankScore(c) { return c.override_rate * c.n_decisions; }
+
+  var lanesEl = document.getElementById("lanes");
+  var liveEl = document.getElementById("live");
+
+  function render() {
+    var clusters = REGRET.clusters.slice().sort(function (a, b) {
+      return rankScore(b) - rankScore(a);
+    });
+    var topScore = clusters.length ? rankScore(clusters[0]) : 0;
+
+    var html = "";
+    clusters.forEach(function (c, i) {
+      var badge = dirBadge(c.dominant_direction);
+      var isHot = i === 0;
+      var isCool = rankScore(c) < topScore * 0.5;
+      var fillPct = Math.round(c.override_rate * 100);
+      var laneId = "lane-" + c.cluster_key.replace(/[^a-z0-9]/gi, "");
+
+      html +=
+        '<button class="lane' + (isHot ? " is-hot" : "") + (isCool ? " is-cool" : "") + '"' +
+          ' id="' + laneId + '"' +
+          ' type="button"' +
+          ' aria-expanded="false"' +
+          ' aria-controls="' + laneId + '-drawer"' +
+          ' data-key="' + esc(c.cluster_key) + '"' +
+          ' data-idx="' + i + '">' +
+
+          // left gutter -- paired direction badge + from->to flow
+          '<div class="lane__gutter">' +
+            '<span class="ar-badge ' + badge.cls + '" role="status" aria-label="' + badge.label + ' override direction">' +
+              '<span class="ar-dot" aria-hidden="true"></span><span>' + badge.label + '</span>' +
+            '</span>' +
+            '<span class="flow"><span class="from">' + esc(c.from_action) + '</span>' +
+              '<span class="arr">--&gt;</span><span class="to">' + esc(c.to_action) + '</span></span>' +
+            '<span class="dirtext">' + esc(c.direction_label) + '</span>' +
+          '</div>' +
+
+          // middle -- oversized rate + identity (FROM DATA)
+          '<div class="lane__mid">' +
+            '<span class="rate">' + pct(c.override_rate) + '<small>override rate</small></span>' +
+            '<span class="ident">' +
+              '<span class="ident__id">' + esc(c.identity) + '</span> ' +
+              '<span class="ident__dim">(' + esc(c.label_dim) + ' -- layer ' + esc(c.layer) + ')</span>' +
+              '<div class="ident__sample">e.g. <span class="q">"' + esc(c.sample_content) + '"</span></div>' +
+            '</span>' +
+          '</div>' +
+
+          // right rail -- literal fraction + hairline mini-bar (bar never alone)
+          '<div class="lane__rail">' +
+            '<span class="frac">' + c.n_overridden + '/' + c.n_decisions +
+              ' <small>overridden</small></span>' +
+            '<span class="minibar" role="img" aria-label="' + c.n_overridden + ' of ' +
+              c.n_decisions + ' overridden">' +
+              '<span class="minibar__fill" style="width:' + fillPct + '%"></span>' +
+            '</span>' +
+            '<span class="rail__n">' + c.n_decisions + ' decisions' +
+              (isHot ? ' -- hottest cluster' : '') + '</span>' +
+          '</div>' +
+
+          '<span class="lane__chev" aria-hidden="true">&#9656;</span>' +
+        '</button>' +
+
+        // drawer slot (filled lazily on expand)
+        '<div class="drawer-slot" id="' + laneId + '-drawer" role="region"' +
+          ' aria-label="Evidence for cluster ' + esc(c.identity) + '"></div>';
+    });
+    lanesEl.innerHTML = html;
+    wireLanes(clusters);
+  }
+
+  function drawerHtml(cluster) {
+    var ev = evidenceFor(cluster);
+    var rows = ev.overrides.map(function (o) {
+      var noteHtml = o.note
+        ? '<div class="ev__note"><span class="lbl">note:</span> ' + esc(o.note) + '</div>'
+        : '<div class="ev__note is-empty">no operator note</div>';
+      return '<div class="ev__row">' +
+          '<span class="ev__ts">' + esc(o.timestamp) + '</span>' +
+          '<span class="ev__flow"><span class="from">' + esc(o.original_action) + '</span>' +
+            '<span class="arr">--&gt;</span><span class="to">' + esc(o.override_action) + '</span></span>' +
+          '<span class="ev__body">' +
+            '<div class="ev__content">"' + esc(o.content) + '"</div>' +
+            noteHtml +
+            '<div class="ev__sess">' + esc(o.session_id) + ' -- ' + esc(o.project_slug) + ' -- ' + esc(o.decision_id) + '</div>' +
+          '</span>' +
+        '</div>';
+    }).join("");
+
+    return '<div class="drawer">' +
+        '<div class="drawer__head">' +
+          '<h3>Evidence</h3>' +
+          '<span class="drawer__count">' + ev.overrides.length + ' override' +
+            (ev.overrides.length === 1 ? '' : 's') + ' shown -- ' + cluster.n_overridden +
+            '/' + cluster.n_decisions + ' total</span>' +
+          '<span class="drawer__spacer"></span>' +
+          (ev.mock ? '<span class="ar-badge ar-escalated" role="status" aria-label="DEMO DATA mock"><span class="ar-dot" aria-hidden="true"></span><span>DEMO DATA</span></span>' : '') +
+        '</div>' +
+        '<div class="ev">' + rows + '</div>' +
+        '<div class="drawer__foot">' +
+          '<span class="drawer__advisory"><b>Read-only.</b> "Draft as proposal" composes' +
+            ' operator-facing markdown you can copy or download. It writes nothing' +
+            ' server-side and never changes a verdict.</span>' +
+          '<button class="btn btn--primary" type="button" data-act="draft">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+              '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>' +
+            'Draft as proposal</button>' +
+        '</div>' +
+        '<div class="draft-slot"></div>' +
+      '</div>';
+  }
+
+  function draftHtml(cluster) {
+    var ev = evidenceFor(cluster);
+    return '<div class="draft">' +
+        '<div class="draft__head">advisory-bias proposal stub -- operator-facing markdown' +
+          '<span class="ar-badge ar-deescalated" role="status" aria-label="read-only stub">' +
+            '<span class="ar-dot" aria-hidden="true"></span><span>READ-ONLY STUB</span></span>' +
+        '</div>' +
+        '<pre>' + esc(ev.draft_markdown) + '</pre>' +
+        '<div class="draft__foot">' +
+          '<button class="btn" type="button" data-act="copy">Copy markdown</button>' +
+          '<button class="btn" type="button" data-act="download">Download .md</button>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function wireLanes(clusters) {
+    var laneEls = Array.prototype.slice.call(lanesEl.querySelectorAll(".lane"));
+
+    function clusterFor(laneEl) {
+      var key = laneEl.getAttribute("data-key");
+      for (var i = 0; i < clusters.length; i++) { if (clusters[i].cluster_key === key) return clusters[i]; }
+      return null;
+    }
+
+    function toggleLane(laneEl) {
+      var expanded = laneEl.getAttribute("aria-expanded") === "true";
+      var slot = document.getElementById(laneEl.getAttribute("aria-controls"));
+      if (expanded) {
+        laneEl.setAttribute("aria-expanded", "false");
+        slot.innerHTML = "";
+      } else {
+        var cluster = clusterFor(laneEl);
+        laneEl.setAttribute("aria-expanded", "true");
+        slot.innerHTML = drawerHtml(cluster);
+        wireDrawer(slot, cluster);
+      }
+    }
+
+    laneEls.forEach(function (laneEl, idx) {
+      // roving tabindex: only the active lane is in the Tab order.
+      laneEl.tabIndex = idx === 0 ? 0 : -1;
+
+      laneEl.addEventListener("click", function () { toggleLane(laneEl); });
+
+      laneEl.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleLane(laneEl); return; }
+        if (e.key === "Escape") {
+          if (laneEl.getAttribute("aria-expanded") === "true") { e.preventDefault(); toggleLane(laneEl); }
+          return;
+        }
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          var dir = e.key === "ArrowDown" ? 1 : -1;
+          var next = laneEls[idx + dir];
+          if (!next) return;
+          laneEls.forEach(function (l) { l.tabIndex = -1; });
+          next.tabIndex = 0;
+          next.focus();
+        }
+      });
+    });
+  }
+
+  function wireDrawer(slot, cluster) {
+    var draftBtn = slot.querySelector('[data-act="draft"]');
+    var draftSlot = slot.querySelector(".draft-slot");
+
+    draftBtn.addEventListener("click", function () {
+      if (draftSlot.firstChild) { draftSlot.innerHTML = ""; return; }
+      draftSlot.innerHTML = draftHtml(cluster);
+      var ev = evidenceFor(cluster);
+
+      var copyBtn = draftSlot.querySelector('[data-act="copy"]');
+      var dlBtn = draftSlot.querySelector('[data-act="download"]');
+
+      function announce(verb) {
+        liveEl.textContent = "Drafted advisory-bias candidate for cluster " +
+          cluster.identity + " -- " + verb + ". Nothing was written server-side.";
+      }
+
+      copyBtn.addEventListener("click", function () {
+        var done = function () { announce("copied"); flash(copyBtn, "Copied"); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(ev.draft_markdown).then(done, done);
+        } else { done(); }
+      });
+
+      dlBtn.addEventListener("click", function () {
+        var blob = new Blob([ev.draft_markdown], { type: "text/markdown" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "advisory-bias-" + cluster.cluster_key.replace(/[^a-z0-9]/gi, "-") + ".md";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        announce("downloaded");
+        flash(dlBtn, "Downloaded");
+      });
+
+      // move focus into the freshly drafted stub for keyboard users
+      copyBtn.focus();
+    });
+  }
+
+  function flash(btn, word) {
+    var orig = btn.textContent;
+    btn.textContent = word;
+    setTimeout(function () { btn.textContent = orig; }, 1400);
+  }
+
+  // ----------------------------------------------------------------------
+  // ON/OFF toggle (gate) -- client-side only.
+  // ----------------------------------------------------------------------
+  var toggle = document.getElementById("toggle");
+  var onContent = document.getElementById("on-content");
+  var offContent = document.getElementById("off-content");
+  var stateWord = document.getElementById("state-word");
+
+  function applyState(on) {
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+    stateWord.textContent = on ? "ON" : "OFF";
+    onContent.hidden = !on;
+    offContent.hidden = on;
+    if (on) { render(); } else { lanesEl.innerHTML = ""; }
+  }
+  toggle.addEventListener("click", function () {
+    applyState(toggle.getAttribute("aria-checked") !== "true");
+  });
+
+  // initial: ON (so the operator sees the feature with realistic data)
+  applyState(true);
+})();
+</script>
+</body>
+</html>

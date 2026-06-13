@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "ambient-soak-task" (#2: Ambient Soak Task --
+  continuous polarity validation via a background Cron run, surfaced as a calm
+  AMBIENT footer badge + a one-click read-only history drawer). Self-contained,
+  hand-reviewable. NO external assets / CDNs / fonts -- system stack only.
+  ASCII-only (no smart quotes, no em-dashes -- written as "--", no box-drawing).
+
+  PURPOSE (directive #2): let the operator confirm the UI approach BEFORE any
+  code is written. The build is NEEDS-AMENDMENT: the original proposal declared
+  a new ambient_soak_coverage_gap bus envelope on the FROZEN message_bus.py. The
+  EDITORIAL amendment (Held-2 / soak-panel precedent) REMOVES that envelope and
+  re-frames the polarity verdict as a READ attribute of each JSONL record in
+  ~/.sm-ambient/, surfaced by two additive read endpoints
+  (GET /api/ambient/soak-history + GET /api/ambient/soak-status). A small amber
+  footnote in-drawer states this so the operator knows the UI is APPROVABLE but
+  the build is GATED until the amendment lands.
+
+  Real obsidian / phosphor / paper tokens lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css. Drawer idiom mirrors
+  CoverageAnalyzer.svelte / SettingsDrawer.svelte (role=dialog, aria-modal,
+  Escape-close, focus-trap, focus-restore). Paired M4 label+color badges
+  everywhere (color is NEVER the only signal -- the WORD survives grayscale and
+  screen-reader). Mock data drawn verbatim from the brief's mockDataSpec.
+
+  ADR-18 MUST floor honoured:
+    - M1: NOT a fourth frame. The ambient verdict lives as a calm chip in the
+      AppShell footer's soak corner (ambient chrome), companioned by a drawer.
+    - M2: ambient_soak is NOT on the foreground allow-list (only desktop_pause /
+      governance_negative_regression / static-rule may foreground). The WARN
+      state is a BADGE-IN-PLACE -- it never pulses, never auto-foregrounds.
+    - M4: every state renders its LITERAL word (AMBIENT OK / POLARITY CHECK /
+      PASS / FAIL) beside any color.
+    - M16: session_id / project_slug are GENERIC placeholders rendered FROM
+      DATA -- never monitored-project vocabulary.
+    - M17: the chip is a real <button>; the drawer is role=dialog aria-modal,
+      Escape-closes, focus moved in + restored, focus-trapped; each history row
+      is a keyboard-operable <button>.
+
+  G2 polarity: the read is polarity-filtered server-side (project_slug NOT IN
+  {streamManager} AND session_id != SM_OWN_SESSION_ID). excluded_self is
+  surfaced VISIBLE in the drawer meta -- self-exclusion is a feature, not a
+  silent filter. The pane NEVER spawns a soak subprocess in-process: ambient
+  runs are an operator/main-thread Cron long-task op (soak-panel S6b deferral).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- client-side defense-in-depth self-exclude tags (G2): SM's own identity -->
+<meta name="sm-own-session-id" content="sm-self-0000-bridge">
+<meta name="sm-own-project-slugs" content="streamManager">
+<title>Ambient Soak Task -- continuous polarity validation (BETA mockup)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired-badge tokens (theme-invariant per M4, from theme.css :root).
+       FG values are the AA-hardened ink values used by Badge.svelte styles --
+       NOT the raw token FG (e.g. WARN ink is #9a3412, not #ea580c). */
+    --badge-ar-fg:#b45309; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+    --badge-decided-fg:#15803d; --badge-decided-bg:#dcfce7; --badge-decided-border:#86efac;
+    --badge-blocked-fg:#b91c1c; --badge-blocked-bg:#fee2e2; --badge-blocked-border:#dc2626;
+    --badge-warn-fg:#9a3412; --badge-warn-bg:#ffedd5; --badge-warn-border:#ea580c;
+
+    --space-2:4px; --space-3:6px; --space-4:10px; --space-5:14px; --space-6:22px; --space-7:36px;
+    --radius-sharp:2px; --radius-soft:4px;
+    --focus-ring-color:#d97706;
+    --t-calm: 180ms ease;
+  }
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 82% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    min-height:100%;
+    padding: 36px 24px 0;
+  }
+  .stage { width:100%; max-width: 1040px; margin:0 auto; padding-bottom:120px; }
+
+  /* ---- page chrome (mockup-only legend + theme switcher) ------------------ */
+  .legend { display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    font-size:26px; color:var(--text-bright);
+  }
+  .legend p { margin:5px 0 0; font-size:13px; color:var(--text-dim); max-width:64ch; line-height:1.55; }
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; flex:0 0 auto; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+  .themes button:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:-2px; }
+
+  /* ---- the dashboard topbar (mock chrome -- header strip) ----------------- */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between; gap:14px;
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    padding:12px 18px; margin-bottom:14px;
+  }
+  .topbar__left { display:flex; align-items:center; gap:12px; min-width:0; }
+  .brand { font-family:var(--font-h); letter-spacing:.14em; text-transform:uppercase;
+           color:var(--text-bright); font-size:16px; font-weight:700; }
+  .brand small { color:var(--text-dim); font-weight:500; letter-spacing:.06em; font-size:11px; }
+  /* the header-level BETA pill (required: shows the gated nature on screen) */
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg);
+    border:1px dashed var(--badge-warn-border); border-radius:999px; padding:4px 10px;
+  }
+  .topbar__right { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  .chrome-btn {
+    appearance:none; background:transparent; cursor:pointer;
+    border:1px solid var(--border); border-radius:var(--radius-sharp);
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.1em; text-transform:uppercase; padding:7px 12px; line-height:1;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .chrome-btn:hover { color:var(--accent); border-color:var(--border-hi); }
+  .chrome-btn:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+
+  /* ---- a dimmed three-frame floor (M1: 3 frames are inviolable) ----------- */
+  .floor {
+    display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;
+    opacity:.5; pointer-events:none;
+  }
+  .floor .col {
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    min-height:200px; padding:14px;
+  }
+  .floor .col h3 { margin:0 0 8px; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+                   color:var(--text-dim); font-weight:700; }
+  .floor .skel { height:14px; background:var(--bg-row-alt); border-radius:3px; margin:7px 0; }
+  .floor .skel.s2 { width:78%; } .floor .skel.s3 { width:64%; } .floor .skel.s4 { width:88%; }
+
+  /* ---- the AppShell FOOTER strip the AMBIENT badge lives in --------------- */
+  .footer {
+    margin-top:14px;
+    display:flex; align-items:center; justify-content:space-between; gap:14px;
+    background:var(--bg-card); border:1px solid var(--border); border-radius:6px;
+    padding:10px 18px; flex-wrap:wrap;
+  }
+  .footer__left { display:flex; align-items:center; gap:14px; min-width:0; flex-wrap:wrap; }
+  .footer__stat { font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+                  font-variant-numeric:tabular-nums; }
+  .footer__stat b { color:var(--text-bright); font-weight:600; }
+  .footer__corner { display:flex; align-items:center; gap:10px; flex:0 0 auto; }
+  .corner-label { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-dim); }
+
+  /* ===== the calm AMBIENT badge (a real <button>, the quietest thing at rest)
+     It is a hairline-bordered chip reading a monospace age. The DOT is
+     decorative; the WORD is the signal (M4). It does NOT pulse and does NOT
+     auto-foreground -- still water. ===== */
+  .ambient-chip {
+    appearance:none; cursor:pointer; text-align:left;
+    display:inline-flex; align-items:center; gap:9px;
+    border-radius:var(--radius-sharp); padding:6px 12px; line-height:1.1;
+    font-family:var(--ff-system);
+    transition: border-color var(--t-calm), background var(--t-calm), color var(--t-calm);
+  }
+  .ambient-chip:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .ambient-chip .ac-dot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .ambient-chip .ac-word { font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+  .ambient-chip .ac-age { font-family:var(--font-d); font-size:12px; letter-spacing:.02em;
+                          color:var(--text-dim); font-variant-numeric:tabular-nums; }
+  /* OBSERVING (healthy / idle) -- slate, hairline border, no motion (still water) */
+  .ambient-chip.ok {
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+  }
+  .ambient-chip.ok:hover { border-color:var(--accent); }
+  /* WARN (a polarity_violation OR coverage_gap in the latest run) -- amber-orange,
+     dashed border. WARN, NOT ACTION REQUIRED: it must NOT pulse (M2). */
+  .ambient-chip.warn {
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg); border:1px dashed var(--badge-warn-border);
+  }
+  .ambient-chip.warn:hover { border-color:var(--badge-warn-fg); }
+  .ambient-chip.warn .ac-age { color:var(--badge-warn-fg); }
+
+  /* ---- the read-only HISTORY drawer (mirrors CoverageAnalyzer .panel) ----- */
+  .scrim {
+    position:fixed; inset:0; background:rgba(8,10,12,.55); backdrop-filter:blur(1px);
+    z-index:80;
+  }
+  [data-theme="paper"] .scrim { background:rgba(120,110,96,.45); }
+  .panel {
+    position:fixed; top:0; right:0; bottom:0; width:min(520px,96vw); z-index:81;
+    display:flex; flex-direction:column;
+    background:var(--bg-card);
+    border-left:1px solid var(--border-hi);
+    box-shadow:-18px 0 48px -24px rgba(0,0,0,.7);
+    color:var(--text); font-family:var(--ff-system);
+    overflow:hidden;
+  }
+  .panel[hidden], .scrim[hidden] { display:none; }
+
+  .panel__head {
+    flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between;
+    gap:12px; padding:var(--space-5) var(--space-6) var(--space-4);
+    border-bottom:1px solid var(--border);
+  }
+  .panel__titlewrap { min-width:0; }
+  .panel__title {
+    margin:0; font-family:var(--font-h); font-size:18px; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--text-bright);
+  }
+  .panel__sub { margin:3px 0 0; font-size:11px; letter-spacing:.04em; color:var(--text-dim); }
+  .panel__head .beta-pill { margin-top:8px; }
+  .panel__close {
+    appearance:none; background:transparent; border:1px solid var(--border);
+    border-radius:var(--radius-sharp); color:var(--text-ui);
+    width:28px; height:28px; line-height:1; font-size:14px; cursor:pointer; flex:0 0 auto;
+    display:inline-flex; align-items:center; justify-content:center;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .panel__close:hover { color:var(--accent); border-color:var(--border-hi); }
+  .panel__close:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+
+  /* inline on/off toggle so the operator SEES the gated on/off behaviour */
+  .gaterow {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px var(--space-6); border-bottom:1px solid var(--border);
+    background:var(--bg-row-alt);
+  }
+  .gaterow__label { font-size:11px; letter-spacing:.04em; color:var(--text-dim); }
+  .gaterow__label b { color:var(--text-bright); font-weight:600; }
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border);
+    transition:background var(--t-calm), border-color var(--t-calm); flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform var(--t-calm), background var(--t-calm);
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track { outline:2px solid var(--focus-ring-color); outline-offset:2px; }
+  .switch__text { min-width:3ch; font-family:var(--font-d); font-size:13px; letter-spacing:.06em; color:var(--text-dim); }
+  .switch__text[data-on="true"] { color:var(--accent); }
+
+  .panel__body {
+    flex:1 1 auto; overflow-y:auto;
+    padding:var(--space-5) var(--space-6) var(--space-7);
+    display:flex; flex-direction:column; gap:var(--space-5);
+  }
+
+  /* OFF state -- nothing registered while the flag is off (no pollers / no SSE) */
+  .offstate {
+    border:1px dashed var(--border); border-radius:var(--radius-soft);
+    padding:22px; text-align:center; color:var(--text-dim); font-size:13px; line-height:1.6;
+  }
+  .offstate b { color:var(--text-bright); }
+
+  /* ---- (1) the muted top strip: live cadence sentence + BETA annotation --- */
+  .cadence {
+    border:1px solid var(--border); border-radius:var(--radius-soft);
+    padding:13px 15px; background:var(--bg-row-alt);
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .cadence__verdict { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  /* the in-drawer verdict badge -- same M4 paired scheme as the footer chip */
+  .vbadge {
+    display:inline-flex; align-items:center; gap:8px;
+    font-family:var(--ff-system); font-size:13px; font-weight:800; letter-spacing:.06em;
+    text-transform:uppercase; padding:6px 12px; border-radius:var(--radius-sharp); line-height:1;
+  }
+  .vbadge .dot { width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .vbadge.ok   { color:var(--badge-obs-fg);  background:var(--badge-obs-bg);  border:1px solid var(--badge-obs-border); font-weight:700; }
+  .vbadge.warn { color:var(--badge-warn-fg); background:var(--badge-warn-bg); border:1px dashed var(--badge-warn-border); }
+  .cadence__sentence { font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+                       line-height:1.55; font-variant-numeric:tabular-nums; }
+  .cadence__sentence b { color:var(--text-bright); font-weight:600; }
+  .cadence__meta {
+    font-family:var(--font-d); font-size:10px; color:var(--text-dim);
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    border-top:1px dashed var(--border); padding-top:8px; font-variant-numeric:tabular-nums;
+  }
+  .cadence__meta .tag {
+    color:var(--badge-obs-fg); background:var(--badge-obs-bg); border:1px solid var(--badge-obs-border);
+    border-radius:999px; padding:2px 8px; font-size:10px; letter-spacing:.04em; font-weight:600;
+  }
+  .cadence__meta .tag.mock {
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg); border:1px dashed var(--badge-warn-border);
+  }
+
+  .section__label {
+    font-size:13px; font-weight:600; letter-spacing:.02em; color:var(--text-bright);
+    display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  }
+  .section__label .hint { font-size:11px; font-weight:400; color:var(--text-dim); letter-spacing:.02em; }
+
+  /* a passive "ambient runs come from Cron/CLI -- not launched here" affordance */
+  .passive-note {
+    display:flex; gap:9px; align-items:flex-start;
+    border:1px solid var(--border); border-radius:var(--radius-soft);
+    background:var(--bg-row); color:var(--text-dim); padding:10px 13px; font-size:11px; line-height:1.5;
+  }
+  .passive-note .plabel {
+    flex:0 0 auto; font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--text-ui); border:1px solid var(--border); border-radius:999px; padding:2px 7px; margin-top:1px;
+  }
+
+  /* ---- (2) the newest-first typographic LEDGER ---------------------------- */
+  .ledger { display:flex; flex-direction:column; gap:0; margin-top:2px; }
+  /* each run is a single keyboard-operable button row. No card chrome, no
+     shadow -- a typographic ledger. A thin left vertical tick carries severity
+     (calm = covered, amber = flagged) ALONGSIDE the PASS/FAIL word (never alone). */
+  .lrow {
+    appearance:none; cursor:pointer; text-align:left; width:100%;
+    display:grid; grid-template-columns:3px auto 1fr auto; gap:0 12px; align-items:center;
+    background:transparent; border:none; border-bottom:1px solid var(--border);
+    border-left:0; padding:0; color:var(--text); font-family:var(--ff-system);
+  }
+  .lrow:focus-visible { outline:2px solid var(--focus-ring-color); outline-offset:-2px; }
+  .lrow:hover .lrow__main { background:var(--bg-row-hover); }
+  .lrow__tick { width:3px; align-self:stretch; background:var(--badge-obs-border); }
+  .lrow.flagged .lrow__tick { background:var(--badge-warn-border); }
+  .lrow__main {
+    grid-column:2 / 5; display:grid; grid-template-columns:auto 1fr auto; gap:2px 14px;
+    align-items:center; padding:11px 12px; transition:background var(--t-calm);
+  }
+  .lrow__ts { font-family:var(--font-d); font-size:12px; color:var(--text-dim);
+              font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .lrow__target { min-width:0; }
+  .lrow__slug { font-size:13px; font-weight:600; color:var(--text-bright); letter-spacing:.01em; }
+  .lrow__sid { font-family:var(--font-d); font-size:10px; color:var(--text-dim); }
+  /* the verdict WORD column is type-weight-heavy (asymmetric ledger -- the verdict
+     leads, the rest is quiet meta). PASS = DECIDED green word, FAIL = BLOCKED red. */
+  .lword {
+    display:inline-flex; align-items:center; gap:7px; justify-self:end;
+    font-size:12px; font-weight:800; letter-spacing:.07em; text-transform:uppercase;
+    padding:4px 10px; border-radius:var(--radius-sharp); line-height:1; white-space:nowrap;
+  }
+  .lword .dot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .lword.pass { color:var(--badge-decided-fg); background:var(--badge-decided-bg); border:1px solid var(--badge-decided-border); }
+  .lword.fail { color:var(--badge-blocked-fg); background:var(--badge-blocked-bg); border:2px solid var(--badge-blocked-border); }
+
+  /* the expandable detail (coverage_gaps list + last-seen) -- accordion */
+  .ldetail {
+    grid-column:1 / 5; padding:0 12px 13px 27px; display:none;
+    font-family:var(--font-d); font-size:11px; color:var(--text-dim); line-height:1.6;
+  }
+  .lrow[aria-expanded="true"] + .ldetail { display:block; }
+  .ldetail dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:3px 14px; }
+  .ldetail dt { color:var(--text-ui); text-transform:uppercase; letter-spacing:.06em; font-size:9px; }
+  .ldetail dd { margin:0; color:var(--text); font-variant-numeric:tabular-nums; }
+  /* coverage gap chips -- each carries its literal text (never color alone) */
+  .gapchips { display:inline-flex; gap:6px; flex-wrap:wrap; }
+  .gapchip {
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg); border:1px dashed var(--badge-warn-border);
+    border-radius:999px; padding:1px 8px; font-size:10px; letter-spacing:.03em; font-weight:600;
+    text-transform:none;
+  }
+  .gapchips .none { color:var(--badge-decided-fg); background:transparent; border:none; padding:1px 0; }
+
+  /* ---- the required amber "build gated on ADR-18 amendment" footnote ------ */
+  .gatenote {
+    margin-top:2px; display:flex; gap:9px; align-items:flex-start;
+    border:1px dashed var(--badge-warn-border); border-radius:var(--radius-soft);
+    background:var(--badge-warn-bg); color:#7c2d12; padding:11px 13px; font-size:11px; line-height:1.5;
+  }
+  [data-theme="paper"] .gatenote { color:#7c2d12; }
+  .gatenote .glabel {
+    flex:0 0 auto; font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--badge-warn-fg); border:1px solid var(--badge-warn-border); border-radius:999px;
+    padding:2px 8px; margin-top:1px;
+  }
+
+  /* mockup-only walkthrough controls */
+  .walk { margin-top:6px; border-top:1px dashed var(--border); padding-top:14px; }
+
+  /* visually-hidden live region for screen readers */
+  .sr-only {
+    position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0;
+    clip:rect(0 0 0 0); overflow:hidden; white-space:nowrap;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ambient-chip, .lrow__main, .chrome-btn, .switch__track, .switch__knob, .panel__close { transition:none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ============ mockup-only legend + theme switcher ===================== -->
+  <div class="legend">
+    <div>
+      <h1>Ambient Soak Task -- continuous polarity validation</h1>
+      <p>
+        KingMode mockup (#2). A BETA-gated, calm AMBIENT badge anchored in the footer's soak
+        corner -- NOT a fourth frame (M1: exactly {A,B,C}). A background Cron run periodically
+        soaks the most-recent NON-SM session and appends a tiny JSON verdict to a rolling
+        history; the badge reads the freshest verdict, and one click opens a read-only history
+        ledger. WARN never pulses and never auto-foregrounds (M2). Switch themes to preview all
+        three token sets.
+      </p>
+    </div>
+    <div class="themes" role="group" aria-label="Preview theme">
+      <button class="on" data-theme-btn="obsidian">Obsidian</button>
+      <button data-theme-btn="phosphor">Phosphor</button>
+      <button data-theme-btn="paper">Paper</button>
+    </div>
+  </div>
+
+  <!-- ============ the dashboard topbar (header strip + required BETA pill) == -->
+  <div class="topbar">
+    <div class="topbar__left">
+      <span class="brand">STREAM&nbsp;MANAGER <small>operator monitor</small></span>
+      <span class="beta-pill" title="This feature is default OFF and toggled in Settings &gt; BETA features">
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+    </div>
+    <div class="topbar__right">
+      <button class="chrome-btn" aria-label="Operator settings">Settings</button>
+    </div>
+  </div>
+
+  <!-- a dimmed three-frame floor, so the ambient badge reads as footer chrome -->
+  <div class="floor" aria-hidden="true">
+    <div class="col"><h3>Frame A -- Sessions</h3><div class="skel"></div><div class="skel s2"></div><div class="skel s3"></div><div class="skel s4"></div><div class="skel s2"></div></div>
+    <div class="col"><h3>Frame B -- Sub-Agents</h3><div class="skel s2"></div><div class="skel"></div><div class="skel s3"></div><div class="skel s4"></div></div>
+    <div class="col"><h3>Frame C -- Background Jobs</h3><div class="skel s3"></div><div class="skel s2"></div><div class="skel"></div></div>
+  </div>
+
+  <!-- ============ the AppShell FOOTER strip -- where the AMBIENT badge lives = -->
+  <div class="footer">
+    <div class="footer__left">
+      <span class="footer__stat"><b>21129</b> decisions</span>
+      <span class="footer__stat">scope <b>demo-target</b> (from data)</span>
+      <span class="footer__stat"><b>9</b> active sessions</span>
+    </div>
+    <div class="footer__corner">
+      <span class="corner-label">polarity</span>
+      <!-- the calm AMBIENT badge -- a real <button>; the WORD is the signal (M4).
+           Starts in OK (healthy) state; the walkthrough flips it to WARN. -->
+      <button class="ambient-chip ok" id="ambientChip" aria-haspopup="dialog"
+              aria-label="Ambient polarity check: AMBIENT OK, last check 14m ago. Open history.">
+        <span class="ac-dot" aria-hidden="true"></span>
+        <span class="ac-word" id="acWord">AMBIENT OK</span>
+        <span class="ac-age" id="acAge">. 14m</span>
+      </button>
+    </div>
+  </div>
+
+  <p style="margin-top:16px;font-size:12px;color:var(--text-dim);line-height:1.5;">
+    The AMBIENT badge above is the quietest thing on screen at rest -- it is the ONLY persistent
+    polarity instrument. Click it (or it is already open below) to open the read-only history
+    ledger. Use the mock-data controls in the drawer to flip the latest run between OK and a
+    POLARITY CHECK (WARN) verdict -- WARN stays in place, it never pulses or foregrounds.
+  </p>
+</div>
+
+<!-- ============ THE READ-ONLY HISTORY DRAWER ============================== -->
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="as-title" tabindex="-1" hidden>
+  <!-- aria-live region: announces the verdict + row expansion (M17 a11y) -->
+  <div class="sr-only" id="live" aria-live="polite"></div>
+
+  <header class="panel__head">
+    <div class="panel__titlewrap">
+      <h2 class="panel__title" id="as-title">Ambient Soak -- polarity history</h2>
+      <p class="panel__sub">Read-only -- newest first. Runs land from Cron, not here.</p>
+      <span class="beta-pill">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    </div>
+    <button class="panel__close" id="drawerClose" aria-label="Close ambient soak history">
+      <span aria-hidden="true">x</span>
+    </button>
+  </header>
+
+  <!-- inline on/off toggle so the operator SEES the gated on/off behaviour -->
+  <div class="gaterow">
+    <span class="gaterow__label">Feature <b>ambient-soak-task</b> -- beta flag</span>
+    <label class="switch">
+      <input type="checkbox" id="betaToggle" checked aria-label="Ambient Soak Task beta flag">
+      <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+      <span class="switch__text" id="betaText" data-on="true">ON</span>
+    </label>
+  </div>
+
+  <div class="panel__body" id="body">
+
+    <!-- ===== OFF placeholder (shown when beta flag is OFF) ================= -->
+    <div class="offstate" id="offState" hidden>
+      <b>Ambient Soak Task is OFF.</b><br>
+      No pollers and no SSE handlers are registered while the flag is off.<br>
+      Turn it ON above (or in Settings &gt; BETA features) to read the history.
+    </div>
+
+    <!-- ===== LIVE content (shown when flag ON) ============================ -->
+    <div id="liveContent">
+
+      <!-- (1) muted top strip: latest verdict + live cadence sentence ------- -->
+      <div class="cadence">
+        <div class="cadence__verdict">
+          <span class="vbadge ok" id="drawerVerdict" role="status">
+            <span class="dot" aria-hidden="true"></span><span id="drawerVerdictText">AMBIENT OK</span>
+          </span>
+          <span class="cadence__sentence" id="cadenceSentence">
+            covered every <b>~30m</b> -- last check <b>14m ago</b>
+          </span>
+        </div>
+        <div class="cadence__meta">
+          <span class="tag" id="metaInterval">interval 30m</span>
+          <span class="tag" id="metaCount">4 runs in history</span>
+          <!-- G2: self-exclusion surfaced VISIBLE, not a silent filter -->
+          <span class="tag" id="metaExcluded">excluded_self 1</span>
+          <!-- mock=true is surfaced in the meta line (required by mockDataSpec) -->
+          <span class="tag mock" id="metaMock">MOCK DATA -- no ambient history yet</span>
+        </div>
+      </div>
+
+      <!-- passive affordance: the pane never spawns a soak in-process -------- -->
+      <div class="passive-note" role="note">
+        <span class="plabel">passive</span>
+        <span>
+          Ambient runs are launched by the operator/main-thread Cron job (long-task rule), not from
+          this pane. This drawer is a READ over <span style="font-family:var(--font-d);">~/.sm-ambient/*.jsonl</span>
+          -- it never spawns a subprocess.
+        </span>
+      </div>
+
+      <!-- (2) the newest-first typographic ledger --------------------------- -->
+      <div class="section__label">
+        Recent ambient runs
+        <span class="hint">tick = covered (slate) / flagged (amber)</span>
+      </div>
+
+      <div class="ledger" id="ledger" role="list" aria-label="Ambient soak runs, newest first">
+        <!-- rows rendered from the mockDataSpec history[] (newest first) -->
+      </div>
+
+      <!-- the required amber build-gate footnote ---------------------------- -->
+      <div class="gatenote" role="note">
+        <span class="glabel">Gated</span>
+        <span>
+          <b>Build gated on an ADR-18 amendment.</b> This UI is approvable now, but the build is
+          BLOCKED until an EDITORIAL amendment lands: REMOVE the proposed ambient_soak_coverage_gap
+          envelope from the FROZEN message_bus.py, re-frame the polarity verdict as a READ attribute
+          of each ~/.sm-ambient JSONL record, and add the two additive read endpoints
+          (GET /api/ambient/soak-history + /api/ambient/soak-status) mirroring the health-digest
+          polarity filter. No new bus envelope -> no same-PR cassette gate.
+        </span>
+      </div>
+
+      <!-- mockup-only walkthrough -------------------------------------------- -->
+      <div class="walk">
+        <div class="section__label" style="margin-bottom:8px;">
+          Mockup walkthrough <span class="hint">demo only -- not part of the feature</span>
+        </div>
+        <div class="themes" role="group" aria-label="Walk the ambient verdict states">
+          <button data-demo="ok">Latest = OK</button>
+          <button data-demo="warn">Latest = POLARITY CHECK (WARN)</button>
+          <button data-demo="expand">Expand newest row</button>
+        </div>
+      </div>
+
+    </div><!-- /liveContent -->
+  </div><!-- /panel__body -->
+</aside>
+
+<script>
+(function () {
+  "use strict";
+
+  // ====== mockDataSpec (verbatim from the vetted brief) ====================
+  var MOCK = {
+    status: { enabled:true, last_run_at:1749600000, last_run_ago_s:840, interval_minutes:30,
+              verdict:"OK", history_count:4, excluded_self:1, mock:true },
+    history: [
+      { id:"soak-7f3a-1749600000", ts:1749600000, session_id:"sess-7f3a2c", project_slug:"demo-target",
+        polarity_pass:true,  polarity_violation:false, coverage_gaps:[],              duration_s:60, messages_seen:7,  mock:true },
+      { id:"soak-7f3a-1749598200", ts:1749598200, session_id:"sess-7f3a2c", project_slug:"demo-target",
+        polarity_pass:true,  polarity_violation:false, coverage_gaps:["learn-mode"],  duration_s:60, messages_seen:5,  mock:true },
+      { id:"soak-91bd-1749596400", ts:1749596400, session_id:"sess-91bd4e", project_slug:"other-target",
+        polarity_pass:false, polarity_violation:true,  coverage_gaps:[],              duration_s:60, messages_seen:12, mock:true },
+      { id:"soak-91bd-1749594600", ts:1749594600, session_id:"sess-91bd4e", project_slug:"other-target",
+        polarity_pass:true,  polarity_violation:false, coverage_gaps:["L4-alignment"],duration_s:60, messages_seen:9,  mock:true }
+    ]
+  };
+
+  // ====== helpers ==========================================================
+  function pad(n){ return n < 10 ? "0"+n : String(n); }
+  function fmtClock(ts){
+    var d = new Date(ts * 1000);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function ago(s){
+    if (s < 60) return s + "s";
+    var m = Math.round(s/60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m/60); return h + "h " + (m%60) + "m";
+  }
+  function esc(t){
+    return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+  // A run is "flagged" if polarity failed OR any coverage gap exists (M4 driver).
+  function isFlagged(r){ return r.polarity_violation === true || (r.coverage_gaps && r.coverage_gaps.length > 0); }
+
+  // ====== theme switcher (mockup chrome) ===================================
+  var root = document.documentElement;
+  document.querySelectorAll('[data-theme-btn]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+    });
+  });
+
+  // ====== drawer open / close (focus-trap + restore, Escape) ===============
+  var panel = document.getElementById('panel');
+  var scrim = document.getElementById('scrim');
+  var openBtn = document.getElementById('ambientChip');
+  var closeBtn = document.getElementById('drawerClose');
+  var live = document.getElementById('live');
+  var lastFocus = null;
+
+  function focusables() {
+    return Array.prototype.slice.call(
+      panel.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])')
+    ).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  }
+  function openPanel() {
+    lastFocus = document.activeElement;
+    panel.hidden = false; scrim.hidden = false;
+    panel.focus();
+  }
+  function closePanel() {
+    panel.hidden = true; scrim.hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  openBtn.addEventListener('click', openPanel);
+  closeBtn.addEventListener('click', closePanel);
+  scrim.addEventListener('click', closePanel);
+
+  document.addEventListener('keydown', function (e) {
+    if (panel.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); closePanel(); return; }
+    if (e.key === 'Tab') {
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  // ====== beta flag toggle: ON shows live content, OFF the placeholder =====
+  var betaToggle = document.getElementById('betaToggle');
+  var betaText = document.getElementById('betaText');
+  var offState = document.getElementById('offState');
+  var liveContent = document.getElementById('liveContent');
+  function applyBeta() {
+    var on = betaToggle.checked;
+    betaText.textContent = on ? 'ON' : 'OFF';
+    betaText.setAttribute('data-on', String(on));
+    offState.hidden = on;
+    liveContent.hidden = !on;
+  }
+  betaToggle.addEventListener('change', applyBeta);
+  applyBeta();
+
+  // ====== render the newest-first ledger from MOCK.history =================
+  var ledger = document.getElementById('ledger');
+  function gapsMarkup(gaps){
+    if (!gaps || !gaps.length) return '<span class="none">no gaps -- full coverage</span>';
+    return gaps.map(function(g){ return '<span class="gapchip">' + esc(g) + '</span>'; }).join('');
+  }
+  function renderLedger(){
+    var rows = MOCK.history.slice(); // already newest-first in the spec
+    ledger.innerHTML = rows.map(function(r, i){
+      var flagged = isFlagged(r);
+      var pass = r.polarity_pass === true;
+      var wordCls = pass ? 'pass' : 'fail';
+      var word = pass ? 'PASS' : 'FAIL';
+      var reason = pass
+        ? ('Polarity PASS -- ' + (r.coverage_gaps.length ? r.coverage_gaps.length + ' coverage gap(s)' : 'full coverage'))
+        : 'Polarity FAIL -- self/SM session leaked past the WHERE-clause';
+      var detailId = 'det-' + i;
+      return ''
+        + '<button class="lrow' + (flagged ? ' flagged' : '') + '" role="listitem" '
+        +   'aria-expanded="false" aria-controls="' + detailId + '" data-row="' + i + '" '
+        +   'title="' + esc(reason) + '" aria-label="Run ' + fmtClock(r.ts) + ', target ' + esc(r.project_slug)
+        +   ', polarity ' + word + '. Activate to expand coverage detail.">'
+        +   '<span class="lrow__tick" aria-hidden="true"></span>'
+        +   '<span class="lrow__main">'
+        +     '<span class="lrow__ts">' + fmtClock(r.ts) + '</span>'
+        +     '<span class="lrow__target">'
+        +       '<span class="lrow__slug">' + esc(r.project_slug) + '</span> '
+        +       '<span class="lrow__sid">' + esc(r.session_id) + '</span>'
+        +     '</span>'
+        +     '<span class="lword ' + wordCls + '"><span class="dot" aria-hidden="true"></span>' + word + '</span>'
+        +   '</span>'
+        + '</button>'
+        + '<div class="ldetail" id="' + detailId + '" role="region" aria-label="Run detail">'
+        +   '<dl>'
+        +     '<dt>target</dt><dd>' + esc(r.project_slug) + ' / ' + esc(r.session_id) + ' (rendered from data)</dd>'
+        +     '<dt>polarity</dt><dd>' + (pass ? 'PASS -- 0 self-leaks' : 'FAIL -- self/SM leak detected') + '</dd>'
+        +     '<dt>coverage</dt><dd><span class="gapchips">' + gapsMarkup(r.coverage_gaps) + '</span></dd>'
+        +     '<dt>duration</dt><dd>' + r.duration_s + 's</dd>'
+        +     '<dt>messages</dt><dd>' + r.messages_seen + ' seen</dd>'
+        +     '<dt>last-seen</dt><dd>' + ago(MOCK.status.last_run_at - r.ts + MOCK.status.last_run_ago_s) + ' ago</dd>'
+        +   '</dl>'
+        + '</div>';
+    }).join('');
+
+    // wire each row as an accordion toggle (real buttons, keyboard-operable)
+    ledger.querySelectorAll('.lrow').forEach(function(row){
+      row.addEventListener('click', function(){
+        var open = row.getAttribute('aria-expanded') === 'true';
+        row.setAttribute('aria-expanded', String(!open));
+        var idx = row.getAttribute('data-row');
+        live.textContent = 'Run row ' + idx + (open ? ' collapsed.' : ' expanded -- coverage detail shown.');
+      });
+    });
+  }
+  renderLedger();
+
+  // ====== latest-verdict driver: footer chip + drawer strip ================
+  var chip = document.getElementById('ambientChip');
+  var acWord = document.getElementById('acWord');
+  var acAge = document.getElementById('acAge');
+  var drawerVerdict = document.getElementById('drawerVerdict');
+  var drawerVerdictText = document.getElementById('drawerVerdictText');
+  var cadenceSentence = document.getElementById('cadenceSentence');
+
+  // Drives the M4 paired badge. WARN never pulses, never foregrounds (M2).
+  function setLatest(kind){
+    var ageTxt = '. ' + ago(MOCK.status.last_run_ago_s);
+    if (kind === 'warn') {
+      chip.className = 'ambient-chip warn';
+      acWord.textContent = 'POLARITY CHECK';
+      acAge.textContent = ' 1';
+      chip.setAttribute('aria-label', 'Ambient polarity check flagged 1 in the latest run. Open history. (WARN -- not action-required, does not foreground.)');
+      drawerVerdict.className = 'vbadge warn';
+      drawerVerdictText.textContent = 'POLARITY CHECK 1';
+      cadenceSentence.innerHTML = 'latest run <b>flagged 1</b> -- covered every <b>~30m</b>, last check <b>' + ago(MOCK.status.last_run_ago_s) + ' ago</b>';
+      live.textContent = 'Ambient latest verdict is WARN: polarity check flagged 1. Badge updated in place; no foreground.';
+    } else {
+      chip.className = 'ambient-chip ok';
+      acWord.textContent = 'AMBIENT OK';
+      acAge.textContent = ageTxt;
+      chip.setAttribute('aria-label', 'Ambient polarity check: AMBIENT OK, last check ' + ago(MOCK.status.last_run_ago_s) + ' ago. Open history.');
+      drawerVerdict.className = 'vbadge ok';
+      drawerVerdictText.textContent = 'AMBIENT OK';
+      cadenceSentence.innerHTML = 'covered every <b>~30m</b> -- last check <b>' + ago(MOCK.status.last_run_ago_s) + ' ago</b>';
+      live.textContent = 'Ambient latest verdict is OK, last check ' + ago(MOCK.status.last_run_ago_s) + ' ago.';
+    }
+  }
+  // The spec's status.verdict = "OK" -- but the spec also includes one row with
+  // polarity_violation:true so both states are inspectable. Default to OK.
+  setLatest('ok');
+
+  // ====== mockup walkthrough buttons =======================================
+  document.querySelectorAll('[data-demo]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var d = b.getAttribute('data-demo');
+      if (d === 'ok') setLatest('ok');
+      else if (d === 'warn') setLatest('warn');
+      else if (d === 'expand') {
+        var firstRow = ledger.querySelector('.lrow');
+        if (firstRow) { firstRow.setAttribute('aria-expanded', 'true'); firstRow.focus();
+          live.textContent = 'Newest run expanded.'; }
+      }
+    });
+  });
+
+  // open the drawer on load so the operator lands directly on the history
+  openPanel();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<!--
+  velocity-heatmap.html -- KingMode mockup for BETA feature #19 "Pattern Velocity Heatmap".
+  Self-contained: inline <style> + inline <script>, NO external assets / CDNs / web fonts.
+  System font stack only. ASCII-only (no smart quotes, no em-dashes -- "--", no box-drawing).
+
+  WHAT THIS PREVIEWS (operator gate BEFORE code is written):
+    An ambient L0..L4 x 30-minute learning-dynamics heatmap that lives INSIDE Frame A,
+    as a collapsed-by-default strip between the `scope` sub-header (.fa__ctx) and the
+    HITL pending seam (.fa__pending). It answers one glance question: "is governance
+    maturing (green diagonal climbing toward L4) or thrashing (amber mid-band parked on
+    L1/L2) or resetting (bright L0 row)?"
+
+  ADR-18 / KingMode MUSTs honoured in this mockup:
+    - Paired label+COLOR everywhere: the load-bearing signal is the gutter level labels
+      (L0..L4, always visible), the in-cell count digit (>=2), and a derived STATE BADGE
+      (LEARNING / STALLED / RESETTING / CALM) built on the frozen Badge variant palette.
+      Removing ALL hue still leaves a fully sufficient monochrome signal.
+    - Ambient, never a foreground: no auto-escalation; the strip alarms quietly in place.
+    - BETA, default OFF: a persistent "BETA -- default OFF, toggled in Settings" pill plus
+      a wired on/off toggle. OFF renders nothing (no poller, no DOM) -- demoed live.
+    - a11y: 2px solid #d97706 focus ring (focus.css contract) inset on cells; roving
+      tabindex 2-D grid (arrows move, Enter filters, Esc clears); AAA text on --bg-card.
+    - Domain-agnostic: governance LEVELS (L0..L4) + opaque hashes + verbatim texts are
+      rendered FROM DATA. No monitored-project vocabulary / JOB-IDs / agent-role names.
+
+  Token reuse: CSS-variable names + values are lifted from
+  dashboard/ui-next/src/styles/theme.css (obsidian theme) so this previews the REAL tokens.
+-->
+<html lang="en" data-theme="obsidian" data-motion="reduce">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pattern Velocity Heatmap -- BETA #19 mockup</title>
+<style>
+  /* ----------------------------------------------------------------------
+     THEME TOKENS -- verbatim from dashboard/ui-next/src/styles/theme.css
+     (obsidian, the default theme) so the mockup shows the production palette.
+  ---------------------------------------------------------------------- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* action palette */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* fixed badge tokens (theme-invariant, M4) */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg:    #ffedd5;  --badge-warn-border: #ea580c;
+    --badge-timeout-fg: #7c3aed;  --badge-timeout-bg: #ede9fe;  --badge-timeout-border: #c4b5fd;
+
+    /* focus ring contract (focus.css / M17 / D4-013) */
+    --focus-ring-color:  #d97706;
+    --focus-ring-width:  2px;
+    --focus-ring-offset: 2px;
+    --focus-ring-style:  solid;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    --font-d:       var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 2.4rem 1.5rem 4rem;
+  }
+
+  .page {
+    width: 100%;
+    max-width: 880px;
+  }
+
+  /* ---- mockup chrome: a header strip outside Frame A explaining the gate ---- */
+  .mock-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem 1rem;
+    padding-bottom: 1.1rem;
+    margin-bottom: 1.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .mock-title {
+    font-size: 1.02rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--text-bright);
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 14ch;
+  }
+  .mock-sub {
+    flex-basis: 100%;
+    margin: 0.15rem 0 0;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+
+  /* BETA pill -- the persistent "default OFF, toggled in Settings" annotation. */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-timeout-fg);
+    background: var(--badge-timeout-bg);
+    border: 1px solid var(--badge-timeout-border);
+    border-radius: 2px;
+    padding: 4px 9px;
+    white-space: nowrap;
+  }
+  .beta-pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* wired on/off toggle (Settings > BETA features facsimile) */
+  .toggle-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    color: var(--text-bright);
+  }
+  .toggle-wrap .tog-label-state {
+    font-family: var(--font-d);
+    font-weight: 700;
+    min-width: 3ch;
+    color: var(--accent);
+  }
+  .switch {
+    position: relative;
+    width: 44px; height: 24px;
+    border-radius: 13px;
+    border: 1px solid var(--border-hi);
+    background: var(--bg-row);
+    cursor: pointer;
+    padding: 0;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .switch[aria-checked="true"] {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+  }
+  .switch .knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: transform 120ms ease, background 120ms ease;
+  }
+  .switch[aria-checked="true"] .knob {
+    transform: translateX(20px);
+    background: var(--accent);
+  }
+
+  /* ---- Frame A facsimile: card surface that hosts the strip ---- */
+  .frame-a {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.95rem 1.05rem 1.1rem;
+  }
+  .frame-a__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.55rem;
+  }
+  .frame-a__head .fh-tag {
+    font-size: 0.58rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .frame-a__head .fh-name {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+
+  /* the existing .fa__ctx scope sub-header, reproduced for placement context */
+  .fa__ctx {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    letter-spacing: 0.03em;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px dashed var(--border);
+  }
+  .fa__ctx-label {
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.6rem;
+    color: var(--text-ui);
+  }
+  .fa__ctx-name {
+    font-family: var(--font-d);
+    color: var(--text-bright);
+    font-weight: 600;
+  }
+  .fa__ctx-pid {
+    font-family: var(--font-d);
+    color: var(--text-dim);
+  }
+
+  /* the existing .fa__pending HITL seam below the strip, for placement context */
+  .fa__pending {
+    margin-top: 0.7rem;
+    padding-top: 0.6rem;
+    border-top: 1px dashed var(--border);
+    font-size: 0.66rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* ======================================================================
+     THE HEATMAP STRIP (PatternVelocityHeatmap.svelte facsimile)
+     ====================================================================== */
+  .pvh {
+    margin-top: 0.7rem;
+  }
+  .pvh[hidden] { display: none; }
+
+  .pvh__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .pvh__collapse {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--bg-row);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-bright);
+    font-family: var(--ff-system);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .pvh__collapse .caret {
+    font-family: var(--font-d);
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .pvh__title {
+    font-size: 0.62rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    font-weight: 700;
+  }
+  .pvh__beta-inline {
+    font-size: 0.55rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--badge-timeout-fg);
+    border: 1px solid var(--badge-timeout-border);
+    background: var(--badge-timeout-bg);
+    border-radius: 2px;
+    padding: 2px 6px;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  /* ---- M4 paired STATE BADGE primitive (Badge.svelte facsimile) ---- */
+  .ar-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-system);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    white-space: nowrap;
+    border-radius: 2px;
+    line-height: 1;
+  }
+  .ar-badge .ar-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+  .ar-decided { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .ar-warn    { color: var(--badge-warn-fg);    background: var(--badge-warn-bg);    border: 1px dashed var(--badge-warn-border); }
+  .ar-blocked { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); font-weight: 700; }
+  .ar-observing { color: var(--badge-obs-fg);   background: var(--badge-obs-bg);     border: 1px solid var(--badge-obs-border); }
+
+  .pvh__statebadge-row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0.75rem 0 0.55rem;
+    flex-wrap: wrap;
+  }
+  .pvh__state-help {
+    font-size: 0.66rem;
+    color: var(--text-bright);
+    letter-spacing: 0.01em;
+  }
+
+  /* ---- the bespoke gutter + 5x30 grid ---- */
+  .pvh__plot {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem;
+    align-items: stretch;
+    margin-top: 0.3rem;
+  }
+
+  /* gutter: level labels right-aligned, ASCENDING bottom-to-top (L0 floor) */
+  .pvh__gutter {
+    display: grid;
+    grid-template-rows: repeat(5, 14px);
+    row-gap: 3px;
+    align-content: start;
+  }
+  .pvh__gutter-cell {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    font-family: var(--font-d);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-bright);      /* AAA text -- load-bearing, never dim */
+    padding-right: 0.45rem;
+    white-space: nowrap;
+  }
+  .pvh__gutter-cell .lvl-word {
+    font-family: var(--ff-system);
+    font-weight: 600;
+    font-size: 0.5rem;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    margin-left: 0.35rem;
+    text-transform: uppercase;
+  }
+
+  .pvh__rows {
+    display: grid;
+    grid-template-rows: repeat(5, 14px);
+    row-gap: 3px;
+    min-width: 0;
+  }
+  .pvh__row {
+    display: grid;
+    grid-template-columns: repeat(30, 1fr);
+    column-gap: 2px;
+    position: relative;
+  }
+  /* faint baseline rule under L2 anchors "mid" -- the L2 row is index 2 from top
+     (rows render L4..L0 top-to-bottom). */
+  .pvh__row.is-mid-anchor::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -2px;
+    height: 1px;
+    background: var(--border-hi);
+  }
+
+  .pvh__cell {
+    height: 14px;
+    border-radius: 1px;
+    background: var(--bg-row);     /* empty bucket = bare hairline */
+    border: 1px solid transparent;
+    position: relative;
+    cursor: default;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: var(--text-bright);
+    display: block;
+  }
+  .pvh__cell.is-lit {
+    cursor: pointer;
+    border-color: rgba(255,255,255,0.06);
+  }
+  /* in-cell count digit (>=2): non-color text affordance. AAA-bright. */
+  .pvh__cell .cnt {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-d);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-bright);
+    pointer-events: none;
+  }
+  /* active (filter applied) cell: amber inset ring, theme accent */
+  .pvh__cell.is-active {
+    box-shadow: 0 0 0 2px var(--accent) inset;
+  }
+
+  /* focus.css contract: 2px solid #d97706 ring, here drawn inset on the cell */
+  .pvh__cell:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 var(--focus-ring-width) var(--focus-ring-color) inset;
+    z-index: 2;
+  }
+  .pvh__cell.is-active:focus-visible {
+    box-shadow: 0 0 0 2px var(--accent) inset, 0 0 0 var(--focus-ring-width) var(--focus-ring-color);
+  }
+
+  /* minute axis caption */
+  .pvh__axis {
+    display: flex;
+    justify-content: space-between;
+    margin: 0.35rem 0 0;
+    padding-left: calc(max-content);
+    font-size: 0.55rem;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .pvh__axis-inner {
+    grid-column: 2;
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  /* legend: hue is reinforcement; every swatch is paired with a text word */
+  .pvh__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.9rem;
+    margin-top: 0.7rem;
+    font-size: 0.6rem;
+    color: var(--text-bright);
+    letter-spacing: 0.02em;
+  }
+  .pvh__legend-item { display: inline-flex; align-items: center; gap: 0.4rem; }
+  .pvh__legend-sw {
+    width: 11px; height: 11px; border-radius: 2px; flex: 0 0 auto;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  /* ---- collapsed sparkline (dominant-level trace) ---- */
+  .pvh__spark {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 30px;
+    margin-top: 0.6rem;
+    padding: 0.3rem 0.4rem;
+    background: var(--bg-row);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+  .pvh__spark-bar {
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--accent-glow);
+    border-radius: 1px 1px 0 0;
+  }
+  .pvh__spark-cap {
+    font-size: 0.55rem;
+    color: var(--text-dim);
+    letter-spacing: 0.06em;
+    margin-top: 0.35rem;
+  }
+
+  /* ---- popover (hover / focus detail) ---- */
+  .pvh__pop {
+    position: fixed;
+    z-index: 50;
+    max-width: 320px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+    border-radius: 5px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.55);
+    padding: 0.7rem 0.8rem;
+    font-size: 0.7rem;
+    color: var(--text-bright);
+    pointer-events: none;
+  }
+  .pvh__pop[hidden] { display: none; }
+  .pvh__pop h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    color: var(--text-bright);
+    display: flex; align-items: baseline; gap: 0.5rem;
+  }
+  .pvh__pop .pop-lvl {
+    font-family: var(--font-d);
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .pvh__pop ul { margin: 0; padding: 0; list-style: none; }
+  .pvh__pop li {
+    display: flex;
+    gap: 0.5rem;
+    padding: 2px 0;
+    border-top: 1px solid var(--border);
+  }
+  .pvh__pop li:first-child { border-top: none; }
+  .pvh__pop code {
+    font-family: var(--font-d);
+    color: var(--text-bright);
+    background: var(--bg-row-alt);
+    border-radius: 2px;
+    padding: 0 4px;
+    flex: 0 0 auto;
+  }
+  .pvh__pop .pop-text { color: var(--text); }
+  .pvh__pop .pop-hint {
+    margin-top: 0.45rem;
+    font-size: 0.58rem;
+    color: var(--text-dim);
+    letter-spacing: 0.03em;
+  }
+
+  /* ---- filter banner (shown when a cell scopes the Feed) ---- */
+  .pvh__filter {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 0.7rem;
+    padding: 0.45rem 0.6rem;
+    background: var(--accent-dim);
+    border: 1px solid var(--border-hi);
+    border-radius: 3px;
+    font-size: 0.66rem;
+    color: var(--text-bright);
+  }
+  .pvh__filter[hidden] { display: none; }
+  .pvh__filter code {
+    font-family: var(--font-d);
+    color: var(--accent);
+  }
+  .pvh__filter button {
+    margin-left: auto;
+    background: var(--bg-row);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-bright);
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+
+  /* feed facsimile: shows the click->filter effect on the Frame A decision Feed */
+  .feed {
+    margin-top: 0.7rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.6rem;
+  }
+  .feed__head {
+    font-size: 0.58rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    font-weight: 700;
+    margin-bottom: 0.45rem;
+  }
+  .feed__row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 4px 6px;
+    border-radius: 2px;
+    font-size: 0.68rem;
+    color: var(--text);
+  }
+  .feed__row + .feed__row { border-top: 1px solid var(--border); }
+  .feed__row code {
+    font-family: var(--font-d);
+    color: var(--text-bright);
+    flex: 0 0 auto;
+  }
+  .feed__row .feed-lvl {
+    font-family: var(--font-d);
+    font-weight: 700;
+    color: var(--accent);
+    flex: 0 0 auto;
+    width: 2.2ch;
+  }
+  .feed__row .feed-text { color: var(--text); }
+  .feed__row.is-dimmed { opacity: 0.28; }
+
+  /* OFF state notice */
+  .off-note {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    font-style: italic;
+    padding: 0.5rem 0;
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  .mock-foot {
+    margin-top: 1.6rem;
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+    letter-spacing: 0.01em;
+  }
+  .mock-foot strong { color: var(--text-bright); font-weight: 600; }
+</style>
+</head>
+<body>
+  <main class="page">
+
+    <!-- ===== mockup header strip: title + BETA pill + wired on/off toggle ===== -->
+    <header class="mock-head">
+      <h1 class="mock-title">Pattern Velocity Heatmap</h1>
+
+      <span class="beta-pill">
+        <span class="dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+
+      <span class="toggle-wrap">
+        <label id="tog-label" for="beta-toggle">Feature</label>
+        <button
+          id="beta-toggle"
+          class="switch"
+          role="switch"
+          aria-checked="true"
+          aria-labelledby="tog-label tog-state"
+        >
+          <span class="knob" aria-hidden="true"></span>
+        </button>
+        <span id="tog-state" class="tog-label-state">ON</span>
+      </span>
+
+      <p class="mock-sub">
+        Ambient L0..L4 learning-dynamics signal inside Frame A. This mockup is the
+        operator gate -- confirm the approach BEFORE any code is written. Shown ON with
+        realistic mock data; flip the switch above to see the true default-OFF no-op
+        (renders nothing, registers no poller).
+      </p>
+    </header>
+
+    <!-- ===== Frame A facsimile that hosts the strip ===== -->
+    <section class="frame-a" aria-label="Frame A -- Sessions (mockup)">
+      <div class="frame-a__head">
+        <span class="fh-tag">Frame A</span>
+        <span class="fh-name">Interactive REPL / Sessions</span>
+      </div>
+
+      <!-- existing scope sub-header (.fa__ctx) -->
+      <div class="fa__ctx">
+        <span class="fa__ctx-label">scope</span>
+        <span class="fa__ctx-name">all governed sessions</span>
+        <span class="fa__ctx-pid">pid 48217</span>
+      </div>
+
+      <!-- ============ THE HEATMAP STRIP (between .fa__ctx and .fa__pending) ============ -->
+      <!-- OFF state: when the beta flag is OFF the whole block is absent (no DOM, no poll). -->
+      <div id="pvh-off" class="off-note" hidden>
+        Pattern Velocity Heatmap is OFF. Nothing renders here and no poller is registered.
+        Turn it on in Settings &gt; BETA features.
+      </div>
+
+      <section
+        id="pvh"
+        class="pvh"
+        aria-label="Pattern velocity heatmap -- ambient learning-dynamics signal"
+      >
+        <div class="pvh__bar">
+          <button id="pvh-collapse" class="pvh__collapse" type="button" aria-expanded="true">
+            <span class="caret" aria-hidden="true">v</span>
+            <span id="pvh-collapse-text">Collapse to sparkline</span>
+          </button>
+          <span class="pvh__title">Pattern velocity -- last 30 min</span>
+          <span class="pvh__beta-inline">BETA</span>
+        </div>
+
+        <!-- M4 derived STATE BADGE (paired label + color) + plain-language read -->
+        <div class="pvh__statebadge-row">
+          <span id="pvh-state-badge" class="ar-badge ar-warn" role="status"
+                title="Mid-level dwell dominates -- patterns oscillating L1 and L2, not maturing"
+                aria-label="Governance state: STALLED. Mid-level dwell dominates -- patterns oscillating L1 and L2, not maturing.">
+            <span class="ar-dot" aria-hidden="true"></span>
+            <span class="ar-text">STALLED</span>
+          </span>
+          <span id="pvh-state-help" class="pvh__state-help">
+            Patterns are parked on the L1/L2 mid-band -- oscillating, not maturing. Watch, do not act.
+          </span>
+        </div>
+
+        <!-- EXPANDED view: gutter + 5x30 grid -->
+        <div id="pvh-expanded">
+          <div class="pvh__plot">
+            <!-- gutter: L4 (ceiling) .. L0 (floor), right-aligned ascending top-to-bottom -->
+            <div class="pvh__gutter" aria-hidden="true">
+              <div class="pvh__gutter-cell">L4<span class="lvl-word">precedent</span></div>
+              <div class="pvh__gutter-cell">L3<span class="lvl-word">high-conf</span></div>
+              <div class="pvh__gutter-cell">L2<span class="lvl-word">mid</span></div>
+              <div class="pvh__gutter-cell">L1<span class="lvl-word">forming</span></div>
+              <div class="pvh__gutter-cell">L0<span class="lvl-word">reset</span></div>
+            </div>
+
+            <!-- the 5 plot rows (L4..L0) x 30 minute columns, populated by JS -->
+            <div
+              id="pvh-grid"
+              class="pvh__rows"
+              role="grid"
+              aria-label="Pattern velocity grid: 5 governance levels by 30 one-minute buckets. Use arrow keys to move, Enter to filter the Feed to a cell's decisions, Escape to clear."
+            >
+              <!-- rows injected here -->
+            </div>
+          </div>
+
+          <!-- minute axis -->
+          <div class="pvh__plot" aria-hidden="true" style="margin-top:0.3rem;">
+            <div></div>
+            <div class="pvh__axis-inner">
+              <span>30 min ago</span>
+              <span>15 min</span>
+              <span>now</span>
+            </div>
+          </div>
+
+          <!-- legend: hue reinforcement -- every swatch paired with a word -->
+          <div class="pvh__legend">
+            <span class="pvh__legend-item">
+              <span class="pvh__legend-sw" style="background:var(--c-allow)" aria-hidden="true"></span>
+              L3/L4 maturing (precedent deepening)
+            </span>
+            <span class="pvh__legend-item">
+              <span class="pvh__legend-sw" style="background:var(--c-guide)" aria-hidden="true"></span>
+              L1/L2 dwell (mid-level, watch)
+            </span>
+            <span class="pvh__legend-item">
+              <span class="pvh__legend-sw" style="background:var(--c-block)" aria-hidden="true"></span>
+              L0 reset / auto-demote
+            </span>
+            <span class="pvh__legend-item">
+              <span class="pvh__legend-sw" style="background:var(--bg-row)" aria-hidden="true"></span>
+              empty bucket
+            </span>
+          </div>
+        </div>
+
+        <!-- COLLAPSED view: single-row dominant-level sparkline (hidden by default) -->
+        <div id="pvh-collapsed" hidden>
+          <div class="pvh__spark" id="pvh-spark" aria-hidden="true"></div>
+          <div class="pvh__spark-cap">
+            Dominant-level trace, last 30 min. State badge above carries the read.
+          </div>
+        </div>
+
+        <!-- filter banner (shown after a cell scopes the Feed) -->
+        <div id="pvh-filter" class="pvh__filter" hidden role="status">
+          <span>Feed scoped to bucket
+            <code id="pvh-filter-tag"></code>
+            -- <span id="pvh-filter-detail"></span></span>
+          <button id="pvh-filter-clear" type="button">Clear filter (Esc)</button>
+        </div>
+      </section>
+
+      <!-- existing HITL pending seam (.fa__pending), shown empty/calm for placement -->
+      <div class="fa__pending" aria-label="Pending operator actions">
+        no pending operator actions -- still water
+      </div>
+
+      <!-- Frame A decision Feed facsimile: shows the click->filter scoping effect -->
+      <div class="feed" id="feed">
+        <div class="feed__head">Decision feed (Frame A)</div>
+        <!-- feed rows injected by JS -->
+      </div>
+    </section>
+
+    <!-- live popover (single shared node) -->
+    <div id="pvh-pop" class="pvh__pop" role="dialog" aria-label="Bucket detail" hidden></div>
+
+    <footer class="mock-foot">
+      <strong>How to read this:</strong> rows are governance levels L0 (floor) to L4 (ceiling);
+      columns are the last 30 one-minute buckets (rightmost = now). A green diagonal climbing
+      toward L4 = the engine is learning. An amber band parked on L1/L2 = stalled / thrashing
+      (this mock). A bright L0 row = resetting / auto-demoting. <strong>Color is never the only
+      signal:</strong> the gutter level labels, the in-cell count digits, and the STATE BADGE
+      (LEARNING / STALLED / RESETTING / CALM) carry the full read with all hue removed.
+      <strong>Try it:</strong> hover or arrow-key onto a lit cell for its hashes + texts; click /
+      Enter to scope the Feed below; click the active cell again or press Esc to clear; use the
+      header button to collapse to a quiet sparkline. <strong>Default OFF:</strong> the switch
+      above demonstrates the true no-op resting state.
+    </footer>
+  </main>
+
+<script>
+/* ============================================================================
+   Client-side mockup logic. No build step. Mirrors the intended Svelte
+   component behaviour closely enough for the operator to click through it.
+   ASCII-only.
+============================================================================ */
+(function () {
+  "use strict";
+
+  /* ---- mock data: exactly the mockDataSpec shape (sparse bucket rows) ---- */
+  var BUCKETS = [
+    {level:4, minute_bucket:2, count:3, hashes:["a1b2c3","d4e5f6","071829"],
+      texts:["pattern matured to precedent","approved repeat action","auto-allow on known-safe"]},
+    {level:4, minute_bucket:4, count:2, hashes:["a1b2c3","9f0e1d"],
+      texts:["pattern matured to precedent","stable precedent reuse"]},
+    {level:3, minute_bucket:3, count:4, hashes:["a1b2c3","d4e5f6","cc1100","ab98ff"],
+      texts:["promoted L2->L3","promoted L2->L3","new high-confidence row","promoted L2->L3"]},
+    {level:3, minute_bucket:6, count:2, hashes:["a1b2c3","cc1100"],
+      texts:["promoted L2->L3","new high-confidence row"]},
+    {level:2, minute_bucket:8, count:6, hashes:["7e7e7e","7e7e7e","8d8d8d","8d8d8d","7e7e7e","8d8d8d"],
+      texts:["mid-level dwell","mid-level dwell","oscillating L1<->L2","oscillating L1<->L2","mid-level dwell","oscillating L1<->L2"]},
+    {level:2, minute_bucket:9, count:5, hashes:["7e7e7e","8d8d8d","7e7e7e","8d8d8d","7e7e7e"],
+      texts:["mid-level dwell","oscillating L1<->L2","mid-level dwell","oscillating L1<->L2","mid-level dwell"]},
+    {level:1, minute_bucket:8, count:4, hashes:["7e7e7e","8d8d8d","7e7e7e","8d8d8d"],
+      texts:["demoted L2->L1","demoted L2->L1","re-promote attempt","re-promote attempt"]},
+    {level:1, minute_bucket:9, count:3, hashes:["7e7e7e","8d8d8d","7e7e7e"],
+      texts:["demoted L2->L1","demoted L2->L1","re-promote attempt"]},
+    {level:0, minute_bucket:12, count:5, hashes:["ff0000","ff0000","aa00aa","aa00aa","ff0000"],
+      texts:["pattern reset to L0","auto-demotion (OBSERVE mode)","pattern reset to L0","auto-demotion (OBSERVE mode)","pattern reset to L0"]},
+    {level:0, minute_bucket:13, count:3, hashes:["ff0000","aa00aa","ff0000"],
+      texts:["pattern reset to L0","auto-demotion (OBSERVE mode)","pattern reset to L0"]}
+  ];
+
+  var LEVELS_TOP_DOWN = [4, 3, 2, 1, 0]; /* render rows L4 .. L0 */
+  var MINUTES = 30;
+
+  /* index buckets by "level:minute" */
+  var byKey = {};
+  BUCKETS.forEach(function (b) { byKey[b.level + ":" + b.minute_bucket] = b; });
+
+  /* ---- per-row semantic hue: L3/L4 -> allow green, L1/L2 -> guide amber, L0 -> block red.
+     Alpha ramps with count so denser buckets read darker/brighter. ---- */
+  function rowHue(level) {
+    if (level >= 3) return getVar("--c-allow");
+    if (level >= 1) return getVar("--c-guide");
+    return getVar("--c-block");
+  }
+  function getVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  /* map count (1..6) -> alpha 0.32..0.92 */
+  function alphaFor(count) {
+    var a = 0.30 + Math.min(count, 6) * 0.105;
+    return Math.min(a, 0.95).toFixed(2);
+  }
+
+  /* ---- derived STATE BADGE from dominant-level mass ----
+     LEARNING (decided)  : top rows (L3/L4) dominate
+     STALLED  (warn)     : mid band (L1/L2) dominates
+     RESETTING(blocked)  : L0 dominates
+     CALM     (observing): negligible mass
+  ---- */
+  function deriveState() {
+    var mass = {hi: 0, mid: 0, low: 0, total: 0};
+    BUCKETS.forEach(function (b) {
+      mass.total += b.count;
+      if (b.level >= 3) mass.hi += b.count;
+      else if (b.level >= 1) mass.mid += b.count;
+      else mass.low += b.count;
+    });
+    if (mass.total < 3) return {key:"calm", variant:"observing", label:"CALM",
+      help:"Little learning activity -- the monitor is at rest.",
+      reason:"At rest -- negligible pattern movement."};
+    if (mass.low >= mass.mid && mass.low >= mass.hi) return {key:"resetting", variant:"blocked", label:"RESETTING",
+      help:"Patterns are resetting to L0 / auto-demoting -- possible negative loop. Watch closely.",
+      reason:"L0 reset mass dominates -- patterns demoting, possible negative loop."};
+    if (mass.mid >= mass.hi) return {key:"stalled", variant:"warn", label:"STALLED",
+      help:"Patterns are parked on the L1/L2 mid-band -- oscillating, not maturing. Watch, do not act.",
+      reason:"Mid-level dwell dominates -- patterns oscillating L1 and L2, not maturing."};
+    return {key:"learning", variant:"decided", label:"LEARNING",
+      help:"Patterns are climbing toward L3/L4 -- precedent deepening. Learning; leave it.",
+      reason:"Top-level mass dominates -- precedent deepening, governance maturing."};
+  }
+
+  var VARIANT_CLASS = {observing:"ar-observing", decided:"ar-decided", warn:"ar-warn", blocked:"ar-blocked"};
+
+  /* ===== build the grid ===== */
+  var grid = document.getElementById("pvh-grid");
+  var cells = []; /* flat list for roving tabindex; row-major L4..L0 */
+
+  LEVELS_TOP_DOWN.forEach(function (level, rowIdx) {
+    var row = document.createElement("div");
+    row.className = "pvh__row" + (level === 2 ? " is-mid-anchor" : "");
+    row.setAttribute("role", "row");
+    for (var m = MINUTES - 1; m >= 0; m--) {
+      /* render oldest (29) on the left, now (0) on the right */
+      var b = byKey[level + ":" + m];
+      var cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "pvh__cell" + (b ? " is-lit" : "");
+      cell.setAttribute("role", "gridcell");
+      cell.dataset.level = level;
+      cell.dataset.minute = m;
+      cell.dataset.rowIdx = rowIdx;
+      cell.tabIndex = -1; /* roving: only one cell is tabbable at a time */
+      var minAgo = m === 0 ? "now" : (m + " min ago");
+      if (b) {
+        cell.style.background = withAlpha(rowHue(level), alphaFor(b.count));
+        if (b.count >= 2) {
+          var cnt = document.createElement("span");
+          cnt.className = "cnt";
+          cnt.textContent = String(b.count);
+          cell.appendChild(cnt);
+        }
+        cell.setAttribute("aria-label",
+          "Level " + level + ", " + minAgo + ": " + b.count + " decisions -- " +
+          b.hashes[0] + "... Press Enter to filter the feed.");
+      } else {
+        cell.setAttribute("aria-label", "Level " + level + ", " + minAgo + ": no decisions.");
+      }
+      row.appendChild(cell);
+      cells.push(cell);
+    }
+    grid.appendChild(row);
+  });
+
+  /* first cell is the single tab-stop */
+  if (cells.length) cells[0].tabIndex = 0;
+
+  function withAlpha(hex, a) {
+    /* hex like #22c55e -> rgba(...) */
+    var h = hex.replace("#", "");
+    if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    var r = parseInt(h.substr(0,2),16), g = parseInt(h.substr(2,2),16), b = parseInt(h.substr(4,2),16);
+    return "rgba(" + r + "," + g + "," + b + "," + a + ")";
+  }
+
+  /* ===== render the derived state badge ===== */
+  function renderStateBadge() {
+    var st = deriveState();
+    var badge = document.getElementById("pvh-state-badge");
+    badge.className = "ar-badge " + VARIANT_CLASS[st.variant];
+    badge.title = st.reason;
+    badge.setAttribute("aria-label", "Governance state: " + st.label + ". " + st.reason);
+    badge.querySelector(".ar-text").textContent = st.label;
+    document.getElementById("pvh-state-help").textContent = st.help;
+  }
+  renderStateBadge();
+
+  /* ===== popover (hover / focus) ===== */
+  var pop = document.getElementById("pvh-pop");
+  function showPop(cell) {
+    var level = +cell.dataset.level, minute = +cell.dataset.minute;
+    var b = byKey[level + ":" + minute];
+    if (!b) { hidePop(); return; }
+    var minAgo = minute === 0 ? "now" : (minute + " min ago");
+    var items = b.hashes.map(function (hsh, i) {
+      return "<li><code>" + hsh + "</code><span class='pop-text'>" +
+             escapeHtml(b.texts[i] || "") + "</span></li>";
+    }).join("");
+    pop.innerHTML =
+      "<h4><span class='pop-lvl'>L" + level + "</span> " + minAgo +
+      " -- " + b.count + " decisions</h4><ul>" + items + "</ul>" +
+      "<div class='pop-hint'>Enter / click to scope the Feed to these hashes. Esc clears.</div>";
+    pop.hidden = false;
+    var r = cell.getBoundingClientRect();
+    var top = r.bottom + 8, left = Math.min(r.left, window.innerWidth - 340);
+    pop.style.top = top + "px";
+    pop.style.left = Math.max(8, left) + "px";
+  }
+  function hidePop() { pop.hidden = true; }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];
+    });
+  }
+
+  /* ===== filter the feed ===== */
+  var feedRows = []; /* {el, hash} */
+  var activeCell = null;
+
+  function applyFilter(cell) {
+    var level = +cell.dataset.level, minute = +cell.dataset.minute;
+    var b = byKey[level + ":" + minute];
+    if (!b) return;
+    /* toggle off if clicking the active cell again */
+    if (activeCell === cell) { clearFilter(); return; }
+    if (activeCell) activeCell.classList.remove("is-active");
+    activeCell = cell;
+    cell.classList.add("is-active");
+
+    var set = {};
+    b.hashes.forEach(function (h) { set[h] = true; });
+    feedRows.forEach(function (fr) {
+      fr.el.classList.toggle("is-dimmed", !set[fr.hash]);
+    });
+
+    var minAgo = minute === 0 ? "now" : (minute + " min ago");
+    document.getElementById("pvh-filter-tag").textContent = "L" + level + " @ " + minAgo;
+    document.getElementById("pvh-filter-detail").textContent =
+      b.count + " decisions across " + uniq(b.hashes).length + " pattern(s)";
+    document.getElementById("pvh-filter").hidden = false;
+  }
+  function clearFilter() {
+    if (activeCell) activeCell.classList.remove("is-active");
+    activeCell = null;
+    feedRows.forEach(function (fr) { fr.el.classList.remove("is-dimmed"); });
+    document.getElementById("pvh-filter").hidden = true;
+  }
+  function uniq(arr) { var s = {}; arr.forEach(function (x){s[x]=1;}); return Object.keys(s); }
+
+  document.getElementById("pvh-filter-clear").addEventListener("click", clearFilter);
+
+  /* ===== build the feed facsimile from all bucket hashes ===== */
+  (function buildFeed() {
+    var feed = document.getElementById("feed");
+    var seen = {};
+    var rows = [];
+    BUCKETS.forEach(function (b) {
+      b.hashes.forEach(function (h, i) {
+        var key = h + "|" + (b.texts[i] || "");
+        if (seen[key]) return;
+        seen[key] = 1;
+        rows.push({hash: h, level: b.level, text: b.texts[i] || ""});
+      });
+    });
+    rows.forEach(function (r) {
+      var el = document.createElement("div");
+      el.className = "feed__row";
+      el.innerHTML = "<span class='feed-lvl'>L" + r.level + "</span>" +
+        "<code>" + r.hash + "</code><span class='feed-text'>" + escapeHtml(r.text) + "</span>";
+      feed.appendChild(el);
+      feedRows.push({el: el, hash: r.hash});
+    });
+  })();
+
+  /* ===== cell interactions: hover, click, keyboard (roving tabindex 2-D) ===== */
+  grid.addEventListener("mouseover", function (e) {
+    var cell = e.target.closest(".pvh__cell"); if (cell) showPop(cell);
+  });
+  grid.addEventListener("mouseout", function (e) {
+    var cell = e.target.closest(".pvh__cell"); if (cell) hidePop();
+  });
+  grid.addEventListener("focusin", function (e) {
+    var cell = e.target.closest(".pvh__cell"); if (cell) showPop(cell);
+  });
+  grid.addEventListener("focusout", hidePop);
+  grid.addEventListener("click", function (e) {
+    var cell = e.target.closest(".pvh__cell"); if (cell && cell.classList.contains("is-lit")) applyFilter(cell);
+  });
+
+  function focusCell(c) {
+    cells.forEach(function (x) { x.tabIndex = -1; });
+    c.tabIndex = 0; c.focus();
+  }
+  function moveBy(cell, dCol, dRow) {
+    var level = +cell.dataset.level, minute = +cell.dataset.minute;
+    var rowIdx = LEVELS_TOP_DOWN.indexOf(level);
+    /* columns render oldest(29)->left, now(0)->right; Right = newer = lower minute */
+    var newMinute = minute - dCol;
+    var newRowIdx = rowIdx + dRow;
+    if (newMinute < 0) newMinute = 0;
+    if (newMinute > MINUTES - 1) newMinute = MINUTES - 1;
+    if (newRowIdx < 0) newRowIdx = 0;
+    if (newRowIdx > LEVELS_TOP_DOWN.length - 1) newRowIdx = LEVELS_TOP_DOWN.length - 1;
+    var newLevel = LEVELS_TOP_DOWN[newRowIdx];
+    var target = grid.querySelector('.pvh__cell[data-level="' + newLevel + '"][data-minute="' + newMinute + '"]');
+    if (target) focusCell(target);
+  }
+  grid.addEventListener("keydown", function (e) {
+    var cell = e.target.closest(".pvh__cell"); if (!cell) return;
+    switch (e.key) {
+      case "ArrowRight": e.preventDefault(); moveBy(cell, 1, 0); break;  /* newer minute */
+      case "ArrowLeft":  e.preventDefault(); moveBy(cell, -1, 0); break; /* older minute */
+      case "ArrowUp":    e.preventDefault(); moveBy(cell, 0, -1); break; /* higher level */
+      case "ArrowDown":  e.preventDefault(); moveBy(cell, 0, 1); break;  /* lower level */
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        if (cell.classList.contains("is-lit")) applyFilter(cell);
+        break;
+      case "Escape":
+        e.preventDefault(); clearFilter(); hidePop();
+        break;
+    }
+  });
+
+  /* ===== collapse to sparkline ===== */
+  var collapsed = false;
+  var spark = document.getElementById("pvh-spark");
+  (function buildSpark() {
+    /* dominant level per minute -> bar height proportional to its count */
+    for (var m = MINUTES - 1; m >= 0; m--) {
+      var best = null;
+      LEVELS_TOP_DOWN.forEach(function (lvl) {
+        var b = byKey[lvl + ":" + m];
+        if (b && (!best || b.count > best.count)) best = b;
+      });
+      var bar = document.createElement("div");
+      bar.className = "pvh__spark-bar";
+      var h = best ? Math.max(3, best.count / 6 * 24) : 1;
+      bar.style.height = h + "px";
+      if (best) bar.style.background = withAlpha(rowHue(best.level), alphaFor(best.count));
+      spark.appendChild(bar);
+    }
+  })();
+
+  document.getElementById("pvh-collapse").addEventListener("click", function () {
+    collapsed = !collapsed;
+    document.getElementById("pvh-expanded").hidden = collapsed;
+    document.getElementById("pvh-collapsed").hidden = !collapsed;
+    this.setAttribute("aria-expanded", String(!collapsed));
+    this.querySelector(".caret").textContent = collapsed ? ">" : "v";
+    document.getElementById("pvh-collapse-text").textContent =
+      collapsed ? "Expand heatmap" : "Collapse to sparkline";
+    if (collapsed) { clearFilter(); hidePop(); }
+  });
+
+  /* ===== BETA on/off toggle: default-OFF no-op demonstration ===== */
+  var toggle = document.getElementById("beta-toggle");
+  var pvhEl = document.getElementById("pvh");
+  var offNote = document.getElementById("pvh-off");
+  var feedEl = document.getElementById("feed");
+  toggle.addEventListener("click", function () {
+    var on = toggle.getAttribute("aria-checked") !== "true";
+    toggle.setAttribute("aria-checked", String(on));
+    document.getElementById("tog-state").textContent = on ? "ON" : "OFF";
+    /* OFF => the strip + feed scoping are absent (true no-op: no DOM, no poller) */
+    pvhEl.hidden = !on;
+    offNote.hidden = on;
+    feedEl.hidden = !on;
+    if (!on) { clearFilter(); hidePop(); }
+  });
+
+  /* dismiss popover on scroll/resize so it never strands */
+  window.addEventListener("scroll", hidePop, true);
+  window.addEventListener("resize", hidePop);
+})();
+</script>
+</body>
+</html>

@@ -1452,19 +1452,5676 @@ async def api_patterns_cross_session():
 
 @app.post("/api/patterns/{hash}/demote")
 async def api_patterns_demote(hash: str):
-    """Set patterns.cross_session=0 for the given hash. 404 if not found."""
+    """Set patterns.cross_session=0 for the given hash. 404 if not found.
+
+    ADR-18 Amendment F (invariant #5): ALSO deactivates any graduated_rules
+    row for the same shape_hash so a demote reverses a graduation and the
+    rule stops short-circuiting immediately. The graduated demote is a
+    best-effort additive side-effect; a graduated row with no pattern row
+    still counts as "found" so the operator can revoke a graduation whose
+    probabilistic pattern has since decayed away.
+    """
     try:
         bus = _get_bus()
         if bus is None:
             raise HTTPException(status_code=503, detail="bus unavailable")
         existed = bus.unflag_pattern_cross_session(hash)
+        grad_demoted = False
+        try:
+            grad_demoted = bus.demote_graduated_rule(hash)
+        except Exception:
+            log.exception("demote: graduated_rules demote failed")
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    if not existed:
+    if not existed and not grad_demoted:
         raise HTTPException(status_code=404, detail="pattern not found")
     return {"hash": hash, "cross_session": 0}
+
+
+# -- ADR-18 Amendment F: allow-pattern auto-graduation candidate scan -------
+# Read-only candidate scan over the decision corpus + an operator-confirm
+# POST that writes one graduated_rules row. The verdict short-circuit lives
+# in governance._evaluate_inner_core (env-gated, default OFF); these
+# endpoints surface candidates and let the operator confirm/reverse. M8:
+# graduation is NEVER automatic — only the confirm POST writes a rule, and
+# it re-verifies eligibility server-side. Polarity dual-key excludes SM-self.
+
+
+def _graduation_polarity_where(
+    sm_slugs: list[str], sm_own: str, has_sessions: bool,
+) -> tuple[list[str], list]:
+    """Shared polarity WHERE for the candidate scan: durable read key
+    (project_slug NOT IN STREAM_MANAGER_PROJECT_SLUGS) + session_id
+    backstop. Also fixes matched_hash != '' (only graph-anchored shapes
+    can graduate)."""
+    where = ["d.matched_hash != ''"]
+    params: list = []
+    if has_sessions and sm_slugs:
+        ph = ",".join("?" for _ in sm_slugs)
+        where.append(
+            "(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN (" + ph + "))")
+        params.extend(sm_slugs)
+    if sm_own:
+        where.append("m.session_id != ?")
+        params.append(sm_own)
+    return where, params
+
+
+def _graduation_override_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Per-shape operator-override counts (a shape with any override is
+    ineligible). Counted in a SEPARATE query so the LEFT JOIN cannot
+    multiply the per-shape ALLOW/BLOCK sums."""
+    if not _has_table(conn, "hitl_overrides"):
+        return {}
+    rows = conn.execute(
+        "SELECT d.matched_hash AS shape_hash, COUNT(ho.id) AS n "
+        "FROM hitl_overrides ho JOIN decisions d ON ho.decision_id = d.id "
+        "WHERE d.matched_hash != '' GROUP BY d.matched_hash"
+    ).fetchall()
+    return {str(r["shape_hash"]): int(r["n"] or 0) for r in rows}
+
+
+def _graduation_excluded_self(
+    conn: sqlite3.Connection, sm_slugs: list[str], sm_own: str,
+    has_sessions: bool,
+) -> int:
+    """Tally of decision rows DROPPED by the polarity filter (SM-self), for
+    the visible polarity readout."""
+    if not has_sessions or not (sm_slugs or sm_own):
+        return 0
+    ors: list[str] = []
+    params: list = []
+    if sm_slugs:
+        ph = ",".join("?" for _ in sm_slugs)
+        ors.append("LOWER(s.project_slug) IN (" + ph + ")")
+        params.extend(sm_slugs)
+    if sm_own:
+        ors.append("m.session_id = ?")
+        params.append(sm_own)
+    sql = (
+        "SELECT COUNT(*) AS c FROM decisions d "
+        "JOIN messages m ON d.message_id = m.id "
+        "LEFT JOIN sessions s ON m.session_id = s.id "
+        "WHERE d.matched_hash != '' AND (" + " OR ".join(ors) + ")"
+    )
+    r = conn.execute(sql, tuple(params)).fetchone()
+    return int(r["c"] or 0) if r else 0
+
+
+def _graduation_stats_for_hash(
+    conn: sqlite3.Connection, shape_hash: str,
+    sm_slugs: list[str], sm_own: str, has_sessions: bool,
+):
+    """Single-shape CandidateStats for the confirm re-verify, or None.
+
+    Applies the SAME polarity dual-key as the scan, so a shape that lives
+    only on SM-self sessions yields None (cannot be confirmed)."""
+    from stream_manager.governance import is_safety_priority_content
+    from stream_manager.graduated_rules import CandidateStats
+    join_sql = "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+    where, params = _graduation_polarity_where(sm_slugs, sm_own, has_sessions)
+    where.append("d.matched_hash = ?")
+    params.append(shape_hash)
+    sql = (
+        "SELECT d.matched_hash AS shape_hash, "
+        "SUM(CASE WHEN UPPER(d.action)='ALLOW' THEN 1 ELSE 0 END) AS n_allow, "
+        "AVG(d.confidence) AS mean_confidence, "
+        "SUM(CASE WHEN UPPER(d.action)='BLOCK' THEN 1 ELSE 0 END) AS n_block_ever, "
+        "MAX(m.content) AS sample_content, COUNT(*) AS n_total "
+        "FROM decisions d JOIN messages m ON d.message_id = m.id "
+        + join_sql
+        + "WHERE " + " AND ".join(where)
+        + " GROUP BY d.matched_hash"
+    )
+    row = conn.execute(sql, tuple(params)).fetchone()
+    if row is None or not row["shape_hash"] or int(row["n_total"] or 0) == 0:
+        return None
+    overrides = _graduation_override_counts(conn)
+    text = str(row["sample_content"] or "")
+    return CandidateStats(
+        shape_hash=str(row["shape_hash"]),
+        canonical_text=text[:200],
+        n_allow=int(row["n_allow"] or 0),
+        mean_confidence=float(row["mean_confidence"] or 0.0),
+        n_override=int(overrides.get(str(row["shape_hash"]), 0)),
+        n_block_ever=int(row["n_block_ever"] or 0),
+        safety_floor=is_safety_priority_content(text),
+    )
+
+
+@app.get("/api/graduation/candidates")
+async def api_graduation_candidates(limit: int = 50):
+    """ADR-18 Amendment F: propose graduation CANDIDATES (read-only).
+
+    Aggregates the decision corpus per DecisionGraph shape_hash and surfaces
+    shapes that are proven-routine AND have never touched the safety floor
+    (invariants #2 + #6): n_allow >= 30, mean_confidence >= 0.95,
+    n_override == 0, n_block_ever == 0, canonical text not safety-priority.
+
+    POLARITY (G2/M15): SM-self excluded BEFORE aggregation by project_slug
+    NOT IN (STREAM_MANAGER_PROJECT_SLUGS) + session_id != SM_OWN_SESSION_ID;
+    {excluded_self} surfaces the dropped tally. M8: PROPOSES only — writes
+    nothing. Degrades to an empty shape on error (never a 500)."""
+    try:
+        from stream_manager.governance import is_safety_priority_content
+        from stream_manager.graduated_rules import CandidateStats, is_eligible
+        bus = _get_bus()
+        conn = _open()
+        try:
+            if not _has_table(conn, "decisions") or not _has_table(conn, "messages"):
+                return {"candidates": [], "excluded_self": 0,
+                        "polarity_filtered": True}
+            sm_slugs = sorted(_sm_own_slugs())
+            sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+            has_sessions = _has_table(conn, "sessions")
+            join_sql = (
+                "LEFT JOIN sessions s ON m.session_id = s.id "
+                if has_sessions else "")
+            where, params = _graduation_polarity_where(
+                sm_slugs, sm_own, has_sessions)
+            sql = (
+                "SELECT d.matched_hash AS shape_hash, "
+                "SUM(CASE WHEN UPPER(d.action)='ALLOW' THEN 1 ELSE 0 END)"
+                " AS n_allow, "
+                "AVG(d.confidence) AS mean_confidence, "
+                "SUM(CASE WHEN UPPER(d.action)='BLOCK' THEN 1 ELSE 0 END)"
+                " AS n_block_ever, "
+                "MAX(m.content) AS sample_content "
+                "FROM decisions d JOIN messages m ON d.message_id = m.id "
+                + join_sql
+                + "WHERE " + " AND ".join(where)
+                + " GROUP BY d.matched_hash"
+            )
+            stats_rows = conn.execute(sql, tuple(params)).fetchall()
+            override_counts = _graduation_override_counts(conn)
+            excluded_self = _graduation_excluded_self(
+                conn, sm_slugs, sm_own, has_sessions)
+        finally:
+            conn.close()
+        candidates: list[dict] = []
+        for row in stats_rows:
+            sh = str(row["shape_hash"] or "")
+            if not sh:
+                continue
+            text = str(row["sample_content"] or "")
+            stats = CandidateStats(
+                shape_hash=sh,
+                canonical_text=text[:200],
+                n_allow=int(row["n_allow"] or 0),
+                mean_confidence=float(row["mean_confidence"] or 0.0),
+                n_override=int(override_counts.get(sh, 0)),
+                n_block_ever=int(row["n_block_ever"] or 0),
+                safety_floor=is_safety_priority_content(text),
+            )
+            if not is_eligible(stats):
+                continue
+            if bus is not None and bus.lookup_graduated_rule(sh) is not None:
+                continue  # already graduated (active)
+            candidates.append({
+                "shape_hash": stats.shape_hash,
+                "canonical_text": stats.canonical_text,
+                "n_allow": stats.n_allow,
+                "mean_confidence": round(stats.mean_confidence, 4),
+                "n_override": stats.n_override,
+                "n_block_ever": stats.n_block_ever,
+            })
+        candidates.sort(key=lambda c: c["n_allow"], reverse=True)
+        return {
+            "candidates": candidates[: max(1, min(int(limit), 200))],
+            "excluded_self": excluded_self,
+            "polarity_filtered": True,
+        }
+    except Exception:
+        log.exception("graduation/candidates: scan failed; degrading to empty")
+        return {"candidates": [], "excluded_self": 0, "polarity_filtered": True}
+
+
+@app.post("/api/graduation/confirm")
+async def api_graduation_confirm(request: Request):
+    """ADR-18 Amendment F: operator-confirm graduation of one shape (M8).
+
+    Writes a graduated_rules row ONLY on this explicit operator request —
+    never auto. Re-verifies eligibility server-side (defense-in-depth: the
+    candidate gate is enforced again here, NOT trusted from the client) and
+    refuses any shape that is SM-self, safety-floor, or not proven-routine.
+    Emits one cold-path `pattern_graduated` audit envelope. Idempotent —
+    re-confirming re-activates."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body") from None
+    shape_hash = body.get("shape_hash") if isinstance(body, dict) else None
+    if not isinstance(shape_hash, str) or not shape_hash:
+        raise HTTPException(status_code=400, detail="shape_hash required")
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=503, detail="bus unavailable")
+    from stream_manager.graduated_rules import GraduatedRuleStore, is_eligible
+    conn = _open()
+    try:
+        sm_slugs = sorted(_sm_own_slugs())
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        has_sessions = _has_table(conn, "sessions")
+        stats = _graduation_stats_for_hash(
+            conn, shape_hash, sm_slugs, sm_own, has_sessions)
+    finally:
+        conn.close()
+    if stats is None:
+        raise HTTPException(
+            status_code=404, detail="shape not found in governed corpus")
+    if not is_eligible(stats):
+        raise HTTPException(
+            status_code=409, detail="shape not eligible for graduation")
+    confirmed_ts = time.time()
+    try:
+        # Route the write through the store (M8: this is the only code path
+        # that writes a graduated_rules row, and only on explicit confirm).
+        GraduatedRuleStore(bus=bus).graduate(
+            stats.shape_hash, stats.canonical_text, confirmed_ts, stats.n_allow)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    try:
+        bus.write_envelope("pattern_graduated", {
+            "shape_hash": stats.shape_hash,
+            "canonical_text": stats.canonical_text,
+            "n_allow": stats.n_allow,
+            "mean_confidence": round(stats.mean_confidence, 4),
+            "n_override": stats.n_override,
+            "n_block_ever": stats.n_block_ever,
+            "excluded_self": 0,
+            "confirmed_by": "operator",
+            "graduated_ts": confirmed_ts,
+        })
+    except Exception:
+        log.exception("graduation/confirm: pattern_graduated emit failed")
+    return {
+        "shape_hash": stats.shape_hash,
+        "graduated": True,
+        "n_allow_at_grad": stats.n_allow,
+        "confirmed_ts": confirmed_ts,
+    }
+
+
+@app.get("/api/graduation/active")
+async def api_graduation_active():
+    """ADR-18 Amendment F: list ACTIVE graduated rules (powers the demote /
+    reverse affordance in the UI). Read-only. The table only ever holds
+    operator-confirmed non-SM-self shapes (confirm refuses SM-self), so no
+    polarity filter is needed here. Degrades to empty on error."""
+    try:
+        bus = _get_bus()
+        if bus is None:
+            return {"rules": []}
+        return {"rules": bus.list_graduated_rules(active_only=True)}
+    except Exception:
+        log.exception("graduation/active: read failed; degrading to empty")
+        return {"rules": []}
+
+
+# -- BETA feature-flag registry (2026-06-11 BETA proposals initiative) -------
+# Additive EVOLVING surface (dashboard/server.py is EVOLVING per ADR-18; only
+# /api/lifecycle/jobs is FROZEN). Stores the operator's on/off choice for
+# optional BETA features in a new `beta_flags` table (created lazily). All flags
+# DEFAULT OFF: a key absent from the table reads as disabled. The frontend
+# registry (ui-next lib/beta/registry.js) owns label/description/component; the
+# backend stores only the boolean override. A read error degrades to all-OFF --
+# never silently flips a flag on.
+
+_BETA_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+
+
+def _ensure_beta_flags(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS beta_flags ("
+        "key TEXT PRIMARY KEY, "
+        "enabled INTEGER NOT NULL DEFAULT 0, "
+        "updated_at TEXT)"
+    )
+
+
+def _valid_beta_key(key: str) -> bool:
+    return bool(key) and len(key) <= 64 and all(c in _BETA_KEY_CHARS for c in key)
+
+
+@app.get("/api/beta/flags")
+async def api_beta_flags():
+    """Return stored BETA flag overrides as ``{flags: {key: bool}}``.
+
+    Missing keys read as OFF (the frontend registry merges defaults). A read
+    error degrades to an empty map (all-OFF) rather than surfacing an error
+    that a client could misread as "on".
+    """
+    try:
+        conn = _open_rw()
+        _ensure_beta_flags(conn)
+        rows = conn.execute("SELECT key, enabled FROM beta_flags").fetchall()
+        conn.close()
+        return {"flags": {r["key"]: bool(r["enabled"]) for r in rows}}
+    except Exception:
+        log.exception("beta/flags: read failed; degrading to all-OFF")
+        return {"flags": {}}
+
+
+@app.post("/api/beta/flags/{key}")
+async def api_beta_flag_set(key: str, request: Request):
+    """Upsert one BETA flag override. Body ``{enabled: bool}``. Returns state."""
+    if not _valid_beta_key(key):
+        raise HTTPException(status_code=400, detail="invalid key")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body") from None
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be bool")
+    try:
+        conn = _open_rw()
+        _ensure_beta_flags(conn)
+        conn.execute(
+            "INSERT INTO beta_flags (key, enabled, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "enabled=excluded.enabled, updated_at=excluded.updated_at",
+            (key, 1 if enabled else 0, _iso_now()),
+        )
+        conn.close()
+    except Exception as exc:
+        log.exception("beta/flags: write failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"key": key, "enabled": enabled}
+
+
+# ===================== BETA #coverage-analyzer : coverage-analyzer =====================
+
+# --- GET /api/coverage/bands ---
+# ---------------------------------------------------------------------------
+# BETA coverage-analyzer (#10): cassette-vs-live band distribution.
+# Additive, read-only. Aggregates governance decisions by routing layer into
+# four bands (ALLOW=layer 0, L2/L3=layer 2, L4=layer 4, LEARN=layer 0 learn-
+# dialogue) for (a) the soak CASSETTE fixture and (b) the LIVE non-SM session
+# window. POLARITY (G2): the live aggregation EXCLUDES SM-self -- it joins
+# sessions and filters project_slug NOT IN {streamManager} AND session_id !=
+# self, mirroring the BRIDGE_SM_PROJECT_SLUGS / SM_OWN_SESSION_ID wire-site
+# guard. Domain-agnostic (M16): bands are governance layers, never project
+# vocabulary. No FROZEN surface is touched; no new bus envelope. Defensive --
+# any error degrades to an empty (all-zero) shape so the UI falls back to mock.
+# ---------------------------------------------------------------------------
+
+# Cassette kind -> routing layer + band, mirroring tools/cassette_record.py
+# (_KIND_TO_LAYER). Kept local so this endpoint adds no import coupling to the
+# soak tooling. The four bands match the frontend BANDS table exactly.
+_COVERAGE_KIND_TO_BAND = {
+    "routine": "allow",
+    "l2_l3": "l2_l3",
+    "l4": "l4",
+    "learn_dialogue": "learn",
+}
+_COVERAGE_LAYER_TO_BAND = {0: "allow", 2: "l2_l3", 4: "l4"}
+_COVERAGE_BAND_ORDER = (
+    ("allow", "ALLOW", 0),
+    ("l2_l3", "L2/L3", 2),
+    ("l4", "L4", 4),
+    ("learn", "LEARN", 0),
+)
+
+
+def _coverage_sm_slugs() -> frozenset[str]:
+    """The SM-self project slug exclusion set (polarity G2). Mirrors the
+    jsonl_tail wire-site guard so the same default ('streamManager') and the
+    same BRIDGE_SM_PROJECT_SLUGS override apply."""
+    raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    return frozenset(s.strip() for s in raw.split(",") if s.strip())
+
+
+def _coverage_empty_bands(source: str) -> dict:
+    return {
+        "source": source,
+        "total": 0,
+        "bands": [
+            {"key": k, "label": lbl, "layer": layer, "count": 0, "pct": 0.0}
+            for (k, lbl, layer) in _COVERAGE_BAND_ORDER
+        ],
+    }
+
+
+def _coverage_histogram(counts: dict[str, int], source: str, **extra) -> dict:
+    total = sum(counts.values())
+    bands = []
+    for (k, lbl, layer) in _COVERAGE_BAND_ORDER:
+        n = int(counts.get(k, 0))
+        pct = round(n / total * 100, 1) if total else 0.0
+        bands.append({"key": k, "label": lbl, "layer": layer, "count": n, "pct": pct})
+    out = {"source": source, "total": total, "bands": bands}
+    out.update(extra)
+    return out
+
+
+def _coverage_cassette_bands() -> dict:
+    """Histogram the soak cassette fixture by kind. Path-driven (no project
+    identity). Reads the newest soak_cassette_*.jsonl under tests/fixtures,
+    preferring soak_cassette_latest.jsonl. Empty shape on any error."""
+    try:
+        fx_dir = ROOT / "tests" / "fixtures"
+        latest = fx_dir / "soak_cassette_latest.jsonl"
+        path = latest if latest.exists() else None
+        if path is None:
+            cands = sorted(fx_dir.glob("soak_cassette_*.jsonl"))
+            if cands:
+                path = cands[-1]
+        if path is None or not path.exists():
+            return _coverage_empty_bands("cassette")
+        counts: dict[str, int] = {}
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                kind = rec.get("kind")
+                band = _COVERAGE_KIND_TO_BAND.get(kind)
+                if band is None:
+                    layer = int((rec.get("decision") or {}).get("layer", 0) or 0)
+                    band = _COVERAGE_LAYER_TO_BAND.get(layer, "allow")
+                counts[band] = counts.get(band, 0) + 1
+        return _coverage_histogram(counts, "cassette", fixture=path.name)
+    except Exception:
+        log.exception("coverage/bands: cassette histogram failed")
+        return _coverage_empty_bands("cassette")
+
+
+def _coverage_live_bands(window: int) -> dict:
+    """Histogram the most-recent `window` non-SM decisions by routing layer.
+    POLARITY (G2): joins sessions and EXCLUDES SM-self by project_slug AND by
+    session_id. Layer-aware only when the decisions table has the routing
+    columns; otherwise everything bins as ALLOW (layer 0). Empty shape on error."""
+    try:
+        conn = _open()
+        sm_slugs = _coverage_sm_slugs()
+        own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        has_layer = _has_decision_routing_cols(conn)
+        layer_expr = "COALESCE(d.layer, 0)" if has_layer else "0"
+        # project_slug exclusion (polarity read-side key). Built as a
+        # parameterised NOT IN so the slug set is data, never interpolated SQL.
+        slug_list = sorted(sm_slugs)
+        placeholders = ",".join("?" for _ in slug_list) or "''"
+        params: list = list(slug_list)
+        self_clause = ""
+        if own:
+            self_clause = " AND m.session_id != ?"
+        # The window cap is applied per-band post-aggregation is imprecise;
+        # instead bound the scan to the newest `window` decisions via a subquery.
+        scan_sql = (
+            f"SELECT {layer_expr} AS layer FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "JOIN sessions s ON m.session_id = s.id "
+            "WHERE (s.project_slug IS NULL OR s.project_slug NOT IN ("
+            f"{placeholders}))"
+            f"{self_clause} "
+            "ORDER BY d.rowid DESC LIMIT ?"
+        )
+        scan_params = list(params)
+        if own:
+            scan_params.append(own)
+        scan_params.append(max(1, min(int(window or 1000), 5000)))
+        rows = conn.execute(scan_sql, scan_params).fetchall()
+        # Count how many self rows were excluded for the operator-facing note.
+        excl = 0
+        if own:
+            er = conn.execute(
+                "SELECT COUNT(*) FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "WHERE m.session_id = ?",
+                (own,),
+            ).fetchone()
+            excl = int(er[0] or 0) if er else 0
+        conn.close()
+        counts: dict[str, int] = {}
+        for r in rows:
+            layer = int(r["layer"] or 0)
+            band = _COVERAGE_LAYER_TO_BAND.get(layer, "allow")
+            counts[band] = counts.get(band, 0) + 1
+        return _coverage_histogram(
+            counts,
+            "live",
+            window=int(window or 1000),
+            polarity_filtered=True,
+            excluded_self_rows=excl,
+        )
+    except Exception:
+        log.exception("coverage/bands: live histogram failed")
+        return _coverage_empty_bands("live")
+
+
+@app.get("/api/coverage/bands")
+async def api_coverage_bands(window: int = 1000, fixture_id: str | None = None):
+    """BETA coverage-analyzer (#10): cassette + live band distributions.
+
+    Read-only post-hoc aggregate (M18). The live column is polarity-filtered
+    (SM-self excluded by project_slug AND session_id). Returns
+    {cassette, live} (and {fixture} when fixture_id is a known fixture). Each
+    column is an all-zero shape on its own error so the client can fall back to
+    mock data without the whole call failing.
+    """
+    out: dict = {
+        "cassette": _coverage_cassette_bands(),
+        "live": _coverage_live_bands(window),
+    }
+    # Optional uploaded-fixture comparison: re-bin a named cassette-shaped
+    # fixture under tests/fixtures (path-driven, no project identity). Unknown
+    # / unsafe ids are ignored (the client falls back to its own mock).
+    if fixture_id and all(c.isalnum() or c in "-_." for c in fixture_id):
+        fx = ROOT / "tests" / "fixtures" / fixture_id
+        if fx.exists() and fx.suffix == ".jsonl":
+            try:
+                counts: dict[str, int] = {}
+                with fx.open("r", encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except Exception:
+                            continue
+                        b = _COVERAGE_KIND_TO_BAND.get(rec.get("kind"))
+                        if b is None:
+                            layer = int((rec.get("decision") or {}).get("layer", 0) or 0)
+                            b = _COVERAGE_LAYER_TO_BAND.get(layer, "allow")
+                        counts[b] = counts.get(b, 0) + 1
+                out["fixture"] = _coverage_histogram(
+                    counts, "fixture", fixture_id=fixture_id,
+                    polarity_filtered=True, excluded_self_rows=0,
+                )
+            except Exception:
+                log.exception("coverage/bands: fixture histogram failed")
+    return out
+
+
+# ===================== BETA #escalation-heatmap : escalation-heatmap =====================
+
+# --- GET /api/escalation-timeline ---
+@app.get("/api/escalation-timeline")
+async def api_escalation_timeline(
+    session_id: str | None = None,
+    bucket_ms: int = 30000,
+    limit: int = 5000,
+):
+    """Pre-aggregate escalation decisions (GUIDE/INTERVENE/BLOCK) into
+    contiguous wall-clock buckets for the BETA escalation-heatmap gutter (#14).
+
+    Read-only, post-hoc (M18): a render-ready aggregation over the existing
+    indexed decisions(timestamp) + messages(session_id) rows. ZERO writes, ZERO
+    FROZEN-surface touch, ZERO new bus envelope.
+
+    POLARITY (G2 / M15): the SM-own session is excluded at the SQL WHERE on
+    sessions.project_slug -- a session whose project_slug is in the SM exclusion
+    set (BRIDGE_SM_PROJECT_SLUGS, default {'streamManager'}) can NEVER appear in
+    the aggregation. A LEFT JOIN keeps rows whose session has no sessions-row
+    (they are not self), and the env-set is read the same way the jsonl_tail
+    wire-site refusal reads it, so the two stay consistent.
+
+    Returns {bucket_ms, buckets:[{t_ms, counts:{GUIDE,INTERVENE,BLOCK}, total,
+    peak}], max, escalation_count}. Buckets are ascending (newest last); quiet
+    buckets WITHIN the observed span are present (total 0) so the client Y-axis
+    is true wall-clock. Degrades to an empty buckets list on any error.
+    """
+    try:
+        bw = int(bucket_ms) if int(bucket_ms or 0) > 0 else 30000
+        # bucket width in SECONDS (the decisions.timestamp column is epoch sec).
+        bw_s = bw / 1000.0
+        cap = min(int(limit or 5000), 20000)
+        _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+        sm_slugs = [s.strip() for s in _sm_slugs_raw.split(",") if s.strip()]
+        conn = _open()
+        # Self-exclude (G2): drop any decision whose session is on an SM project
+        # slug. LEFT JOIN so a decision with no sessions-row is KEPT (not self).
+        params: list = []
+        where = ["d.action IN ('GUIDE','INTERVENE','BLOCK')"]
+        if session_id:
+            where.append("m.session_id = ?")
+            params.append(session_id)
+        if sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            # s.project_slug IS NULL => no session row => keep (not self).
+            where.append(
+                f"(s.project_slug IS NULL OR s.project_slug NOT IN ({placeholders}))"
+            )
+            params.extend(sm_slugs)
+        sql = (
+            "SELECT d.action AS action, d.timestamp AS ts "
+            "FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY d.timestamp ASC LIMIT ?"
+        )
+        params.append(cap)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+    except Exception:
+        log.exception("escalation-timeline: query failed; degrading to empty")
+        return {
+            "bucket_ms": int(bucket_ms or 30000), "buckets": [],
+            "max": 1, "escalation_count": 0,
+        }
+
+    # Aggregate into a bucket->counts map (epoch-seconds bucket start).
+    by_bucket: dict[int, dict[str, int]] = {}
+    esc_count = 0
+    min_start = None
+    max_start = None
+    for r in rows:
+        ts = r["ts"]
+        try:
+            ts_f = float(ts)
+        except (TypeError, ValueError):
+            continue
+        # float-safe bucket start in seconds, then expose ms.
+        start = int(ts_f // bw_s) * bw
+        act = str(r["action"]).strip().upper()
+        if act not in ("GUIDE", "INTERVENE", "BLOCK"):
+            continue
+        c = by_bucket.setdefault(start, {"GUIDE": 0, "INTERVENE": 0, "BLOCK": 0})
+        c[act] += 1
+        esc_count += 1
+        if min_start is None or start < min_start:
+            min_start = start
+        if max_start is None or start > max_start:
+            max_start = start
+
+    if esc_count == 0 or min_start is None:
+        return {"bucket_ms": bw, "buckets": [], "max": 1, "escalation_count": 0}
+
+    buckets = []
+    max_total = 1
+    start = min_start
+    # materialise contiguous buckets across the observed span (quiet ones kept).
+    span_guard = 0
+    while start <= max_start and span_guard < 100000:
+        span_guard += 1
+        c = by_bucket.get(start, {"GUIDE": 0, "INTERVENE": 0, "BLOCK": 0})
+        total = c["GUIDE"] + c["INTERVENE"] + c["BLOCK"]
+        if c["BLOCK"] > 0:
+            peak = "BLOCK"
+        elif c["INTERVENE"] > 0:
+            peak = "INTERVENE"
+        elif c["GUIDE"] > 0:
+            peak = "GUIDE"
+        else:
+            peak = ""
+        if total > max_total:
+            max_total = total
+        buckets.append({"t_ms": start, "counts": c, "total": total, "peak": peak})
+        start += bw
+
+    return {
+        "bucket_ms": bw,
+        "buckets": buckets,
+        "max": max_total,
+        "escalation_count": esc_count,
+    }
+
+
+# ===================== BETA #hitl-bulk-dismiss : hitl-bulk-dismiss =====================
+
+# --- GET /api/hitl/pending/triage ---
+@app.get("/api/hitl/pending/triage")
+async def api_hitl_pending_triage(session_id: str | None = None):
+    """Polarity-safe seed for the BETA hitl-bulk-dismiss triage modal (#15).
+
+    Additive READ-ONLY endpoint. Returns the SAME unresolved hitl_pending
+    row shape as /api/hitl/pending, but JOINs sessions to project_slug and
+    EXCLUDES SM-self so the bulk-dismiss sweep can never target an SM-own
+    session (G2 polarity floor, CLAUDE.md 'Session-source exception rule'):
+
+      - project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)  -- durable read key
+      - m.session_id != SM_OWN_SESSION_ID                   -- session backstop
+
+    The modal then loops the EXISTING POST /api/hitl/resolve (resolution
+    'dismissed') over the operator-checked rows -- this endpoint mutates
+    NOTHING. Degrades to [] on any error / empty DB (the client falls back
+    to demo data so the feature stays testable).
+    """
+    try:
+        conn = _open()
+        if not _has_table(conn, "hitl_pending"):
+            conn.close()
+            return []
+        # SM-self exclusion set (durable read key = project_slug). Default
+        # {'streamManager'}; override via BRIDGE_SM_PROJECT_SLUGS. Lowercased
+        # for a case-insensitive compare against sessions.project_slug.
+        sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+        sm_slugs = [s.strip().lower() for s in sm_slugs_raw.split(",") if s.strip()]
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        # Detect whether the sessions table exists (older DBs may lack it).
+        has_sessions = _has_table(conn, "sessions")
+        join_sql = (
+            "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+        )
+        slug_sel = "s.project_slug AS project_slug " if has_sessions else ""
+        where = ["hp.resolved_at IS NULL"]
+        params: list = []
+        if session_id:
+            where.append("m.session_id = ?")
+            params.append(session_id)
+        # Polarity: drop SM-self by project_slug (durable) + session_id (backstop).
+        if has_sessions and sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            # NULL slug is NOT in the SM set -> kept (a governed row with no
+            # session join is never SM-own by slug; the session_id backstop
+            # below still guards the one self session).
+            where.append(
+                "(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ("
+                + placeholders + "))"
+            )
+            params.extend(sm_slugs)
+        if sm_own:
+            where.append("m.session_id != ?")
+            params.append(sm_own)
+        sql = (
+            "SELECT hp.id, hp.message_id, hp.proposed_action, "
+            "hp.proposed_confidence, hp.trigger_reason, hp.queued_at, "
+            "hp.bias_hint, m.session_id, m.content " + (", " + slug_sel if slug_sel else "") +
+            "FROM hitl_pending hp JOIN messages m ON hp.message_id = m.id "
+            + join_sql
+            + "WHERE " + " AND ".join(where)
+            + " ORDER BY hp.id ASC"
+        )
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+        out: list[dict] = []
+        for r in rows:
+            d = dict(r)
+            d["bias_hint"] = _decode_bias_hint(d.get("bias_hint"))
+            out.append(d)
+        return out
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ===================== BETA #decision-oracle : decision-oracle =====================
+
+# --- GET /api/patterns/{hash}/pedigree ---
+# Promotion ladder mirrors src/stream_manager/decision_graph.py
+# PROMOTION_THRESHOLDS (occurrences needed to climb OFF a level). Read-only copy
+# so the endpoint can annotate the meter without importing the engine module.
+_ORACLE_PROMOTION_THRESHOLDS = {0: 3, 1: 5, 2: 10, 3: 20}
+
+
+def _oracle_sm_slugs() -> frozenset[str]:
+    """The SM project-slug exclusion set (polarity floor, CLAUDE.md). Mirrors the
+    jsonl_tail wire-site default exactly: env BRIDGE_SM_PROJECT_SLUGS, default
+    'streamManager'. Compared lowercased."""
+    raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    return frozenset(s.strip().lower() for s in raw.split(",") if s.strip())
+
+
+def _oracle_fmt_ts(ts: float) -> str:
+    """A short, human, ASCII-only timestamp label for an observation row."""
+    import datetime as _dt
+    try:
+        d = _dt.datetime.fromtimestamp(float(ts))
+        return d.strftime("%b %d, %H:%M")
+    except Exception:
+        return "--"
+
+
+def _oracle_age_days(first_seen: float | None, last_seen: float | None) -> int | None:
+    try:
+        if first_seen is None:
+            return None
+        import time as _t
+        span = (last_seen or _t.time()) - float(first_seen)
+        return max(0, int(span // 86400))
+    except Exception:
+        return None
+
+
+@app.get("/api/patterns/{hash}/pedigree")
+async def api_pattern_pedigree(hash: str):
+    """READ-ONLY pattern pedigree for the Decision Oracle whisper pane (BETA #12).
+
+    Returns the L0-L4 promotion ladder context + a success/age stat strip + an
+    ancestral-replay observation timeline reconstructed from the messages whose
+    decisions matched this pattern hash. 404 when the pattern is unknown, has no
+    NON-SM observations, or the graph_patterns table is absent (fresh DB).
+
+    G2 (no-self-monitor): observations on SM-self sessions (project_slug in the
+    SM exclusion set) are EXCLUDED from the timeline and the overfit tally; if
+    that leaves zero observations the whole pedigree is suppressed (404). The
+    pattern is never exposed solely from SM-self traffic.
+    """
+    pattern_hash = (hash or "").strip()
+    if not pattern_hash or len(pattern_hash) > 128:
+        raise HTTPException(status_code=404, detail="pattern not found")
+
+    try:
+        conn = _open()
+        try:
+            # No graph_patterns table yet (fresh DB / pre-soak) -> calm 404.
+            if not _has_table(conn, "graph_patterns"):
+                raise HTTPException(status_code=404, detail="pattern not found")
+
+            prow = conn.execute(
+                "SELECT hash, level, occurrences, successes, last_seen, "
+                "canonical_text FROM graph_patterns WHERE hash=?",
+                (pattern_hash,),
+            ).fetchone()
+            if prow is None:
+                raise HTTPException(status_code=404, detail="pattern not found")
+
+            sm_slugs = _oracle_sm_slugs()
+
+            # The observation timeline: every decision that matched this hash,
+            # joined to its message + session + the agent profile active at
+            # decision time. SM-self sessions are filtered in Python (the slug set
+            # is small + env-driven; keeping it out of SQL mirrors the read-side
+            # backstop pattern). Ordered oldest-first (ancestral replay reads
+            # forward in time).
+            has_agents = _has_table(conn, "agents")
+            slug_expr = (
+                "(SELECT a.profile_slug FROM agents a "
+                "WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp "
+                "ORDER BY a.last_seen DESC LIMIT 1)"
+                if has_agents else "NULL"
+            )
+            obs_rows = conn.execute(
+                "SELECT d.timestamp AS ts, d.confidence AS confidence, "
+                "m.content AS content, m.session_id AS session_id, "
+                "COALESCE(s.project_slug, '') AS project_slug, "
+                f"{slug_expr} AS profile_slug "
+                "FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                "WHERE d.matched_hash = ? "
+                "ORDER BY d.timestamp ASC",
+                (pattern_hash,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception:
+        # Detail to the log, not the body (no SQL/stack leak to the client).
+        log.exception("patterns/pedigree: query failed")
+        raise HTTPException(status_code=500, detail="internal error") from None
+
+    # G2: drop SM-self observations. If nothing non-SM remains, suppress (404).
+    governed = [
+        r for r in obs_rows
+        if (r["project_slug"] or "").strip().lower() not in sm_slugs
+    ]
+    if not governed:
+        raise HTTPException(status_code=404, detail="pattern not found")
+
+    level = max(0, min(4, int(prow["level"] or 0)))
+    occurrences = int(prow["occurrences"] or 0)
+    successes = int(prow["successes"] or 0)
+    success_rate = (successes / occurrences) if occurrences > 0 else 0.0
+
+    first_ts = governed[0]["ts"]
+    last_ts = governed[-1]["ts"]
+
+    # Overfit tally: share of governed observations on the single most common
+    # agent profile. Domain-agnostic (keyed on whatever profile_slug the data
+    # carries). Flag at >= 80% on one profile with >= 3 observations.
+    prof_counts: dict[str, int] = {}
+    for r in governed:
+        p = (r["profile_slug"] or "").strip() or "unknown"
+        prof_counts[p] = prof_counts.get(p, 0) + 1
+    top_profile = None
+    overfit_pct = 0
+    overfit_flagged = False
+    if prof_counts:
+        top_profile, top_n = max(prof_counts.items(), key=lambda kv: kv[1])
+        overfit_pct = round(top_n / len(governed) * 100)
+        overfit_flagged = (
+            len(governed) >= 3 and overfit_pct >= 80 and top_profile != "unknown"
+        )
+
+    # Promotion meter: occurrences toward the next-level threshold.
+    next_threshold = _ORACLE_PROMOTION_THRESHOLDS.get(level)
+
+    observations = []
+    for i, r in enumerate(governed):
+        content = (r["content"] or "").replace("\r", " ").replace("\n", " ").strip()
+        fingerprint = content[:50] + ("..." if len(content) > 50 else "")
+        prof = (r["profile_slug"] or "").strip() or "unlabelled"
+        observations.append({
+            "seq": i + 1,
+            "ts_label": _oracle_fmt_ts(r["ts"]),
+            "intent": prof,                # domain-agnostic intent proxy (agent profile)
+            "fingerprint": fingerprint,
+            "match_pct": round(float(r["confidence"] or 0.0) * 100),
+        })
+
+    return {
+        "pattern_hash": pattern_hash,
+        "level": level,
+        "occurrences": occurrences,
+        "successes": successes,
+        "success_rate": round(success_rate, 4),
+        "next_threshold": next_threshold,        # null at L4 (terminal)
+        "age_days": _oracle_age_days(first_ts, last_ts),
+        "first_seen_label": f"first seen {_oracle_fmt_ts(first_ts)}",
+        "last_reinforced_label": _oracle_fmt_ts(last_ts),
+        "overfit": {
+            "flagged": overfit_flagged,
+            "pct": overfit_pct,
+            "profile": top_profile if top_profile and top_profile != "unknown" else None,
+        },
+        "observations": observations,
+    }
+
+
+# ===================== BETA #health-digest : health-digest =====================
+
+# --- GET /api/sessions/health-digest ---
+@app.get("/api/sessions/health-digest")
+async def api_sessions_health_digest(limit: int = 20):
+    """BETA #32 -- per-session health digest for the glance rail.
+
+    Collapses the prior 4 per-session fetches (decisions / agents /
+    lifecycle jobs / hitl pending) into ONE aggregated read so the rail
+    can render a pre-computed health verdict per governed session.
+
+    READ-ONLY (M18, post-hoc -- never on the verdict hot path). Opens the
+    DB with the same ``_open()`` (mode=ro) pattern as every other read
+    endpoint and closes it before returning.
+
+    POLARITY (G2, CLAUDE.md): SM never presents its own sessions as
+    governed targets. The durable read key is ``project_slug NOT IN``
+    the SM slug set (``BRIDGE_SM_PROJECT_SLUGS``, default
+    ``{streamManager}``); ``SM_OWN_SESSION_ID`` is applied as the cheap
+    read-side backstop on the ephemeral session-id key. ``excluded_self``
+    surfaces how many rows the filter dropped so the UI can show the
+    polarity readout on screen.
+
+    Degrades to an empty set (never an error body that flips the UI to a
+    false 'live' state) on any failure or fresh DB.
+    """
+    import time as _time
+
+    now = int(_time.time())
+    empty = {"now": now, "excluded_self": 0, "sessions": []}
+
+    # Polarity: durable read key (project_slug) + cheap session-id backstop.
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = {s.strip() for s in _sm_slugs_raw.split(",") if s.strip()}
+    sm_own_sid = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    try:
+        conn = _open()
+    except Exception:
+        log.exception("health-digest: open failed")
+        return empty
+
+    try:
+        # session columns (older DBs predate hitl_mode / hitl_floor).
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        has_hitl = "hitl_mode" in cols
+        sel = (
+            "id, project_slug, pid, started_at, ended_at, hitl_mode"
+            if has_hitl
+            else "id, project_slug, pid, started_at, ended_at"
+        )
+        sess_rows = conn.execute(
+            f"SELECT {sel} FROM sessions ORDER BY started_at DESC LIMIT ?",
+            (min(max(int(limit or 20), 1), 50),),
+        ).fetchall()
+
+        has_agents = _has_agents_table(conn)
+        has_hitl_tbl = _has_table(conn, "hitl_pending")
+
+        out: list[dict] = []
+        excluded_self = 0
+        for sr in sess_rows:
+            sid = sr["id"]
+            slug = (sr["project_slug"] or "").strip()
+            # POLARITY filter -- durable slug key + session-id backstop.
+            if slug in sm_slugs or (sm_own_sid and sid == sm_own_sid):
+                excluded_self += 1
+                continue
+
+            started = sr["started_at"]
+            ended = sr["ended_at"]
+            ref = ended if ended is not None else now
+            uptime = 0
+            try:
+                if started is not None:
+                    uptime = max(0, int(float(ref) - float(started)))
+            except Exception:
+                uptime = 0
+
+            # decision_count + latest_decision (decisions JOIN messages on sid)
+            dec_count = 0
+            latest_decision = None
+            try:
+                dec_count = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "WHERE m.session_id = ?",
+                    (sid,),
+                ).fetchone()[0]
+                ld = conn.execute(
+                    "SELECT d.action, d.confidence, d.timestamp "
+                    "FROM decisions d JOIN messages m ON d.message_id = m.id "
+                    "WHERE m.session_id = ? "
+                    # rowid DESC breaks ties when several decisions share a
+                    # coarse time.time() stamp (Windows ~15ms resolution); the
+                    # most-recently-inserted row is the true latest.
+                    "ORDER BY d.timestamp DESC, d.rowid DESC LIMIT 1",
+                    (sid,),
+                ).fetchone()
+                if ld is not None:
+                    latest_decision = {
+                        "action": str(ld["action"] or "").upper(),
+                        "confidence": float(ld["confidence"] or 0.0),
+                        "agent_id": "",
+                        "timestamp": int(float(ld["timestamp"] or 0)),
+                    }
+            except Exception:
+                dec_count = int(dec_count or 0)
+                latest_decision = latest_decision or None
+
+            # active_agent_count + a recent agent's id for the latest decision
+            agent_count = 0
+            if has_agents:
+                try:
+                    agent_count = conn.execute(
+                        "SELECT COUNT(*) FROM agents WHERE session_id = ?",
+                        (sid,),
+                    ).fetchone()[0]
+                    if latest_decision is not None:
+                        arow = conn.execute(
+                            "SELECT profile_slug FROM agents "
+                            "WHERE session_id = ? ORDER BY last_seen DESC LIMIT 1",
+                            (sid,),
+                        ).fetchone()
+                        if arow is not None:
+                            latest_decision["agent_id"] = str(
+                                arow["profile_slug"] or ""
+                            )
+                except Exception:
+                    agent_count = int(agent_count or 0)
+
+            # hitl_pending_count (hitl_pending JOIN messages on sid, unresolved)
+            hitl_pending = 0
+            if has_hitl_tbl:
+                try:
+                    hitl_pending = conn.execute(
+                        "SELECT COUNT(*) FROM hitl_pending hp "
+                        "JOIN messages m ON hp.message_id = m.id "
+                        "WHERE hp.resolved_at IS NULL AND m.session_id = ?",
+                        (sid,),
+                    ).fetchone()[0]
+                except Exception:
+                    hitl_pending = int(hitl_pending or 0)
+
+            # active_job_count -- best-effort via the lifecycle bridge.
+            active_jobs = 0
+            try:
+                from stream_manager.lifecycle_bridge import list_active_jobs
+                jobs = list_active_jobs(
+                    db_path=str(DB_PATH), session_id=sid, limit=500
+                )
+                active_jobs = len(jobs)
+            except Exception:
+                active_jobs = 0
+
+            hitl_mode = (
+                str(sr["hitl_mode"]).upper()
+                if has_hitl and sr["hitl_mode"]
+                else "ASYNC"
+            )
+
+            out.append(
+                {
+                    "session_id": sid,
+                    "project_slug": slug or str(sid),
+                    "started_at": started,
+                    "ended_at": ended,
+                    "uptime_seconds": uptime,
+                    "decision_count": int(dec_count or 0),
+                    "latest_decision": latest_decision,
+                    "active_agent_count": int(agent_count or 0),
+                    "active_job_count": int(active_jobs or 0),
+                    "hitl_pending_count": int(hitl_pending or 0),
+                    "hitl_mode": hitl_mode,
+                    # No escalation table exists in the schema; the field is
+                    # part of the contract but degrades to None for live data
+                    # (variance state is reachable only via mock until an
+                    # escalation source lands -- never fabricated here).
+                    "latest_escalation": None,
+                }
+            )
+
+        conn.close()
+        return {"now": now, "excluded_self": excluded_self, "sessions": out}
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        log.exception("health-digest: aggregation failed")
+        return empty
+
+
+# ===================== BETA #health-sparklines : health-sparklines =====================
+
+# --- GET /api/sessions/{session_id}/sparkline-data ---
+@app.get("/api/sessions/{session_id}/sparkline-data")
+async def api_session_sparkline_data(session_id: str, limit: int = 100):
+    """BETA #34 health-sparklines drawer detail: the last N decisions for ONE
+    session as {timestamp, confidence, action, trigger_reason, throughput}[],
+    newest-first.
+
+    READ-ONLY + additive. Touches NO FROZEN surface (no governance.py, no
+    message_bus schema change, no new bus envelope). Joins decisions + messages
+    + sessions and defensively left-joins hitl_pending for trigger_reason.
+
+    POLARITY (G2 / no-self-monitor): returns ZERO rows when the session's
+    project_slug is in the SM exclusion set (BRIDGE_SM_PROJECT_SLUGS, default
+    {streamManager}) OR the session_id equals SM_OWN_SESSION_ID. The exclusion
+    is the DURABLE read key (project_slug) plus a session-id backstop -- mirrors
+    the CLAUDE.md polarity split.
+
+    Degrades to an empty row set on any error (never 500 / stack leak).
+    """
+    try:
+        n = max(1, min(int(limit or 100), 200))
+    except Exception:
+        n = 100
+
+    # SM self-exclusion keys.
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = frozenset(s.strip() for s in _sm_slugs_raw.split(",") if s.strip())
+
+    empty = {"session_id": session_id, "count": 0, "mock": False, "rows": []}
+
+    # Session-id backstop: never serve the SM own session.
+    if sm_own and session_id == sm_own:
+        return empty
+
+    try:
+        conn = _open()
+        # Durable read-side polarity key: resolve the session's project_slug and
+        # drop it if it is in the SM exclusion set. A missing session row simply
+        # yields no decisions below (empty), which is the correct safe default.
+        try:
+            srow = conn.execute(
+                "SELECT project_slug FROM sessions WHERE id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except Exception:
+            srow = None
+        if srow is not None:
+            slug = (srow["project_slug"] if isinstance(srow, sqlite3.Row) else srow[0]) or ""
+            if str(slug).strip() in sm_slugs:
+                conn.close()
+                return empty
+
+        action_expr = "d.action"
+        # trigger_reason lives on hitl_pending; left-join when present.
+        has_hitl = _has_table(conn, "hitl_pending")
+        if has_hitl:
+            trig_expr = (
+                "(SELECT hp.trigger_reason FROM hitl_pending hp "
+                "WHERE hp.message_id = d.message_id ORDER BY hp.id DESC LIMIT 1)"
+            )
+        else:
+            trig_expr = "NULL"
+        conf_expr = "COALESCE(d.confidence, 0.0)"
+
+        sql = (
+            "SELECT d.rowid AS rid, d.timestamp AS timestamp, "
+            f"{conf_expr} AS confidence, {action_expr} AS action, "
+            f"{trig_expr} AS trigger_reason "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            "WHERE m.session_id = ? "
+            "ORDER BY d.rowid DESC LIMIT ?"
+        )
+        rows = conn.execute(sql, (session_id, n)).fetchall()
+        conn.close()
+    except Exception:
+        # Detail goes to the server log, not the response body (no path / SQL leak).
+        log.exception("sparkline-data: query failed")
+        return empty
+
+    # Derive a coarse per-row THROUGHPUT proxy from inter-arrival gaps. rows are
+    # newest-first; compute gaps in chronological order then map back. Smaller
+    # gap => higher throughput. This is the SECONDARY (shape-only) trace -- never
+    # a severity signal. No timestamps => a gentle steady baseline.
+    chron = list(reversed([dict(r) for r in rows]))
+    ts = [float(r["timestamp"]) for r in chron if r.get("timestamp") is not None]
+    thru_by_idx: dict[int, float] = {}
+    if len(ts) >= 2:
+        gaps = []
+        for i in range(1, len(chron)):
+            a = chron[i - 1].get("timestamp")
+            b = chron[i].get("timestamp")
+            if a is not None and b is not None:
+                gaps.append(max(0.0, float(b) - float(a)))
+            else:
+                gaps.append(None)
+        valid = [g for g in gaps if g is not None]
+        max_gap = max(1.0, max(valid)) if valid else 1.0
+        # first chron row has no predecessor: seed with a mid baseline.
+        thru_by_idx[0] = 0.4
+        for i, g in enumerate(gaps, start=1):
+            if g is None:
+                thru_by_idx[i] = 0.4
+            else:
+                thru_by_idx[i] = max(0.0, min(1.0, 1.0 - g / max_gap)) * 0.85 + 0.1
+    else:
+        for i in range(len(chron)):
+            thru_by_idx[i] = 0.4
+
+    out = []
+    for i, r in enumerate(chron):
+        out.append(
+            {
+                "timestamp": float(r["timestamp"]) if r.get("timestamp") is not None else 0.0,
+                "confidence": round(float(r.get("confidence") or 0.0), 4),
+                "action": r.get("action") or "",
+                "trigger_reason": r.get("trigger_reason"),
+                "throughput": round(float(thru_by_idx.get(i, 0.4)), 4),
+            }
+        )
+    # newest-first to match the live decisionsStore / /api/decisions contract.
+    out.reverse()
+    return {"session_id": session_id, "count": len(out), "mock": False, "rows": out}
+
+
+# ===================== BETA #stale-cleanup : stale-cleanup =====================
+
+# --- GET /api/sessions/stale ---
+# --- BETA #46 stale-session cleanup: additive, soft-delete-only, no FROZEN touch ---
+# Reuses the existing _open_rw() / _reject_sm_own() / _iso_now() helpers. The
+# sessions.deleted_at column is added lazily + guarded (no-op when present).
+
+def _sm_own_slugs() -> set[str]:
+    """SM-self project_slug set (polarity G2). Mirrors message_bus.py: env
+    BRIDGE_SM_PROJECT_SLUGS (comma-separated), default {\"streamManager\"}.
+    Lowercased for case-insensitive compare."""
+    raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def _ensure_sessions_deleted_at(conn: sqlite3.Connection) -> None:
+    """Guarded additive ALTER: add sessions.deleted_at if missing. SQLite lacks
+    ADD COLUMN IF NOT EXISTS, so check table_info first. Idempotent."""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "deleted_at" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN deleted_at REAL")
+    except Exception:
+        log.exception("stale-cleanup: ensure deleted_at column failed")
+
+
+@app.get("/api/sessions/stale")
+async def api_sessions_stale(older_than_hours: float = 24.0):
+    """Preview the stale (ended past the window, not already archived) NON-SM
+    sessions eligible for soft-delete. Read-only -- modifies NOTHING.
+
+    Polarity (G2/M15): rows whose project_slug is in the SM-own slug set are
+    EXCLUDED in the SQL WHERE; the SM_OWN_SESSION_ID row is excluded too. Each
+    returned row carries the cascade counts (messages / decisions) + open-HITL
+    count so the operator sees exactly what an archive would soft-delete.
+    Degrades to an empty list (never an error a client could misread).
+    """
+    try:
+        hrs = max(0.0, float(older_than_hours))
+    except Exception:
+        hrs = 24.0
+    cutoff = time.time() - hrs * 3600.0
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    try:
+        conn = _open_rw()
+        _ensure_sessions_deleted_at(conn)
+        rows = conn.execute(
+            "SELECT id, project_slug, pid, started_at, ended_at "
+            "FROM sessions "
+            "WHERE ended_at IS NOT NULL AND ended_at < ? "
+            "AND deleted_at IS NULL "
+            "ORDER BY ended_at ASC LIMIT 200",
+            (cutoff,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            slug = str(d.get("project_slug") or "").strip().lower()
+            # Polarity self-exclude (G2): never present SM-self as archivable.
+            if slug in slugs:
+                continue
+            if sm_own and str(d.get("id")) == sm_own:
+                continue
+            sid = d["id"]
+            try:
+                mc = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = ?", (sid,)
+                ).fetchone()[0]
+            except Exception:
+                mc = 0
+            # decisions has no session_id -> join via messages.
+            try:
+                dc = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "WHERE m.session_id = ?",
+                    (sid,),
+                ).fetchone()[0]
+            except Exception:
+                dc = 0
+            # open HITL rows (absolute HITL gate -> 'protected') via message join.
+            try:
+                oh = conn.execute(
+                    "SELECT COUNT(*) FROM hitl_pending hp "
+                    "JOIN messages m ON hp.message_id = m.id "
+                    "WHERE m.session_id = ? AND hp.resolved_at IS NULL",
+                    (sid,),
+                ).fetchone()[0]
+            except Exception:
+                oh = 0
+            ended = d.get("ended_at")
+            try:
+                ended_hours_ago = (
+                    (time.time() - float(ended)) / 3600.0 if ended is not None else None
+                )
+            except Exception:
+                ended_hours_ago = None
+            out.append({
+                "id": sid,
+                "project_slug": d.get("project_slug") or "",
+                "pid": d.get("pid"),
+                "ended_hours_ago": ended_hours_ago,
+                "message_count": int(mc),
+                "decision_count": int(dc),
+                "open_hitl": int(oh),
+            })
+        conn.close()
+        return {"sessions": out, "older_than_hours": hrs, "own_session_id": sm_own or None}
+    except Exception:
+        log.exception("stale-cleanup: preview failed; degrading to empty")
+        return {"sessions": [], "older_than_hours": hrs, "own_session_id": None}
+
+# --- POST /api/sessions/{session_id}/archive ---
+@app.post("/api/sessions/{session_id}/archive")
+async def api_session_archive(session_id: str):
+    """Soft-delete (archive) one session: set sessions.deleted_at to now if it is
+    currently NULL. REVERSIBLE -- never a hard DELETE; no cascade row is removed,
+    so audit/forensic replay survives. Refuses SM-self (HTTP 400) by both
+    SM_OWN_SESSION_ID and project_slug (polarity G2). Idempotent: archiving an
+    already-archived session is a no-op success.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    _reject_sm_own(session_id)  # HTTP 400 if session_id == SM_OWN_SESSION_ID
+    slugs = _sm_own_slugs()
+    try:
+        conn = _open_rw()
+        _ensure_sessions_deleted_at(conn)
+        row = conn.execute(
+            "SELECT id, project_slug, deleted_at FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="session not found")
+        slug = str(row["project_slug"] or "").strip().lower()
+        if slug in slugs:
+            conn.close()
+            raise HTTPException(status_code=400, detail="refusing to archive SM-self session")
+        if row["deleted_at"] is not None:
+            conn.close()
+            return {"id": session_id, "archived": True, "already": True}
+        conn.execute(
+            "UPDATE sessions SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+            (time.time(), session_id),
+        )
+        conn.close()
+        return {"id": session_id, "archived": True, "archived_at": _iso_now()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("stale-cleanup: archive failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+# --- POST /api/sessions/{session_id}/restore ---
+@app.post("/api/sessions/{session_id}/restore")
+async def api_session_restore(session_id: str):
+    """Restore (un-archive) one soft-deleted session: clear sessions.deleted_at.
+    The reverse of /archive -- the lane returns to the rail. Refuses SM-self by
+    SM_OWN_SESSION_ID + project_slug (polarity G2). Idempotent: restoring a
+    not-archived session is a no-op success.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    _reject_sm_own(session_id)
+    slugs = _sm_own_slugs()
+    try:
+        conn = _open_rw()
+        _ensure_sessions_deleted_at(conn)
+        row = conn.execute(
+            "SELECT id, project_slug FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="session not found")
+        slug = str(row["project_slug"] or "").strip().lower()
+        if slug in slugs:
+            conn.close()
+            raise HTTPException(status_code=400, detail="refusing to act on SM-self session")
+        conn.execute(
+            "UPDATE sessions SET deleted_at = NULL WHERE id = ?",
+            (session_id,),
+        )
+        conn.close()
+        return {"id": session_id, "archived": False, "restored_at": _iso_now()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("stale-cleanup: restore failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ===================== BETA #undefined : event-cursor =====================
+
+# --- GET /api/sessions/{session_id}/events ---
+# ===================== BETA #event-cursor : event-cursor (#31) =====================
+
+# --- GET /api/sessions/{session_id}/events?since=<cursor>&full=0|1 ---
+# Additive read-only resume endpoint for the BETA durable session event cursor.
+# Reads EXISTING decisions + messages rows newer than the client's last-seen
+# cursor and returns them so the browser can resume the feed across a refresh.
+# Touches NO FROZEN surface: no governance.py, NO message_bus.py edit, NO new
+# message_bus method, NO schema change (no new table / column), NO new bus
+# envelope. Reuses the existing _open() / _has_table() helpers and the same
+# decisions JOIN messages idiom + polarity self-exclude the sparkline endpoint
+# uses.
+#
+# CURSOR: the compound watermark d{decisions.rowid}:m{messages.rowid} -- the same
+# id: / Last-Event-ID shape the /events SSE stream already emits. The decision
+# rowid is the load-bearing pagination key (events strictly newer than it).
+#
+# POLARITY (G2/M15): an SM-self scope returns ZERO events. The session's
+# project_slug is resolved and dropped if it is in the SM exclusion set
+# (BRIDGE_SM_PROJECT_SLUGS, default {streamManager}) -- the DURABLE read key --
+# and the session_id == SM_OWN_SESSION_ID backstop short-circuits first. Mirrors
+# the no-self-monitor floor.
+@app.get("/api/sessions/{session_id}/events")
+async def api_session_events(session_id: str, since: str = "", full: int = 0):
+    """Resume the session event stream from a client cursor. Returns events
+    (decision rows joined to their message) strictly newer than the cursor's
+    decision rowid, capped at 100, oldest-first so the client folds them in
+    chronological order. ?full=1 additionally returns the accumulated digest at
+    the cursor (decision_count / block_count / pending_hitl_count / latest_action)
+    for a cold-start / checkpoint load. Read-only -- modifies NOTHING.
+
+    Degrades to an empty event list on any error / fresh DB (never a 500 / stack
+    leak). `truncated` is true when the gap exceeded the 100-row page so the
+    client surfaces a RESEEDED state instead of silently dropping events.
+    """
+    empty = {
+        "session_id": session_id,
+        "since": since or "",
+        "cursor": since or "",
+        "count": 0,
+        "truncated": False,
+        "events": [],
+        "digest": None,
+    }
+
+    # SM self-exclusion keys (polarity G2).
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = frozenset(s.strip().lower() for s in _sm_slugs_raw.split(",") if s.strip())
+
+    # Session-id backstop: never serve the SM own session.
+    if sm_own and session_id == sm_own:
+        return empty
+
+    # Parse the compound cursor d{n}:m{n}; tolerate an absent/garbage cursor as
+    # "from the beginning" (since_decision_rowid = 0).
+    since_d = 0
+    try:
+        import re as _re
+        mm = _re.match(r"^d(\d+):m(\d+)$", (since or "").strip())
+        if mm:
+            since_d = int(mm.group(1))
+    except Exception:
+        since_d = 0
+
+    cap = 100
+    try:
+        conn = _open()
+        # Durable read-side polarity key: resolve the session's project_slug and
+        # drop it if it is in the SM exclusion set. A missing session row yields
+        # no events below (empty), the correct safe default.
+        try:
+            srow = conn.execute(
+                "SELECT project_slug FROM sessions WHERE id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except Exception:
+            srow = None
+        if srow is not None:
+            slug = (srow["project_slug"] if isinstance(srow, sqlite3.Row) else srow[0]) or ""
+            if str(slug).strip().lower() in sm_slugs:
+                conn.close()
+                return empty
+
+        has_routing = _has_decision_routing_cols(conn)
+        model_expr = (
+            "COALESCE(d.model_used, '') AS model_used" if has_routing else "'' AS model_used"
+        )
+        layer_expr = "COALESCE(d.layer, 0) AS layer" if has_routing else "0 AS layer"
+
+        sql = (
+            "SELECT d.rowid AS rid, d.id AS id, d.message_id AS message_id, "
+            "d.action AS action, COALESCE(d.confidence, 0.0) AS confidence, "
+            "d.timestamp AS timestamp, "
+            f"{model_expr}, {layer_expr}, "
+            "m.rowid AS message_rid, m.session_id AS session_id, m.direction AS direction "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            "WHERE m.session_id = ? AND d.rowid > ? "
+            "ORDER BY d.rowid ASC LIMIT ?"
+        )
+        # Fetch cap+1 so we can detect truncation without a second COUNT query.
+        rows = conn.execute(sql, (session_id, since_d, cap + 1)).fetchall()
+        truncated = len(rows) > cap
+        rows = rows[:cap]
+
+        events = []
+        for r in rows:
+            d = dict(r)
+            events.append({
+                "rid": int(d.get("rid") or 0),
+                "id": d.get("id"),
+                "message_id": d.get("message_id"),
+                "message_rid": int(d.get("message_rid") or 0),
+                "action": d.get("action") or "",
+                "confidence": round(float(d.get("confidence") or 0.0), 4),
+                "layer": int(d.get("layer") or 0),
+                "model_used": d.get("model_used") or "",
+                "session_id": d.get("session_id"),
+                "direction": d.get("direction"),
+                "timestamp": float(d.get("timestamp") or 0.0),
+            })
+
+        # New watermark = the max decision rowid we returned (or the request
+        # cursor when there was no gap), paired with the max message rowid.
+        max_d = max((e["rid"] for e in events), default=since_d)
+        max_m = max((e["message_rid"] for e in events), default=0)
+        cursor = f"d{max_d}:m{max_m}"
+
+        digest = None
+        if int(full or 0) == 1:
+            # full=1: the accumulated digest AT the watermark (cold-start /
+            # checkpoint load). Counts are scoped to this session, polarity
+            # already enforced above.
+            try:
+                dc = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d JOIN messages m "
+                    "ON d.message_id = m.id WHERE m.session_id = ?",
+                    (session_id,),
+                ).fetchone()[0]
+            except Exception:
+                dc = 0
+            try:
+                bc = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d JOIN messages m "
+                    "ON d.message_id = m.id WHERE m.session_id = ? AND d.action = 'BLOCK'",
+                    (session_id,),
+                ).fetchone()[0]
+            except Exception:
+                bc = 0
+            ph = 0
+            if _has_table(conn, "hitl_pending"):
+                try:
+                    ph = conn.execute(
+                        "SELECT COUNT(*) FROM hitl_pending hp JOIN messages m "
+                        "ON hp.message_id = m.id "
+                        "WHERE m.session_id = ? AND hp.resolved_at IS NULL",
+                        (session_id,),
+                    ).fetchone()[0]
+                except Exception:
+                    ph = 0
+            try:
+                la_row = conn.execute(
+                    "SELECT d.action FROM decisions d JOIN messages m "
+                    "ON d.message_id = m.id WHERE m.session_id = ? "
+                    "ORDER BY d.rowid DESC LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+            except Exception:
+                la_row = None
+            digest = {
+                "decision_count": int(dc or 0),
+                "block_count": int(bc or 0),
+                "pending_hitl_count": int(ph or 0),
+                "latest_action": (la_row[0] if la_row else None),
+            }
+
+        conn.close()
+        return {
+            "session_id": session_id,
+            "since": since or "",
+            "cursor": cursor,
+            "count": len(events),
+            "truncated": bool(truncated),
+            "events": events,
+            "digest": digest,
+        }
+    except Exception:
+        # Detail to the server log, not the response body (no path / SQL leak).
+        log.exception("event-cursor: events query failed; degrading to empty")
+        return empty
+
+
+# ===================== BETA #undefined : soak-panel =====================
+
+# --- GET /api/soak/sessions ---
+# ===================== BETA #soak-panel : live-session soak selector =====================
+# Additive READ-ONLY endpoints. NO FROZEN touch: no governance.py, no
+# message_bus schema change, no new bus envelope, no in-process soak spawn. The
+# soak_runs table is additive + created lazily; the row writer is the
+# out-of-process soak_driver --live-session (CLI / main thread), never the
+# dashboard. Polarity (G2): every session query EXCLUDES SM-self (project_slug
+# NOT IN the SM slug set AND session_id != SM_OWN_SESSION_ID). Firewall (G1): a
+# candidate cwd containing a firewalled fragment is rejected; no certPortal path
+# is ever read.
+
+# Firewalled cwd fragments (G1). Configuration, not target vocabulary -- a cwd
+# containing any of these (case-insensitive) is an off-limits monitored-project
+# working dir and is rejected from the selector. Overridable via env.
+_SOAK_FIREWALL_CWD_FRAGMENTS = [
+    f.strip().lower()
+    for f in os.environ.get("SM_SOAK_FIREWALL_CWD_FRAGMENTS", "certportal").split(",")
+    if f.strip()
+]
+
+
+def _soak_cwd_is_firewalled(cwd: object) -> bool:
+    """True when a candidate cwd contains a firewalled monitored-project path
+    fragment (G1 firewall). Empty/None cwd is never firewalled."""
+    s = str(cwd or "").strip().lower()
+    if not s:
+        return False
+    return any(frag and frag in s for frag in _SOAK_FIREWALL_CWD_FRAGMENTS)
+
+
+@app.get("/api/soak/sessions")
+async def api_soak_sessions(limit: int = 20):
+    """Ranked, SELF-EXCLUDED, firewall-filtered NON-SM candidate sessions for the
+    BETA soak-panel live-soak selector (#16). Read-only -- modifies NOTHING.
+
+    Ranking: (busy_score DESC, recency ASC). busy_score = the session's decision
+    count (a cheap activity proxy); recency = seconds since the latest decision.
+    Sourced from gov.db sessions/decisions; cwd is sourced (best-effort) from the
+    SessionWatcher external-session snapshot when available (gov.db has no cwd
+    column) so the firewall filter can run -- a candidate with no known cwd is
+    kept (the durable project_slug + session_id self-exclude still applies).
+
+    Polarity (G2/M15): rows whose project_slug is in the SM-own slug set are
+    EXCLUDED (durable read key) and the SM_OWN_SESSION_ID row is excluded too
+    (session backstop). The dropped tallies are returned as excluded_self /
+    excluded_firewalled so the UI renders self-exclusion as a VISIBLE feature.
+    Degrades to an empty shape on any error (never a 500 a client could misread).
+    """
+    try:
+        lim = max(1, min(100, int(limit)))
+    except Exception:
+        lim = 20
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    now = time.time()
+    # Best-effort cwd map from the watcher (gov.db has no cwd column). Keyed by
+    # session id; missing watcher / errors => empty map (firewall still applies
+    # to any cwd we DO learn; unknown-cwd candidates are kept).
+    cwd_by_sid: dict[str, str] = {}
+    try:
+        from stream_manager.session_watcher import get_session_watcher
+        watcher = get_session_watcher()
+        if watcher is not None:
+            for s in watcher.list_active_sessions() or []:
+                sid = s.get("sessionId") or s.get("session_id")
+                if sid:
+                    cwd_by_sid[str(sid)] = str(s.get("cwd") or "")
+    except Exception:
+        cwd_by_sid = {}
+    excluded_self = 0
+    excluded_firewalled = 0
+    out: list[dict] = []
+    try:
+        conn = _open()
+        if not _has_table(conn, "sessions"):
+            conn.close()
+            return {
+                "sessions": [], "excluded_self": 0,
+                "excluded_firewalled": 0, "own_session_id": sm_own or None,
+            }
+        rows = conn.execute(
+            "SELECT id, project_slug, pid, started_at, ended_at "
+            "FROM sessions ORDER BY started_at DESC LIMIT 400"
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            sid = str(d.get("id"))
+            slug = str(d.get("project_slug") or "").strip().lower()
+            # Polarity self-exclude (G2): never present SM-self as a soak target.
+            if slug in slugs or (sm_own and sid == sm_own):
+                excluded_self += 1
+                continue
+            cwd = cwd_by_sid.get(sid, "")
+            # Firewall (G1): reject an off-limits monitored-project cwd.
+            if _soak_cwd_is_firewalled(cwd):
+                excluded_firewalled += 1
+                continue
+            # busy_score = decision count; recency = secs since latest decision.
+            try:
+                dc = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "WHERE m.session_id = ?",
+                    (sid,),
+                ).fetchone()[0]
+            except Exception:
+                dc = 0
+            try:
+                last_ts = conn.execute(
+                    "SELECT MAX(d.timestamp) FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "WHERE m.session_id = ?",
+                    (sid,),
+                ).fetchone()[0]
+            except Exception:
+                last_ts = None
+            try:
+                last_secs = (now - float(last_ts)) if last_ts is not None else None
+            except Exception:
+                last_secs = None
+            out.append({
+                "session_id": sid,
+                "project_slug": d.get("project_slug") or "",
+                "cwd": cwd,
+                "busy": int(dc),
+                "last_seen_secs_ago": (None if last_secs is None else max(0.0, last_secs)),
+            })
+        conn.close()
+    except Exception:
+        log.exception("soak-panel: sessions preview failed; degrading to empty")
+        return {
+            "sessions": [], "excluded_self": 0,
+            "excluded_firewalled": 0, "own_session_id": sm_own or None,
+        }
+    # Rank: busy DESC, then most-recent (smallest last_seen) first. None recency
+    # sorts last.
+    def _rank_key(c):
+        rec = c.get("last_seen_secs_ago")
+        rec = float(rec) if isinstance(rec, (int, float)) else float("inf")
+        return (-int(c.get("busy") or 0), rec)
+    out.sort(key=_rank_key)
+    return {
+        "sessions": out[:lim],
+        "excluded_self": excluded_self,
+        "excluded_firewalled": excluded_firewalled,
+        "own_session_id": sm_own or None,
+    }
+
+# --- GET /api/soak/status ---
+def _ensure_soak_runs(conn: sqlite3.Connection) -> None:
+    """Guarded additive CREATE: make the soak_runs table if missing. Idempotent
+    (CREATE TABLE IF NOT EXISTS). Additive -- no FROZEN surface touched. The
+    dashboard only READS this table; the row writer is the out-of-process
+    soak_driver --live-session (CLI / main thread)."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS soak_runs ("
+            "soak_id TEXT PRIMARY KEY, session_id TEXT, project_slug TEXT, "
+            "started_at REAL, status TEXT, polarity_pass INTEGER, "
+            "rejection_count INTEGER, report_md TEXT)"
+        )
+    except Exception:
+        log.exception("soak-panel: ensure soak_runs table failed")
+
+
+@app.get("/api/soak/status")
+async def api_soak_status(limit: int = 10):
+    """Read the additive soak_runs table (newest-first) for the BETA soak-panel
+    report readout (#16). Read-only. Creates the table lazily (guarded) so a
+    fresh DB returns { runs: [] } with HTTP 200 -- never a 500. Each row carries
+    soak_id / session_id / project_slug / started_at / status / polarity_pass /
+    rejection_count / report_md verbatim. The component parses report_md into a
+    per-band p50/p95 table; an empty table => the component falls back to mock.
+    """
+    try:
+        lim = max(1, min(50, int(limit)))
+    except Exception:
+        lim = 10
+    try:
+        conn = _open_rw()
+        _ensure_soak_runs(conn)
+        rows = conn.execute(
+            "SELECT soak_id, session_id, project_slug, started_at, status, "
+            "polarity_pass, rejection_count, report_md "
+            "FROM soak_runs ORDER BY started_at DESC LIMIT ?",
+            (lim,),
+        ).fetchall()
+        conn.close()
+        return {"runs": [dict(r) for r in rows]}
+    except Exception:
+        log.exception("soak-panel: status read failed; degrading to empty")
+        return {"runs": []}
+
+# --- GET /api/soak/polarity-audit ---
+@app.get("/api/soak/polarity-audit")
+async def api_soak_polarity_audit():
+    """READ computation over gov.db proving ZERO SM-self leakage for the BETA
+    soak-panel polarity verdict (#16). Read-only -- modifies NOTHING.
+
+    Counts decision rows whose joined session is SM-self: project_slug IS IN the
+    SM exclusion set (durable read key) OR session_id == SM_OWN_SESSION_ID
+    (session backstop). A non-zero count means a self row leaked past the
+    self-exclude WHERE-clause used everywhere else -- a polarity FAIL. checked =
+    the total decision rows inspected. pass === (leak_count == 0).
+
+    Degrades to a SAFE-but-explicit shape on error: { pass:false, leak_count:0,
+    checked:0 } -- the component reads a non-boolean/empty as 'fall back to mock'
+    rather than treating a server-down condition as a live PASS.
+    """
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    try:
+        conn = _open()
+        if not _has_table(conn, "sessions") or not _has_table(conn, "decisions"):
+            conn.close()
+            return {"pass": True, "leak_count": 0, "checked": 0}
+        try:
+            checked = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+        except Exception:
+            checked = 0
+        leak = 0
+        params: list = []
+        clauses: list[str] = []
+        if slugs:
+            placeholders = ",".join("?" for _ in slugs)
+            clauses.append("LOWER(s.project_slug) IN (" + placeholders + ")")
+            params.extend(slugs)
+        if sm_own:
+            clauses.append("m.session_id = ?")
+            params.append(sm_own)
+        if clauses:
+            try:
+                leak = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON m.session_id = s.id "
+                    "WHERE " + " OR ".join(clauses),
+                    tuple(params),
+                ).fetchone()[0]
+            except Exception:
+                leak = 0
+        conn.close()
+        return {"pass": int(leak) == 0, "leak_count": int(leak), "checked": int(checked)}
+    except Exception:
+        log.exception("soak-panel: polarity audit failed")
+        return {"pass": False, "leak_count": 0, "checked": 0}
+
+
+# ============= BETA #undefined : ambient-soak-task =============
+
+# --- GET /api/ambient/soak-status ---
+# ===========================================================================
+# BETA feature "ambient-soak-task" (#2): additive READ endpoints over the
+# additive ambient_runs table. The table is created lazily (guarded CREATE TABLE
+# IF NOT EXISTS); the row writer is the out-of-process operator/main-thread Cron
+# job (soak_driver --mode ambient), NEVER the dashboard. CONSTRAINED ADDITIVE: no
+# FROZEN surface touched, no new bus envelope, no message_bus schema change. The
+# polarity verdict is a READ attribute of each ambient_runs row.
+#
+# Polarity (G2): every session/run query EXCLUDES SM-self -- project_slug NOT IN
+# the SM slug set (_sm_own_slugs(), durable read key) AND session_id !=
+# SM_OWN_SESSION_ID (session backstop) -- and surfaces the dropped tally as
+# excluded_self so self-exclusion is a VISIBLE feature, not a silent filter.
+def _ensure_ambient_runs(conn: sqlite3.Connection) -> None:
+    """Guarded additive CREATE: make the ambient_runs table if missing.
+    Idempotent (CREATE TABLE IF NOT EXISTS). Additive -- no FROZEN surface
+    touched. The dashboard only READS this table; the row writer is the
+    out-of-process soak_driver --mode ambient (CLI / main-thread Cron).
+
+    Columns: ambient_id (PK), session_id, project_slug, ts (epoch seconds the
+    run completed), polarity_pass (1/0), polarity_violation (1/0), coverage_gaps
+    (JSON-encoded string[]), duration_s, messages_seen."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ambient_runs ("
+            "ambient_id TEXT PRIMARY KEY, session_id TEXT, project_slug TEXT, "
+            "ts REAL, polarity_pass INTEGER, polarity_violation INTEGER, "
+            "coverage_gaps TEXT, duration_s INTEGER, messages_seen INTEGER)"
+        )
+    except Exception:
+        log.exception("ambient-soak-task: ensure ambient_runs table failed")
+
+
+def _ambient_run_is_self(row: dict, sm_own: str, slugs: set[str]) -> bool:
+    """Defense-in-depth self-exclude for an ambient_runs row (G2). True when the
+    row's project_slug is in the SM slug set (durable read key) OR its session_id
+    == SM_OWN_SESSION_ID (session backstop). Applied AFTER the SQL filter as a
+    cheap belt-and-suspenders read backstop on the file-mediated synthetic path."""
+    slug = str(row.get("project_slug") or "").strip().lower()
+    if slug and slug in slugs:
+        return True
+    sid = str(row.get("session_id") or "")
+    return bool(sm_own and sid == sm_own)
+
+
+@app.get("/api/ambient/soak-status")
+async def api_ambient_soak_status():
+    """The latest ambient-soak verdict + cadence meta for the BETA ambient-soak-
+    task footer chip (#2). Read-only -- modifies NOTHING. Creates the ambient_runs
+    table lazily (guarded) so a fresh DB returns a SAFE empty-ish shape with HTTP
+    200, never a 500.
+
+    Returns:
+      { enabled, last_run_at, last_run_ago_s, interval_minutes, verdict,
+        history_count, excluded_self, own_session_id, mock }
+    where verdict is "OK" | "WARN" | "NONE" derived from the freshest NON-SM run
+    (polarity_violation OR a coverage_gap => WARN). last_run_ago_s is seconds
+    since that run; history_count is the count of non-self ambient rows; mock is
+    always false (the server never fabricates -- the component mocks when this
+    returns the empty NONE shape).
+
+    Polarity (G2): SM-self rows are excluded at the SQL WHERE (project_slug NOT
+    IN the SM slug set) with the SM_OWN_SESSION_ID session backstop, and the
+    dropped count is surfaced as excluded_self. interval_minutes is configuration
+    (env SM_AMBIENT_INTERVAL_MINUTES, default 30) -- the cadence is set by the
+    out-of-process Cron, not the dashboard.
+    """
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    try:
+        interval = max(1, int(os.environ.get("SM_AMBIENT_INTERVAL_MINUTES", "30")))
+    except Exception:
+        interval = 30
+    empty = {
+        "enabled": False, "last_run_at": None, "last_run_ago_s": None,
+        "interval_minutes": interval, "verdict": "NONE", "history_count": 0,
+        "excluded_self": 0, "own_session_id": sm_own or None, "mock": False,
+    }
+    try:
+        conn = _open_rw()
+        _ensure_ambient_runs(conn)
+        # Build the SM-self-excluding WHERE (durable read key + session backstop).
+        clauses: list[str] = []
+        params: list = []
+        if slugs:
+            placeholders = ",".join("?" for _ in slugs)
+            clauses.append("LOWER(COALESCE(project_slug,'')) NOT IN (" + placeholders + ")")
+            params.extend(slugs)
+        if sm_own:
+            clauses.append("COALESCE(session_id,'') != ?")
+            params.append(sm_own)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # Total non-self rows (history_count) + excluded_self tally.
+        try:
+            total_all = conn.execute("SELECT COUNT(*) FROM ambient_runs").fetchone()[0]
+        except Exception:
+            total_all = 0
+        try:
+            non_self = conn.execute(
+                "SELECT COUNT(*) FROM ambient_runs" + where, tuple(params)
+            ).fetchone()[0]
+        except Exception:
+            non_self = total_all
+        excluded_self = max(0, int(total_all) - int(non_self))
+        # The freshest NON-SM run drives the verdict.
+        row = conn.execute(
+            "SELECT ambient_id, session_id, project_slug, ts, polarity_pass, "
+            "polarity_violation, coverage_gaps FROM ambient_runs" + where
+            + " ORDER BY ts DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        conn.close()
+        if row is None or int(non_self) == 0:
+            out = dict(empty)
+            out["history_count"] = 0
+            out["excluded_self"] = excluded_self
+            return out
+        d = dict(row)
+        gaps_raw = d.get("coverage_gaps")
+        gaps: list = []
+        if isinstance(gaps_raw, str) and gaps_raw.strip():
+            try:
+                parsed = json.loads(gaps_raw)
+                if isinstance(parsed, list):
+                    gaps = parsed
+            except Exception:
+                gaps = [g.strip() for g in gaps_raw.split(",") if g.strip()]
+        violated = (
+            int(d.get("polarity_violation") or 0) == 1
+            or int(d.get("polarity_pass") or 1) == 0
+        )
+        verdict = "WARN" if (violated or len(gaps) > 0) else "OK"
+        try:
+            last_ts = float(d.get("ts")) if d.get("ts") is not None else None
+        except Exception:
+            last_ts = None
+        ago_s = None
+        if last_ts is not None:
+            ago_s = max(0.0, time.time() - last_ts)
+        return {
+            "enabled": True,
+            "last_run_at": last_ts,
+            "last_run_ago_s": ago_s,
+            "interval_minutes": interval,
+            "verdict": verdict,
+            "history_count": int(non_self),
+            "excluded_self": excluded_self,
+            "own_session_id": sm_own or None,
+            "mock": False,
+        }
+    except Exception:
+        log.exception("ambient-soak-task: status read failed; degrading to empty")
+        return empty
+
+# --- GET /api/ambient/soak-history ---
+@app.get("/api/ambient/soak-history")
+async def api_ambient_soak_history(limit: int = 10):
+    """The newest-first ambient-soak run ledger for the BETA ambient-soak-task
+    drawer (#2). Read-only. Creates the ambient_runs table lazily (guarded) so a
+    fresh DB returns { runs: [] } with HTTP 200 -- never a 500.
+
+    Each row carries: ambient_id (as id), ts, session_id, project_slug,
+    polarity_pass (1/0), polarity_violation (1/0), coverage_gaps (decoded to a
+    string[]), duration_s, messages_seen. The component renders PASS/FAIL from
+    polarity_pass and the amber tick + gap chips from polarity_violation /
+    coverage_gaps. An empty table => the component falls back to mock.
+
+    Polarity (G2): SM-self rows are EXCLUDED at the SQL WHERE (project_slug NOT
+    IN the SM slug set, durable read key) with the SM_OWN_SESSION_ID session
+    backstop, and a defense-in-depth Python backstop drops any self row that
+    slips through. The dropped tally is surfaced as excluded_self so
+    self-exclusion is a VISIBLE feature, not a silent filter.
+    """
+    try:
+        lim = max(1, min(50, int(limit)))
+    except Exception:
+        lim = 10
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    try:
+        conn = _open_rw()
+        _ensure_ambient_runs(conn)
+        clauses: list[str] = []
+        params: list = []
+        if slugs:
+            placeholders = ",".join("?" for _ in slugs)
+            clauses.append("LOWER(COALESCE(project_slug,'')) NOT IN (" + placeholders + ")")
+            params.extend(slugs)
+        if sm_own:
+            clauses.append("COALESCE(session_id,'') != ?")
+            params.append(sm_own)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            total_all = conn.execute("SELECT COUNT(*) FROM ambient_runs").fetchone()[0]
+        except Exception:
+            total_all = 0
+        rows = conn.execute(
+            "SELECT ambient_id, session_id, project_slug, ts, polarity_pass, "
+            "polarity_violation, coverage_gaps, duration_s, messages_seen "
+            "FROM ambient_runs" + where + " ORDER BY ts DESC LIMIT ?",
+            (*tuple(params), lim),
+        ).fetchall()
+        conn.close()
+        out: list[dict] = []
+        for r in rows:
+            d = dict(r)
+            # Defense-in-depth self-exclude backstop (G2) on the ephemeral key.
+            if _ambient_run_is_self(d, sm_own, slugs):
+                continue
+            gaps_raw = d.get("coverage_gaps")
+            gaps: list = []
+            if isinstance(gaps_raw, str) and gaps_raw.strip():
+                try:
+                    parsed = json.loads(gaps_raw)
+                    if isinstance(parsed, list):
+                        gaps = [str(x) for x in parsed]
+                except Exception:
+                    gaps = [g.strip() for g in gaps_raw.split(",") if g.strip()]
+            elif isinstance(gaps_raw, list):
+                gaps = [str(x) for x in gaps_raw]
+            out.append({
+                "id": d.get("ambient_id"),
+                "ts": d.get("ts"),
+                "session_id": d.get("session_id") or "",
+                "project_slug": d.get("project_slug") or "",
+                "polarity_pass": int(d.get("polarity_pass") or 0),
+                "polarity_violation": int(d.get("polarity_violation") or 0),
+                "coverage_gaps": gaps,
+                "duration_s": int(d.get("duration_s") or 0),
+                "messages_seen": int(d.get("messages_seen") or 0),
+            })
+        excluded_self = max(0, int(total_all) - len(out))
+        return {"runs": out, "excluded_self": excluded_self, "own_session_id": sm_own or None}
+    except Exception:
+        log.exception("ambient-soak-task: history read failed; degrading to empty")
+        return {"runs": [], "excluded_self": 0, "own_session_id": sm_own or None}
+
+
+# ============= BETA #undefined : breach-cartography-constrained =============
+
+# --- GET /api/breach/cartography ---
+# ===================== BETA #breach-cartography-constrained =====================
+#
+# Additive READ-ONLY endpoint backing the BETA feature
+# "breach-cartography-constrained" (#5). CONSTRAINED v1: NO message_bus.py edit,
+# NO new bus envelope, NO governance.py hook, NO ADR-18 amendment, NO in-process
+# spawn/cron/subprocess. It traces the recent decisions in a session's regression
+# run-up (decisions -> messages -> patterns) so the transient Breach Cartography
+# modal can render the causal swimlane + heuristic-ranked surgical-revert list.
+#
+# POLARITY (G2 / M15): SM-self is excluded at the SQL WHERE on
+# sessions.project_slug (durable read key: project_slug NOT IN the SM exclusion
+# set, default {'streamManager'}, override via BRIDGE_SM_PROJECT_SLUGS) AND with
+# the cheap m.session_id != SM_OWN_SESSION_ID backstop. A session whose slug is
+# in the SM set, or whose id is the SM own-session id, can NEVER appear -> the
+# UI then renders the polarity lockout and disables the revert accept.
+#
+# CONSTRAINED maturity: per-decision maturity snapshots require a FROZEN schema
+# edit (deferred). v1 returns ONLY the coarse maturity_delta derived from the
+# count of regressed cells the caller supplies (none here -> 0/empty), and the UI
+# labels it as the RingDelta-only v1 deferral. Read-only, post-hoc (M18): ZERO
+# writes, ZERO FROZEN-surface touch. Degrades to an empty {decisions:[],
+# patterns:[]} payload on any error / fresh DB so the client falls back to mock.
+@app.get("/api/breach/cartography")
+async def api_breach_cartography(
+    session_id: str | None = None,
+    window_ms: int = 600000,
+    limit: int = 200,
+):
+    """Trace the decision causation chain for a session's regression run-up.
+
+    Returns {alert_ts, window_ms, session_id, project_slug, excluded_self,
+    regressed_cells, maturity_delta:{cells,note}, decisions:[...], patterns:[...],
+    mock:false}. `decisions` are the most-recent (capped) rows in the window for
+    the scoped governed session, oldest-first; each carries {decision_id, action,
+    confidence, message, matched_hash, timestamp, hitl_note}. `patterns` resolves
+    each distinct matched_hash to {hash, level, occurrences, mature, label}. The
+    revert ranking is computed CLIENT-side (pure heuristic) -- this endpoint only
+    supplies the traced rows.
+    """
+    empty = {
+        "alert_ts": None, "window_ms": int(window_ms or 600000),
+        "session_id": session_id or "", "project_slug": "",
+        "excluded_self": True, "regressed_cells": [],
+        "maturity_delta": {"cells": 0, "note": ""},
+        "decisions": [], "patterns": [], "mock": False,
+    }
+    try:
+        win = int(window_ms) if int(window_ms or 0) > 0 else 600000
+        cap = min(int(limit or 200), 500)
+        sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+        sm_slugs = [s.strip().lower() for s in sm_slugs_raw.split(",") if s.strip()]
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        conn = _open()
+        try:
+            if not (_has_table(conn, "decisions") and _has_table(conn, "messages")):
+                return empty
+            has_sessions = _has_table(conn, "sessions")
+            has_overrides = _has_table(conn, "hitl_overrides")
+            # G2 self-exclude: drop any decision whose session is on an SM project
+            # slug (durable read key) OR whose id is the SM own-session id (cheap
+            # session backstop). LEFT JOIN keeps rows with no sessions-row (not self).
+            where = []
+            params: list = []
+            if session_id:
+                where.append("m.session_id = ?")
+                params.append(session_id)
+            if sm_slugs and has_sessions:
+                placeholders = ",".join("?" for _ in sm_slugs)
+                where.append(
+                    "(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ("
+                    + placeholders + "))"
+                )
+                params.extend(sm_slugs)
+            if sm_own:
+                where.append("m.session_id != ?")
+                params.append(sm_own)
+            slug_sel = (
+                "COALESCE(s.project_slug, '') AS project_slug "
+                if has_sessions
+                else "'' AS project_slug "
+            )
+            join_sessions = "LEFT JOIN sessions s ON s.id = m.session_id " if has_sessions else ""
+            override_sel = (
+                "(SELECT ho.note FROM hitl_overrides ho WHERE ho.decision_id = d.id "
+                "ORDER BY ho.timestamp DESC LIMIT 1) AS hitl_note "
+                if has_overrides else "'' AS hitl_note "
+            )
+            where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+            sql = (
+                "SELECT d.id AS decision_id, d.action AS action, "
+                "d.confidence AS confidence, d.matched_hash AS matched_hash, "
+                "d.timestamp AS timestamp, d.reasoning AS reasoning, "
+                "m.content AS content, m.session_id AS session_id, "
+                + slug_sel + ", " + override_sel
+                + "FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                + join_sessions
+                + where_sql
+                + " ORDER BY d.timestamp DESC LIMIT ?"
+            )
+            params.append(cap)
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+            # newest-first from SQL -> reverse to oldest-first for the swimlane.
+            rows.reverse()
+            # Resolve the distinct matched hashes to pattern shelf nodes.
+            hashes = sorted({
+                (r.get("matched_hash") or "").strip()
+                for r in rows
+                if (r.get("matched_hash") or "").strip()
+            })
+            patterns = []
+            if hashes and _has_table(conn, "patterns"):
+                ph = ",".join("?" for _ in hashes)
+                prows = conn.execute(
+                    "SELECT hash, level, occurrences, success_rate FROM patterns "
+                    "WHERE hash IN (" + ph + ")", tuple(hashes),
+                ).fetchall()
+                for pr in prows:
+                    occ = int(pr["occurrences"] or 0)
+                    patterns.append({
+                        "hash": str(pr["hash"]),
+                        "level": int(pr["level"] or 0),
+                        "occurrences": occ,
+                        "mature": occ >= 20,
+                        "label": "",
+                    })
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("breach/cartography: query failed; degrading to empty")
+        return empty
+
+    if not rows:
+        return empty
+
+    # Domain-agnostic project slug rendered FROM DATA (M16). The alert anchor is
+    # the newest decision timestamp; the window is the caller-supplied look-back.
+    proj = (rows[-1].get("project_slug") or "").strip()
+    sess = (rows[-1].get("session_id") or "").strip()
+    try:
+        alert_ts = max(float(r["timestamp"]) for r in rows if r.get("timestamp") is not None)
+    except (TypeError, ValueError):
+        alert_ts = None
+    decisions = []
+    for r in rows:
+        msg = (r.get("content") or r.get("reasoning") or "").strip()
+        decisions.append({
+            "decision_id": str(r.get("decision_id") or ""),
+            "action": str(r.get("action") or "ALLOW"),
+            "confidence": float(r.get("confidence") or 0.0),
+            "message": msg[:200],
+            "matched_hash": (r.get("matched_hash") or "").strip(),
+            "timestamp": r.get("timestamp"),
+            "hitl_note": (r.get("hitl_note") or "").strip(),
+        })
+    return {
+        "alert_ts": alert_ts,
+        "window_ms": win,
+        "session_id": sess,
+        "project_slug": proj,
+        "excluded_self": True,
+        "regressed_cells": [],
+        "maturity_delta": {
+            "cells": 0,
+            "note": (
+                "v1 CONSTRAINED: per-decision maturity is not live (FROZEN schema) -- "
+                "deferred to an ADR-18 amendment. Coarse RingDelta only."
+            ),
+        },
+        "decisions": decisions,
+        "patterns": patterns,
+        "mock": False,
+    }
+
+
+# ============= BETA #undefined : confidence-heatmap-pane =============
+
+# --- GET /api/heatmap ---
+# --- GET /api/heatmap ---
+@app.get("/api/heatmap")
+async def api_heatmap(
+    session_id: str | None = None,
+    minutes: int = 60,
+    bucket_min: int = 5,
+    limit: int = 20000,
+):
+    """Pre-aggregate decisions into a role x 5-min-bucket confidence grid for the
+    BETA confidence-heatmap-pane (#9).
+
+    Read-only, post-hoc (M18): a render-ready aggregation over the existing
+    indexed decisions(timestamp) + messages(session_id) rows, with each
+    decision's role resolved from the agents table via the SAME correlated
+    subquery the /api/decisions seed uses (most-recent agents.profile_slug for
+    the session whose last_seen <= the decision timestamp). ZERO writes, ZERO
+    FROZEN-surface touch, ZERO new bus envelope, ZERO new table.
+
+    POLARITY (G2 / M15): the SM-own session is excluded server-side. The durable
+    read key is project_slug NOT IN the SM exclusion set (BRIDGE_SM_PROJECT_SLUGS,
+    default {'streamManager'}); the SM_OWN_SESSION_ID session id is applied as the
+    cheap backstop. A session whose project_slug is in the SM set -- or whose id
+    equals SM_OWN_SESSION_ID -- can NEVER appear in the grid, so an SM-self scope
+    returns roles:[], cells:[]. A LEFT JOIN keeps rows whose session has no
+    sessions-row (they are not self). The env-set is read the same way the
+    escalation-timeline / health-digest wire-sites read it, so they stay
+    consistent.
+
+    Returns {now_ms, bucket_min, minutes, excluded_self, roles:[...sorted by
+    count-weighted mean confidence DESC], buckets:[{idx,t_ms,label}], cells:[
+    {role, bucket_idx, count, mean_confidence, band, action_breakdown:
+    {ALLOW,SUGGEST,GUIDE,INTERVENE,BLOCK}}]}. Bands: HIGH>=0.75, OK 0.60-0.75,
+    WATCH 0.45-0.60, LOW<0.45. Only role x bucket pairs with >=1 in-window
+    decision yield a cell (empty pairs are omitted -- the client renders them as
+    uncolored hairline gaps). Degrades to an empty grid on any error / fresh DB.
+    """
+    import time as _time
+
+    bmin = int(bucket_min) if int(bucket_min or 0) > 0 else 5
+    bucket_ms = bmin * 60 * 1000
+    win_min = int(minutes) if int(minutes or 0) > 0 else 60
+    ncols = max(1, win_min // bmin)
+    now_ms = int(_time.time() * 1000)
+    # newest bucket = the bucket containing now; oldest = (ncols-1) buckets back.
+    now_start = (now_ms // bucket_ms) * bucket_ms
+    oldest_start = now_start - (ncols - 1) * bucket_ms
+
+    def _empty() -> dict:
+        return {
+            "now_ms": now_ms,
+            "bucket_min": bmin,
+            "minutes": win_min,
+            "excluded_self": 0,
+            "roles": [],
+            "buckets": [
+                {"idx": i, "t_ms": oldest_start + i * bucket_ms}
+                for i in range(ncols)
+            ],
+            "cells": [],
+        }
+
+    # Polarity: durable read key (project_slug) + cheap session-id backstop.
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = [s.strip() for s in _sm_slugs_raw.split(",") if s.strip()]
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    try:
+        cap = min(int(limit or 20000), 50000)
+        # window lower bound in epoch SECONDS (decisions.timestamp is sec).
+        win_lo_s = oldest_start / 1000.0
+        win_hi_s = (now_start + bucket_ms) / 1000.0
+        conn = _open()
+        has_agents = _has_agents_table(conn)
+        # role expr: most-recent agents.profile_slug for the decision's session
+        # at-or-before the decision timestamp (mirrors the /api/decisions seed).
+        if has_agents:
+            role_expr = (
+                "(SELECT a.profile_slug FROM agents a "
+                "WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp "
+                "ORDER BY a.last_seen DESC LIMIT 1)"
+            )
+        else:
+            role_expr = "NULL"
+        where = ["d.timestamp >= ?", "d.timestamp < ?"]
+        params: list = [win_lo_s, win_hi_s]
+        if session_id:
+            where.append("m.session_id = ?")
+            params.append(session_id)
+        # Self-exclude (G2): drop SM-self by project_slug (durable). LEFT JOIN so a
+        # decision with no sessions-row is KEPT (it is not SM-own by slug).
+        if sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            where.append(
+                f"(s.project_slug IS NULL OR s.project_slug NOT IN ({placeholders}))"
+            )
+            params.extend(sm_slugs)
+        # session-id backstop (drops the one self session id regardless of slug).
+        if sm_own:
+            where.append("m.session_id != ?")
+            params.append(sm_own)
+        sql = (
+            f"SELECT d.action AS action, d.confidence AS confidence, "
+            f"d.timestamp AS ts, {role_expr} AS role "
+            "FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY d.timestamp ASC LIMIT ?"
+        )
+        params.append(cap)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        # excluded_self readout (decisions on the SM-own session id), for the UI.
+        excluded_self = 0
+        if sm_own:
+            er = conn.execute(
+                "SELECT COUNT(*) FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "WHERE m.session_id = ?",
+                (sm_own,),
+            ).fetchone()
+            excluded_self = int(er[0] or 0) if er else 0
+        conn.close()
+    except Exception:
+        log.exception("heatmap: query failed; degrading to empty")
+        return _empty()
+
+    _ACTIONS = ("ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK")
+
+    def _band(conf: float) -> str:
+        if conf >= 0.75:
+            return "HIGH"
+        if conf >= 0.60:
+            return "OK"
+        if conf >= 0.45:
+            return "WATCH"
+        return "LOW"
+
+    # accumulate per (role, bucket_idx): n, sum(confidence), action mix.
+    acc: dict[tuple[str, int], dict] = {}
+    for r in rows:
+        try:
+            ts_f = float(r["ts"])
+        except (TypeError, ValueError):
+            continue
+        start = int((ts_f * 1000) // bucket_ms) * bucket_ms
+        if start < oldest_start or start > now_start:
+            continue
+        idx = round((start - oldest_start) / bucket_ms)
+        if idx < 0 or idx >= ncols:
+            continue
+        role = (r["role"] or "").strip() or "unknown"
+        act = str(r["action"] or "").strip().upper()
+        if act not in _ACTIONS:
+            act = "ALLOW"
+        try:
+            conf = float(r["confidence"])
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.0:
+            conf = 0.0
+        elif conf > 1.0:
+            conf = 1.0
+        key = (role, idx)
+        a = acc.get(key)
+        if a is None:
+            a = {"n": 0, "sum": 0.0, "mix": {k: 0 for k in _ACTIONS}}
+            acc[key] = a
+        a["n"] += 1
+        a["sum"] += conf
+        a["mix"][act] += 1
+
+    cells = []
+    role_weight: dict[str, list[float]] = {}
+    for (role, idx), a in acc.items():
+        n = a["n"]
+        mean = (a["sum"] / n) if n else 0.0
+        cells.append(
+            {
+                "role": role,
+                "bucket_idx": idx,
+                "count": n,
+                "mean_confidence": round(mean, 4),
+                "band": _band(mean),
+                "action_breakdown": a["mix"],
+            }
+        )
+        w = role_weight.setdefault(role, [0.0, 0.0])
+        w[0] += mean * n
+        w[1] += n
+
+    # roles sorted by count-weighted mean confidence DESC (ties -> name asc).
+    def _role_mean(role: str) -> float:
+        w = role_weight.get(role, [0.0, 0.0])
+        return (w[0] / w[1]) if w[1] else 0.0
+
+    roles = sorted(role_weight.keys(), key=lambda r: (-_role_mean(r), r))
+
+    buckets = [
+        {"idx": i, "t_ms": oldest_start + i * bucket_ms} for i in range(ncols)
+    ]
+    return {
+        "now_ms": now_ms,
+        "bucket_min": bmin,
+        "minutes": win_min,
+        "excluded_self": excluded_self,
+        "roles": roles,
+        "buckets": buckets,
+        "cells": cells,
+    }
+
+
+# ============= BETA #undefined : cross-session-pattern-audit-apis =============
+
+# --- GET /api/patterns/cross-session/{session_id}/hydrated ---
+# ===================== BETA #cross-session-pattern-audit-apis =====================
+
+# --- GET /api/patterns/cross-session/{session_id}/hydrated ---
+# ---------------------------------------------------------------------------
+# BETA cross-session-pattern-audit-apis (#11): the learned cross-session rules
+# that hydrated INTO one governed (non-SM) session at engine-init, each with its
+# REACH into that session (matched_decision_count_this_session). Additive,
+# read-only (M18, post-hoc -- never on the verdict hot path). Touches NO FROZEN
+# surface: no governance.py, no message_bus schema change, no new bus envelope.
+# It joins only patterns + decisions(matched_hash) + messages(session_id) +
+# sessions(project_slug). The proposal's optional patterns columns
+# (last_seen_session_id / sourced_from / decay_status) are DERIVED defensively
+# here (no migration -- CONSTRAINED ADDITIVE build): last_seen_session_id is
+# backfilled from the most-recent matching decision's message session,
+# sourced_from is the constant 'cross_session_hydrator', and decay_status is
+# inferred from success_rate.
+#
+# POLARITY (G2, CLAUDE.md 'Session-source exception rule'): the TARGET scope is
+# 404'd if it is SM-self (project_slug IN the SM slug set OR id == SM_OWN_SESSION
+# _ID) -- the audit never exposes SM-self hydration. The reach join additionally
+# EXCLUDES decisions whose message session is SM-self, so an SM-self decision can
+# never inflate a governed rule's reach.
+#
+# Domain-agnostic (M16): hash / level are the pattern table's own taxonomy,
+# rendered verbatim. Defensive: any error degrades to an empty shape so the UI
+# falls back to mock (never reads as live when the server is down / DB is fresh).
+# ---------------------------------------------------------------------------
+@app.get("/api/patterns/cross-session/{session_id}/hydrated")
+async def api_patterns_cross_session_hydrated(session_id: str):
+    """Hydrated cross-session rules + their reach for one governed session (#11)."""
+    target = (session_id or "").strip()
+    if not target or len(target) > 256:
+        return {"session_id": target, "count": 0, "mock": False, "rows": []}
+
+    # SM exclusion set (durable read key = project_slug). Default {'streamManager'};
+    # override via BRIDGE_SM_PROJECT_SLUGS. Compared lowercased. Plus the cheap
+    # session-id backstop (SM_OWN_SESSION_ID) on the ephemeral key.
+    sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = {s.strip().lower() for s in sm_slugs_raw.split(",") if s.strip()}
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    # G2: refuse an SM-self target scope outright (404). The audit never exposes
+    # hydration for SM's own session, regardless of how it is addressed.
+    if sm_own and target == sm_own:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    try:
+        conn = _open()
+        try:
+            if not _has_table(conn, "patterns"):
+                return {"session_id": target, "count": 0, "mock": False, "rows": []}
+
+            has_sessions = _has_table(conn, "sessions")
+            # Confirm the target is a GOVERNED (non-SM) session by project_slug.
+            if has_sessions:
+                srow = conn.execute(
+                    "SELECT project_slug FROM sessions WHERE id=?", (target,)
+                ).fetchone()
+                if srow is not None:
+                    slug = (srow["project_slug"] or "").strip().lower()
+                    if slug in sm_slugs:
+                        raise HTTPException(status_code=404, detail="session not found")
+
+            pcols = {r[1] for r in conn.execute("PRAGMA table_info(patterns)").fetchall()}
+            if "cross_session" not in pcols:
+                return {"session_id": target, "count": 0, "mock": False, "rows": []}
+
+            # All cross-session-flagged patterns (the hydration candidate set).
+            prows = conn.execute(
+                "SELECT hash, level, occurrences, success_rate, last_seen, payload "
+                "FROM patterns WHERE cross_session=1 ORDER BY last_seen DESC"
+            ).fetchall()
+            if not prows:
+                return {"session_id": target, "count": 0, "mock": False, "rows": []}
+
+            has_decisions = _has_table(conn, "decisions")
+            has_messages = _has_table(conn, "messages")
+            can_reach = has_decisions and has_messages
+
+            # SM-self exclusion fragment for the reach/backfill joins (durable
+            # project_slug key + the session_id backstop), mirroring the other
+            # beta read endpoints. NULL slug is NOT in the SM set -> kept.
+            join_sessions = "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+            self_excl = []
+            self_params: list = []
+            if has_sessions and sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                self_excl.append(f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({ph}))")
+                self_params.extend(sorted(sm_slugs))
+            if sm_own:
+                self_excl.append("m.session_id != ?")
+                self_params.append(sm_own)
+            self_clause = (" AND " + " AND ".join(self_excl)) if self_excl else ""
+
+            out = []
+            for p in prows:
+                phash = p["hash"]
+                sr = float(p["success_rate"] or 0.0)
+                success_rate = sr if sr <= 1.0 else sr / 100.0
+                reach = 0
+                last_seen_session_id = None
+                if can_reach:
+                    # matched_decision_count_this_session: governed decisions in
+                    # THIS session that matched this pattern hash (self-excluded).
+                    rc = conn.execute(
+                        "SELECT COUNT(*) FROM decisions d "
+                        "JOIN messages m ON d.message_id = m.id " + join_sessions +
+                        "WHERE d.matched_hash = ? AND m.session_id = ?" + self_clause,
+                        tuple([phash, target, *self_params]),
+                    ).fetchone()
+                    reach = int(rc[0]) if rc else 0
+                    # last_seen_session_id backfill: the most-recent governed
+                    # session (NOT the target) whose decision matched this hash.
+                    lsr = conn.execute(
+                        "SELECT m.session_id FROM decisions d "
+                        "JOIN messages m ON d.message_id = m.id " + join_sessions +
+                        "WHERE d.matched_hash = ? AND m.session_id != ?" + self_clause +
+                        " ORDER BY d.timestamp DESC LIMIT 1",
+                        tuple([phash, target, *self_params]),
+                    ).fetchone()
+                    last_seen_session_id = lsr[0] if lsr else None
+
+                # decay_status derived (no schema column): a high-success,
+                # recently-seen rule is 'stable'; a low-success one is 'decaying';
+                # unknown when there is no usable success signal.
+                occ = int(p["occurrences"] or 0)
+                if occ <= 0:
+                    decay_status = "unknown"
+                elif success_rate >= 0.6:
+                    decay_status = "stable"
+                else:
+                    decay_status = "decaying"
+
+                out.append({
+                    "pattern_hash": phash,
+                    "level": int(p["level"] or 0),
+                    "last_seen_session_id": last_seen_session_id,
+                    "last_seen_ts": float(p["last_seen"] or 0.0),
+                    "occurrence_count": occ,
+                    "success_rate": round(success_rate, 4),
+                    "matched_decision_count_this_session": reach,
+                    "sourced_from": "cross_session_hydrator",
+                    "decay_status": decay_status,
+                })
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("patterns/cross-session/hydrated: query failed")
+        return {"session_id": target, "count": 0, "mock": False, "rows": []}
+
+    return {"session_id": target, "count": len(out), "mock": False, "rows": out}
+
+# --- GET /api/patterns/{hash}/would-apply ---
+# --- GET /api/patterns/{hash}/would-apply ---
+# ---------------------------------------------------------------------------
+# BETA cross-session-pattern-audit-apis (#11): the read-only "would this fire?"
+# applicability probe. Given a pattern hash + a candidate message, it returns an
+# applicability score WITHOUT emitting a verdict or touching the governance path
+# (M18 post-hoc only). It is a pure computation over the stored pattern's
+# canonical text -- it emits NO bus envelope and mutates nothing.
+#
+# Matching: a deterministic, dependency-free token-overlap score in [0,1] used as
+# a stand-in cosine proxy (the real engine's decision_graph.match() is FROZEN and
+# not importable on the dashboard read path). 'applies' is the score >= 0.72
+# (mirrors SIMILARITY_THRESHOLD). On a missing pattern / empty input / any error
+# it returns the documented degraded shape {applies:false, match_confidence:0.0,
+# sourced_from:[], rationale:'matching engine unavailable'} -- it NEVER 500s into
+# the probe UI. A 500ms wall is enforced; on overrun the degraded shape returns.
+#
+# POLARITY (G2): a pattern whose ONLY observations are SM-self is treated as
+# unknown (degraded shape) -- the probe never reconstructs a rule from SM-self
+# traffic, mirroring the pedigree endpoint's no-self-monitor floor.
+#
+# Domain-agnostic (M16): scoring is over opaque text tokens, never project terms.
+# ---------------------------------------------------------------------------
+@app.get("/api/patterns/{hash}/would-apply")
+async def api_pattern_would_apply(hash: str, message_content: str = ""):
+    """Read-only post-hoc applicability probe for one pattern (#11). No verdict."""
+    import time as _t
+    started = _t.monotonic()
+    degraded = {
+        "applies": False,
+        "match_confidence": 0.0,
+        "sourced_from": [],
+        "rationale": "matching engine unavailable",
+    }
+    pattern_hash = (hash or "").strip()
+    text = (message_content or "").strip()
+    if not pattern_hash or len(pattern_hash) > 128 or not text:
+        return degraded
+
+    sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = {s.strip().lower() for s in sm_slugs_raw.split(",") if s.strip()}
+
+    try:
+        conn = _open()
+        try:
+            canonical = None
+            # Prefer graph_patterns.canonical_text (the engine's own text); fall
+            # back to patterns.payload. Both are read-only.
+            if _has_table(conn, "graph_patterns"):
+                row = conn.execute(
+                    "SELECT canonical_text FROM graph_patterns WHERE hash=?",
+                    (pattern_hash,),
+                ).fetchone()
+                if row is not None:
+                    canonical = row["canonical_text"] or ""
+            if canonical is None and _has_table(conn, "patterns"):
+                row = conn.execute(
+                    "SELECT payload FROM patterns WHERE hash=?", (pattern_hash,)
+                ).fetchone()
+                if row is not None:
+                    canonical = row["payload"] or ""
+            if canonical is None:
+                return degraded
+
+            # G2: if this pattern has decisions ONLY on SM-self sessions, suppress
+            # (degraded) -- never reconstruct applicability from SM-self traffic.
+            if (
+                _has_table(conn, "decisions")
+                and _has_table(conn, "messages")
+                and _has_table(conn, "sessions")
+                and sm_slugs
+            ):
+                ph = ",".join("?" for _ in sm_slugs)
+                gov = conn.execute(
+                    "SELECT COUNT(*) FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    "WHERE d.matched_hash = ? AND "
+                    f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({ph}))",
+                    tuple([pattern_hash, *sorted(sm_slugs)]),
+                ).fetchone()
+                any_dec = conn.execute(
+                    "SELECT COUNT(*) FROM decisions WHERE matched_hash = ?",
+                    (pattern_hash,),
+                ).fetchone()
+                # Has decisions, but none governed -> SM-self-only -> suppress.
+                if any_dec and int(any_dec[0]) > 0 and gov and int(gov[0]) == 0:
+                    return degraded
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("patterns/would-apply: lookup failed")
+        return degraded
+
+    # 500ms wall (post-hoc cap). The work below is O(tokens); the guard is belt.
+    if (_t.monotonic() - started) > 0.5:
+        return degraded
+
+    # Deterministic token-overlap proxy in [0,1]. ASCII-lowercased word sets.
+    import re as _re
+    def _toks(s: str) -> set:
+        return {w for w in _re.split(r"[^a-z0-9]+", (s or "").lower()) if w}
+    a = _toks(canonical)
+    b = _toks(text)
+    if not a or not b:
+        return {
+            "applies": False,
+            "match_confidence": 0.0,
+            "sourced_from": ["graph_match"],
+            "rationale": "cosine 0.00 below threshold 0.72",
+        }
+    inter = len(a & b)
+    union = len(a | b)
+    score = round(inter / union, 2) if union else 0.0
+    applies = score >= 0.72
+    return {
+        "applies": applies,
+        "match_confidence": score,
+        "sourced_from": ["graph_match"],
+        "rationale": (
+            f"cosine {score:.2f} >= threshold 0.72" if applies
+            else f"cosine {score:.2f} below threshold 0.72"
+        ),
+    }
+
+
+# ============= BETA #undefined : escalation-timeline-causal-forensics =============
+
+# --- GET /api/escalations ---
+# ===================== BETA #escalation-timeline-causal-forensics (#13) =====================
+#
+# Three ADDITIVE read/write endpoints for the BETA Escalation Timeline causal-
+# forensics feature. CONSTRAINED ADDITIVE: NO governance.py / message_bus.py edit,
+# NO new bus envelope, NO new decisions column, NO ADR-18 amendment. Escalation
+# cards + the causal context are DERIVED at READ TIME from the EXISTING decision
+# rows (action IN GUIDE/INTERVENE/BLOCK); event_type is classified from the
+# decision's own action + matched_hash; agent attribution reuses the existing
+# agents subselect. The ONLY persisted state is the operator dismiss ack, which
+# lives in an additive dashboard-side escalation_dismissals table (CREATE TABLE
+# IF NOT EXISTS) -- off the verdict hot path (M18), never a decisions row write.
+#
+# POLARITY (G2 / M15): SM-self is excluded at the SQL WHERE -- a session whose
+# project_slug is in the SM exclusion set (BRIDGE_SM_PROJECT_SLUGS, default
+# {streamManager}) can NEVER appear; the SM_OWN_SESSION_ID row is excluded too.
+
+
+def _ensure_escalation_dismissals(conn: sqlite3.Connection) -> None:
+    """Guarded additive CREATE: the dashboard-side dismiss-ack table. Additive
+    only (Rule 1); NOT a message_bus.py schema edit and NOT a bus envelope. Keyed
+    on the decision_id the operator acked + the ack timestamp. Idempotent."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS escalation_dismissals ("
+            "  decision_id TEXT PRIMARY KEY,"
+            "  dismissed_at REAL NOT NULL"
+            ")"
+        )
+    except Exception:
+        log.exception("escalations: ensure escalation_dismissals table failed")
+
+
+@app.get("/api/escalations")
+async def api_escalations(session_id: str | None = None, limit: int = 100):
+    """DERIVE the newest-first escalation card list for the BETA Escalation
+    Timeline (#13) from the EXISTING decision rows (action IN GUIDE/INTERVENE/
+    BLOCK). Read-only, post-hoc (M18). Each card:
+    {escalation_id, decision_id, event_type, triggered_at, message_id,
+     proposed_action, confidence, agent_id, session_id, project_slug,
+     reasoning, content, direction, dismissed_at}.
+
+    event_type is classified from the row itself (no new column): a BLOCK with a
+    matched_hash -> 'static-rule'; a BLOCK without -> 'governance_negative_
+    regression'; INTERVENE -> 'governance_negative_regression'; GUIDE ->
+    'governance_variance_alert'. dismissed_at is LEFT JOINed from the additive
+    escalation_dismissals table.
+
+    POLARITY (G2): SM-self is excluded at the SQL WHERE on sessions.project_slug
+    (LEFT JOIN keeps decisions with no sessions-row -- not self) AND on
+    m.session_id != SM_OWN_SESSION_ID. Degrades to [] on any error / empty DB so
+    the client falls back to deterministic mock data.
+    """
+    try:
+        cap = min(int(limit or 100), 500)
+        sm_slugs = list(_sm_own_slugs())
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        conn = _open()
+        # Ensure the dismissals table exists for the LEFT JOIN (read-side create on
+        # the same connection is harmless; _open() is mode=ro when possible, so the
+        # CREATE silently no-ops there and the LEFT JOIN tolerates the absent table
+        # via a guarded check).
+        has_dismissals = _has_table(conn, "escalation_dismissals")
+        params: list = []
+        where = ["d.action IN ('GUIDE','INTERVENE','BLOCK')"]
+        if session_id:
+            where.append("m.session_id = ?")
+            params.append(session_id)
+        if sm_own:
+            where.append("m.session_id != ?")
+            params.append(sm_own)
+        if sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            where.append(
+                f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({placeholders}))"
+            )
+            params.extend(sm_slugs)
+        dismiss_join = (
+            "LEFT JOIN escalation_dismissals x ON x.decision_id = d.id "
+            if has_dismissals else ""
+        )
+        dismiss_sel = (
+            "x.dismissed_at AS dismissed_at " if has_dismissals else "NULL AS dismissed_at "
+        )
+        sql = (
+            "SELECT d.id AS id, d.message_id AS message_id, d.action AS action, "
+            "d.confidence AS confidence, d.reasoning AS reasoning, "
+            "d.matched_hash AS matched_hash, d.timestamp AS ts, "
+            "m.content AS content, m.direction AS direction, m.session_id AS session_id, "
+            "s.project_slug AS project_slug, "
+            "(SELECT a.profile_slug FROM agents a "
+            "   WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp "
+            "   ORDER BY a.last_seen DESC LIMIT 1) AS agent_id, "
+            + dismiss_sel +
+            "FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id "
+            + dismiss_join +
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY d.timestamp DESC LIMIT ?"
+        )
+        params.append(cap)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+    except Exception:
+        log.exception("escalations: query failed; degrading to empty")
+        return []
+
+    def _evt(action: str, matched: str) -> str:
+        a = (action or "").strip().upper()
+        h = (matched or "").strip()
+        if a == "BLOCK":
+            return "static-rule" if h else "governance_negative_regression"
+        if a == "INTERVENE":
+            return "governance_negative_regression"
+        return "governance_variance_alert"
+
+    out = []
+    for r in rows:
+        did = str(r["id"]) if r["id"] is not None else str(r["message_id"])
+        try:
+            ts = float(r["ts"])
+        except (TypeError, ValueError):
+            continue
+        act = str(r["action"]).strip().upper()
+        try:
+            conf = float(r["confidence"])
+        except (TypeError, ValueError):
+            conf = 0.0
+        out.append({
+            "escalation_id": f"esc-{did}",
+            "decision_id": did,
+            "event_type": _evt(act, str(r["matched_hash"] or "")),
+            "triggered_at": ts,
+            "message_id": str(r["message_id"]) if r["message_id"] is not None else "",
+            "proposed_action": act,
+            "confidence": conf,
+            "agent_id": str(r["agent_id"] or "agent"),
+            "session_id": str(r["session_id"] or ""),
+            "project_slug": str(r["project_slug"] or ""),
+            "reasoning": str(r["reasoning"] or ""),
+            "content": str(r["content"] or ""),
+            "direction": str(r["direction"] or ""),
+            "dismissed_at": r["dismissed_at"],
+        })
+    return out
+
+# --- GET /api/escalations/{decision_id}/context ---
+@app.get("/api/escalations/{decision_id}/context")
+async def api_escalation_context(decision_id: str, window_ms: int = 10000):
+    """DERIVE the split-view causal context for one focus decision (BETA #13).
+    Read-only, post-hoc (M18). Returns the 5 prior + 3 next same-session
+    decisions (compressed: action + confidence + agent + reason) and the
+    distinct agents active within +/- window around the focus, plus the focus
+    diff payload {action, confidence, reasoning, content, direction, agent_id,
+    timestamp}. ALL fields are read from existing decisions/messages/agents rows;
+    NOTHING is fabricated and NO new column is read.
+
+    POLARITY (G2): the focus session is resolved and the whole payload is
+    suppressed (HTTP 200 with a null focus) if it is the SM-own session
+    (project_slug in the SM exclusion set OR session_id == SM_OWN_SESSION_ID).
+    Degrades to an empty-but-valid shape on any error.
+    """
+    empty = {
+        "decision_id": str(decision_id), "event_type": "", "window_ms": int(window_ms or 10000),
+        "focus": None, "prior": [], "next": [], "agents_in_window": [],
+    }
+    try:
+        win_ms = int(window_ms) if int(window_ms or 0) > 0 else 10000
+        win_s = win_ms / 1000.0
+        sm_slugs = _sm_own_slugs()
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        conn = _open()
+        focus = conn.execute(
+            "SELECT d.id AS id, d.action AS action, d.confidence AS confidence, "
+            "d.reasoning AS reasoning, d.matched_hash AS matched_hash, d.timestamp AS ts, "
+            "m.content AS content, m.direction AS direction, m.session_id AS session_id, "
+            "s.project_slug AS project_slug, "
+            "(SELECT a.profile_slug FROM agents a "
+            "   WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp "
+            "   ORDER BY a.last_seen DESC LIMIT 1) AS agent_id "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id "
+            "WHERE d.id = ? LIMIT 1",
+            (str(decision_id),),
+        ).fetchone()
+        if focus is None:
+            conn.close()
+            return empty
+        sid = str(focus["session_id"] or "")
+        slug = str(focus["project_slug"] or "").strip().lower()
+        # POLARITY: never surface SM-self context.
+        if (sm_own and sid == sm_own) or (slug and slug in sm_slugs):
+            conn.close()
+            return empty
+        try:
+            f_ts = float(focus["ts"])
+        except (TypeError, ValueError):
+            conn.close()
+            return empty
+        # same-session decisions, ascending by time (window + a small neighbourhood).
+        lo = f_ts - max(win_s, 60.0)
+        hi = f_ts + max(win_s, 60.0)
+        same = conn.execute(
+            "SELECT d.id AS id, d.action AS action, d.confidence AS confidence, "
+            "d.reasoning AS reasoning, d.timestamp AS ts, m.content AS content, "
+            "(SELECT a.profile_slug FROM agents a "
+            "   WHERE a.session_id = m.session_id AND a.last_seen <= d.timestamp "
+            "   ORDER BY a.last_seen DESC LIMIT 1) AS agent_id "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            "WHERE m.session_id = ? AND d.timestamp >= ? AND d.timestamp <= ? "
+            "ORDER BY d.timestamp ASC LIMIT 400",
+            (sid, lo, hi),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        log.exception("escalation-context: query failed; degrading to empty")
+        return empty
+
+    def _evt(action: str, matched: str) -> str:
+        a = (action or "").strip().upper()
+        if a == "BLOCK":
+            return "static-rule" if (matched or "").strip() else "governance_negative_regression"
+        if a == "INTERVENE":
+            return "governance_negative_regression"
+        return "governance_variance_alert"
+
+    def _compress(r):
+        try:
+            cf = float(r["confidence"])
+        except (TypeError, ValueError):
+            cf = 0.0
+        reason = str(r["reasoning"] or "").strip() or str(r["content"] or "").strip()
+        return {
+            "action": str(r["action"] or "ALLOW").strip().upper(),
+            "confidence": cf,
+            "agent_id": str(r["agent_id"] or "agent"),
+            "reason": reason,
+            "timestamp": float(r["ts"]) if r["ts"] is not None else None,
+        }
+
+    did = str(decision_id)
+    ordered = list(same)
+    focus_idx = next((i for i, r in enumerate(ordered) if str(r["id"]) == did), -1)
+    prior = (
+        [_compress(r) for r in ordered[max(0, focus_idx - 5):focus_idx]]
+        if focus_idx > 0
+        else []
+    )
+    nxt = [_compress(r) for r in ordered[focus_idx + 1:focus_idx + 4]] if focus_idx >= 0 else []
+    # agents-in-window (distinct) strictly within +/- window of the focus.
+    seen: dict = {}
+    for r in ordered:
+        try:
+            ts = float(r["ts"])
+        except (TypeError, ValueError):
+            continue
+        if ts < f_ts - win_s or ts > f_ts + win_s:
+            continue
+        ag = str(r["agent_id"] or "agent")
+        cur = seen.get(ag) or {"agent_id": ag, "active_from": ts, "active_to": ts}
+        cur["active_from"] = min(cur["active_from"], ts)
+        cur["active_to"] = max(cur["active_to"], ts)
+        seen[ag] = cur
+    try:
+        f_conf = float(focus["confidence"])
+    except (TypeError, ValueError):
+        f_conf = 0.0
+    return {
+        "decision_id": did,
+        "event_type": _evt(str(focus["action"] or ""), str(focus["matched_hash"] or "")),
+        "window_ms": win_ms,
+        "focus": {
+            "action": str(focus["action"] or "BLOCK").strip().upper(),
+            "confidence": f_conf,
+            "reasoning": str(focus["reasoning"] or ""),
+            "content": str(focus["content"] or ""),
+            "direction": str(focus["direction"] or ""),
+            "agent_id": str(focus["agent_id"] or "agent"),
+            "timestamp": f_ts,
+        },
+        "prior": prior,
+        "next": nxt,
+        "agents_in_window": list(seen.values()),
+    }
+
+# --- POST /api/escalations/{decision_id}/dismiss ---
+@app.post("/api/escalations/{decision_id}/dismiss")
+async def api_escalation_dismiss(decision_id: str):
+    """Operator ack of one escalation (BETA #13). Writes ONLY the additive
+    escalation_dismissals table (decision_id + dismissed_at) -- never a
+    decisions/messages row, never a verdict (off the hot path, M18). Idempotent:
+    re-dismissing an already-acked decision is a no-op success.
+
+    POLARITY (G2): the decision's session is resolved; if it is the SM-own
+    session (project_slug in the SM exclusion set OR session_id ==
+    SM_OWN_SESSION_ID) the ack is REFUSED (HTTP 400) -- SM-self escalations are
+    never surfaced and so can never be acked.
+    """
+    if not isinstance(decision_id, str) or not decision_id:
+        raise HTTPException(status_code=400, detail="decision_id required")
+    sm_slugs = _sm_own_slugs()
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    try:
+        conn = _open_rw()
+        _ensure_escalation_dismissals(conn)
+        row = conn.execute(
+            "SELECT m.session_id AS session_id, s.project_slug AS project_slug "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id WHERE d.id = ? LIMIT 1",
+            (str(decision_id),),
+        ).fetchone()
+        if row is not None:
+            sid = str(row["session_id"] or "")
+            slug = str(row["project_slug"] or "").strip().lower()
+            if (sm_own and sid == sm_own) or (slug and slug in sm_slugs):
+                conn.close()
+                raise HTTPException(status_code=400, detail="refusing to ack an SM-self escalation")
+        conn.execute(
+            "INSERT INTO escalation_dismissals (decision_id, dismissed_at) VALUES (?, ?) "
+            "ON CONFLICT(decision_id) DO NOTHING",
+            (str(decision_id), time.time()),
+        )
+        conn.close()
+        return {"decision_id": str(decision_id), "dismissed": True, "dismissed_at": _iso_now()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("escalation-dismiss: write failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ============= BETA #undefined : operator-co-pilot-gesture-macros =============
+
+
+# ============= BETA #undefined : recorded-session-replay-forensics =============
+
+# --- GET /api/soak/replay/sessions ---
+@app.get("/api/soak/replay/sessions")
+async def api_soak_replay_sessions(limit: int = 50):
+    """List NON-SM recorded sessions (those that have at least one decision)
+    eligible for the BETA recorded-session-replay-forensics picker (#23).
+    Read-only -- modifies NOTHING. Newest-active first.
+
+    POLARITY (G2 / M15): rows whose joined project_slug is in the SM exclusion
+    set are EXCLUDED (durable read key) AND the SM_OWN_SESSION_ID session is
+    excluded too (session backstop). The dropped tally is returned as
+    excluded_self so the UI renders self-exclusion as a VISIBLE feature.
+    Recorded sessions are NON-SM by construction. Degrades to an empty shape on
+    any error / fresh DB (the component then falls back to deterministic mock).
+    """
+    try:
+        lim = max(1, min(200, int(limit)))
+    except Exception:
+        lim = 50
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    excluded_self = 0
+    out: list[dict] = []
+    try:
+        conn = _open()
+        if not _has_table(conn, "sessions") or not _has_table(conn, "decisions"):
+            conn.close()
+            return {"sessions": [], "excluded_self": 0, "own_session_id": sm_own or None}
+        rows = conn.execute(
+            "SELECT m.session_id AS session_id, "
+            "       MAX(s.project_slug) AS project_slug, "
+            "       COUNT(*) AS frame_count, "
+            "       MAX(d.timestamp) AS last_ts "
+            "FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON m.session_id = s.id "
+            "GROUP BY m.session_id "
+            "ORDER BY last_ts DESC"
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            d = dict(r)
+            sid = str(d.get("session_id") or "").strip()
+            if not sid:
+                continue
+            slug = str(d.get("project_slug") or "").strip().lower()
+            # Polarity self-exclude (G2): never present SM-self as a replay target.
+            if slug in slugs or (sm_own and sid == sm_own):
+                excluded_self += 1
+                continue
+            out.append({
+                "recorded_session_uuid": sid,
+                "project_slug": d.get("project_slug") or "",
+                "frame_count": int(d.get("frame_count") or 0),
+            })
+    except Exception:
+        log.exception("replay-forensics: sessions list failed; degrading to empty")
+        return {"sessions": [], "excluded_self": 0, "own_session_id": sm_own or None}
+    return {
+        "sessions": out[:lim],
+        "excluded_self": excluded_self,
+        "own_session_id": sm_own or None,
+    }
+
+# --- GET /api/soak/replay/{recorded_session_uuid} ---
+@app.get("/api/soak/replay/{recorded_session_uuid}")
+async def api_soak_replay(
+    recorded_session_uuid: str, start_idx: int = 0, end_idx: int | None = None
+):
+    """Side-by-side decision-delta replay forensics for ONE recorded NON-SM
+    session, for the BETA recorded-session-replay-forensics drawer (#23).
+    Read-only -- modifies NOTHING.
+
+    v1 SCOPE (CONSTRAINED ADDITIVE): v1 DIFFS STORED DECISIONS. The 'original'
+    column is the decision as captured at record time. The 'replayed' column is
+    the current engine's verdict for the same frame. The LIVE re-stream engine
+    -- re-evaluating each recorded envelope through a fresh in-process governance
+    engine -- is DEFERRED to the out-of-process soak_driver --replay CLI; it is
+    NOT run here (no spawn / subprocess / engine re-eval / FROZEN-surface touch /
+    new bus envelope). With no live re-stream available in process, v1 emits the
+    stored decision in BOTH columns, so a real session reads as all-MATCH (an
+    honest 'replay reproduces the record-time verdict' baseline). When the CLI
+    re-stream lands, the same shape is filled with the re-evaluated verdict.
+
+    POLARITY (G2 / M15): the endpoint REFUSES an SM-self target -- if the joined
+    project_slug is in the SM exclusion set OR session_id == SM_OWN_SESSION_ID it
+    returns an empty (zero-frame) shape with excluded_self_rows=1, never a verdict.
+    Recorded sessions are NON-SM by construction. Degrades to an empty shape on
+    any error / unknown session (the component then falls back to mock).
+
+    Returns {recorded_session_uuid, engine_version, recorded_at, frame_count,
+    delta_count, polarity_filtered, excluded_self_rows, frames:[...]}.
+    """
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    slugs = _sm_own_slugs()
+    uuid = str(recorded_session_uuid or "").strip()
+    empty = {
+        "recorded_session_uuid": uuid,
+        "engine_version": "current",
+        "recorded_at": "",
+        "frame_count": 0,
+        "delta_count": 0,
+        "polarity_filtered": True,
+        "excluded_self_rows": 0,
+        "frames": [],
+    }
+    if not uuid:
+        return empty
+    try:
+        sidx = max(0, int(start_idx))
+    except Exception:
+        sidx = 0
+    try:
+        eidx = None if end_idx is None else max(0, int(end_idx))
+    except Exception:
+        eidx = None
+    try:
+        conn = _open()
+        if not _has_table(conn, "sessions") or not _has_table(conn, "decisions"):
+            conn.close()
+            return empty
+        # Resolve the session's project_slug to enforce the polarity guard.
+        srow = conn.execute(
+            "SELECT project_slug FROM sessions WHERE id = ? LIMIT 1", (uuid,)
+        ).fetchone()
+        slug = str((dict(srow).get("project_slug") if srow else "") or "").strip().lower()
+        # Polarity REFUSAL (G2): SM-self target yields no verdict, ever.
+        if slug in slugs or (sm_own and uuid == sm_own):
+            conn.close()
+            return {**empty, "excluded_self_rows": 1}
+        has_layer = _has_decision_routing_cols(conn)
+        layer_expr = "COALESCE(d.layer, 0)" if has_layer else "0"
+        rows = conn.execute(
+            f"SELECT d.action AS action, d.confidence AS confidence, "
+            f"       COALESCE(d.reasoning, '') AS reasoning, "
+            f"       COALESCE(d.matched_hash, '') AS matched_hash, "
+            f"       {layer_expr} AS layer, "
+            f"       COALESCE(m.content, '') AS content, "
+            f"       d.timestamp AS ts "
+            f"FROM decisions d "
+            f"JOIN messages m ON d.message_id = m.id "
+            f"WHERE m.session_id = ? "
+            f"ORDER BY d.rowid ASC",
+            (uuid,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        log.exception("replay-forensics: replay read failed; degrading to empty")
+        return empty
+    frames: list[dict] = []
+    recorded_at = ""
+    for i, r in enumerate(rows):
+        d = dict(r)
+        if not recorded_at and d.get("ts") is not None:
+            try:
+                import datetime as _dt
+                recorded_at = _dt.datetime.fromtimestamp(
+                    float(d["ts"]), _dt.UTC
+                ).isoformat()
+            except Exception:
+                recorded_at = ""
+        content = str(d.get("content") or "").strip().replace("\n", " ")
+        fingerprint = content[:80]
+        try:
+            layer = int(d.get("layer") or 0)
+        except Exception:
+            layer = 0
+        kind = "l4" if layer >= 4 else ("l2_l3" if layer >= 2 else "routine")
+        try:
+            conf = float(d.get("confidence"))
+        except Exception:
+            conf = 0.0
+        side = {
+            "action": str(d.get("action") or "ALLOW"),
+            "confidence": conf,
+            "layer": layer,
+            "matched_hash": str(d.get("matched_hash") or ""),
+            "reasoning": str(d.get("reasoning") or ""),
+        }
+        # v1: 'replayed' == 'original' (live re-stream deferred to the CLI). A
+        # shallow copy so the two sides are independent dicts in the response.
+        frames.append({
+            "idx": i,
+            "kind": kind,
+            "content_fingerprint": fingerprint,
+            "original": dict(side),
+            "replayed": dict(side),
+            "delta": {
+                "changed": False,
+                "action_changed": False,
+                "confidence_delta": 0.0,
+                "layer_delta": 0,
+                "matched_hash_changed": False,
+                "reasoning_changed": False,
+            },
+        })
+    # Optional frame-range slice (inclusive end), defensively clamped.
+    if frames:
+        lo = min(sidx, len(frames))
+        hi = len(frames) if eidx is None else min(eidx + 1, len(frames))
+        if hi < lo:
+            hi = lo
+        frames = frames[lo:hi]
+    return {
+        "recorded_session_uuid": uuid,
+        "engine_version": "current",
+        "recorded_at": recorded_at,
+        "frame_count": len(frames),
+        "delta_count": sum(1 for f in frames if f["delta"]["changed"]),
+        "polarity_filtered": True,
+        "excluded_self_rows": 0,
+        "frames": frames,
+    }
+
+
+# ============= BETA #undefined : session-checkpoint-versioning =============
+
+# --- GET /api/sessions/{session_id}/checkpoints ---
+# ===================== BETA #session-checkpoint-versioning (#26) =====================
+#
+# Read-only session checkpoint snapshots for post-mortem drift analysis.
+# Additive ONLY: a new session_checkpoints table (CREATE TABLE IF NOT EXISTS) +
+# three read/write endpoints over gov.db. NO FROZEN surface is touched (the
+# sessions/messages/decisions/hitl_* tables are read, never altered); NO new bus
+# envelope is emitted (write-to-DB only). Reuses the existing _open()/_open_rw()/
+# _reject_sm_own()/_sm_own_slugs()/_iso_now() helpers (already defined for the
+# stale-cleanup + soak-panel features).
+#
+# POLARITY (G2/M15): every endpoint EXCLUDES SM-self -- the list returns []  for
+# an SM project_slug session or the SM_OWN_SESSION_ID; the create POST refuses
+# with HTTP 400 {written:false}. project_slug NOT IN the SM slug set is the
+# durable read key; session_id != SM_OWN_SESSION_ID is the write gate + backstop.
+
+def _ensure_session_checkpoints(conn: sqlite3.Connection) -> None:
+    """Guarded additive CREATE: make the session_checkpoints table if missing.
+    Idempotent (CREATE TABLE IF NOT EXISTS). Additive -- no FROZEN surface
+    touched. The dashboard reads + writes ONLY this new table; it never alters
+    sessions/messages/decisions/hitl_*."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_checkpoints ("
+            "checkpoint_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+            "name TEXT, timestamp REAL, "
+            "decision_count_at_checkpoint INTEGER, message_count_at_checkpoint INTEGER, "
+            "confidence REAL, open_hitl INTEGER, patterns INTEGER, escalations INTEGER, "
+            "archived_at REAL)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_session_checkpoints_sid "
+            "ON session_checkpoints(session_id)"
+        )
+    except Exception:
+        log.exception("checkpoint-versioning: ensure session_checkpoints table failed")
+
+
+def _session_is_sm_self(conn: sqlite3.Connection, session_id: str) -> bool:
+    """True if this session is SM-self by project_slug (durable read key) OR by
+    the injected SM_OWN_SESSION_ID (write gate / backstop). Polarity G2."""
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    if sm_own and str(session_id) == sm_own:
+        return True
+    slugs = _sm_own_slugs()
+    try:
+        row = conn.execute(
+            "SELECT project_slug FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    except Exception:
+        return False
+    if row is None:
+        return False
+    return str(row["project_slug"] or "").strip().lower() in slugs
+
+
+@app.get("/api/sessions/{session_id}/checkpoints")
+async def api_session_checkpoints(session_id: str):
+    """List the named digest snapshots for ONE governed session, newest-first.
+    Read-only -- modifies NOTHING. Polarity (G2/M15): returns an EMPTY list for
+    an SM-self session (project_slug in the SM slug set OR id == SM_OWN_SESSION
+    _ID) so SM-self checkpoints are never surfaced. Creates the table lazily
+    (guarded) so a fresh DB returns {checkpoints:[]} with HTTP 200 -- never a 500.
+    """
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    if not isinstance(session_id, str) or not session_id:
+        return {"session_id": "", "checkpoints": [], "own_session_id": sm_own or None}
+    try:
+        conn = _open_rw()
+        _ensure_session_checkpoints(conn)
+        # Polarity self-exclude (G2): never list SM-self checkpoints.
+        if _session_is_sm_self(conn, session_id):
+            conn.close()
+            return {"session_id": session_id, "checkpoints": [], "own_session_id": sm_own or None}
+        rows = conn.execute(
+            "SELECT checkpoint_id, name, timestamp, decision_count_at_checkpoint, "
+            "message_count_at_checkpoint, confidence, open_hitl, patterns, escalations "
+            "FROM session_checkpoints "
+            "WHERE session_id = ? AND archived_at IS NULL "
+            "ORDER BY timestamp DESC LIMIT 200",
+            (session_id,),
+        ).fetchall()
+        out = [dict(r) for r in rows]
+        conn.close()
+        return {"session_id": session_id, "checkpoints": out, "own_session_id": sm_own or None}
+    except Exception:
+        log.exception("checkpoint-versioning: list failed; degrading to empty")
+        return {"session_id": session_id, "checkpoints": [], "own_session_id": None}
+
+# --- POST /api/sessions/{session_id}/checkpoint ---
+@app.post("/api/sessions/{session_id}/checkpoint")
+async def api_session_checkpoint_create(session_id: str, request: Request):
+    """Record a named DIGEST snapshot of one governed session's CURRENT state
+    (INSERT one row; <100ms latency budget). Purely observational -- it READS
+    the live counts and writes a new session_checkpoints row; it NEVER rewinds or
+    mutates the live session, messages, decisions, or hitl_* tables.
+
+    Polarity (G2/M15): REFUSES SM-self with HTTP 400 {written:false} by both
+    SM_OWN_SESSION_ID (_reject_sm_own) AND project_slug (loud failure mode, no DB
+    row written) -- mirrors the stale-cleanup archive contract. Body: {name}.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    _reject_sm_own(session_id)  # HTTP 400 if session_id == SM_OWN_SESSION_ID
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    name = str((body or {}).get("name") or "manual mark").strip()[:48] or "manual mark"
+    try:
+        conn = _open_rw()
+        _ensure_session_checkpoints(conn)
+        # Polarity self-exclude (G2): refuse by project_slug too. Loud failure --
+        # HTTP 400, no row written.
+        if _session_is_sm_self(conn, session_id):
+            conn.close()
+            raise HTTPException(status_code=400, detail="refusing to checkpoint SM-self session")
+        srow = conn.execute(
+            "SELECT id FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if srow is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="session not found")
+        # Read the CURRENT digest counts (observational; no mutation).
+        try:
+            mc = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,)
+            ).fetchone()[0]
+        except Exception:
+            mc = 0
+        try:
+            dc = conn.execute(
+                "SELECT COUNT(*) FROM decisions d JOIN messages m ON d.message_id = m.id "
+                "WHERE m.session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+        except Exception:
+            dc = 0
+        try:
+            conf = conn.execute(
+                "SELECT AVG(d.confidence) FROM decisions d JOIN messages m ON d.message_id = m.id "
+                "WHERE m.session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+            conf = float(conf) if conf is not None else None
+        except Exception:
+            conf = None
+        try:
+            oh = conn.execute(
+                "SELECT COUNT(*) FROM hitl_pending hp JOIN messages m ON hp.message_id = m.id "
+                "WHERE m.session_id = ? AND hp.resolved_at IS NULL",
+                (session_id,),
+            ).fetchone()[0]
+        except Exception:
+            oh = 0
+        import uuid as _uuid
+        cid = "ck-" + _uuid.uuid4().hex[:8]
+        ts = time.time()
+        conn.execute(
+            "INSERT INTO session_checkpoints (checkpoint_id, session_id, name, timestamp, "
+            "decision_count_at_checkpoint, message_count_at_checkpoint, confidence, "
+            "open_hitl, patterns, escalations, archived_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (cid, session_id, name, ts, int(dc), int(mc), conf, int(oh), 0, 0),
+        )
+        conn.close()
+        return {
+            "written": True,
+            "checkpoint": {
+                "checkpoint_id": cid,
+                "session_id": session_id,
+                "name": name,
+                "timestamp": _iso_now(),
+                "decision_count_at_checkpoint": int(dc),
+                "message_count_at_checkpoint": int(mc),
+                "confidence": conf,
+                "open_hitl": int(oh),
+                "patterns": 0,
+                "escalations": 0,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("checkpoint-versioning: create failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+# --- GET /api/sessions/{session_id}/compare ---
+@app.get("/api/sessions/{session_id}/compare")
+async def api_session_checkpoint_compare(
+    session_id: str, checkpoint_1: str = "", checkpoint_2: str = ""
+):
+    """Compute the PRE-COMPUTED what-changed delta manifest between two checkpoints
+    of ONE governed session (SQLite diff on two stored rows; <500ms budget). All
+    drift numbers are computed HERE (server-side); the UI renders them verbatim.
+    Read-only -- modifies NOTHING. Polarity (G2/M15): returns an EMPTY shape for
+    an SM-self session. Orders the pair so the OLDER checkpoint is checkpoint_1
+    (the baseline). Degrades to {} on any error / missing rows (the UI falls back
+    to a mock compare).
+    """
+    if not isinstance(session_id, str) or not session_id or not checkpoint_1 or not checkpoint_2:
+        return {}
+    try:
+        conn = _open_rw()
+        _ensure_session_checkpoints(conn)
+        if _session_is_sm_self(conn, session_id):
+            conn.close()
+            return {}
+        rows = conn.execute(
+            "SELECT checkpoint_id, name, timestamp, decision_count_at_checkpoint, "
+            "message_count_at_checkpoint, confidence, open_hitl, escalations "
+            "FROM session_checkpoints "
+            "WHERE session_id = ? AND checkpoint_id IN (?, ?)",
+            (session_id, checkpoint_1, checkpoint_2),
+        ).fetchall()
+        conn.close()
+        if len(rows) < 2:
+            return {}
+        a, b = (dict(rows[0]), dict(rows[1]))
+        # order: older = checkpoint_1 (baseline)
+        if (a.get("timestamp") or 0) > (b.get("timestamp") or 0):
+            a, b = b, a
+        d1 = int(a.get("decision_count_at_checkpoint") or 0)
+        d2 = int(b.get("decision_count_at_checkpoint") or 0)
+        m1 = int(a.get("message_count_at_checkpoint") or 0)
+        m2 = int(b.get("message_count_at_checkpoint") or 0)
+        c1 = a.get("confidence")
+        c2 = b.get("confidence")
+        oh1 = int(a.get("open_hitl") or 0)
+        oh2 = int(b.get("open_hitl") or 0)
+        e1 = int(a.get("escalations") or 0)
+        e2 = int(b.get("escalations") or 0)
+        new_hitl = max(0, oh2 - oh1)
+        esc_new = max(0, e2 - e1)
+        return {
+            "checkpoint_1": a.get("checkpoint_id"),
+            "checkpoint_2": b.get("checkpoint_id"),
+            "name_1": a.get("name"),
+            "name_2": b.get("name"),
+            "decisions_1": d1,
+            "decisions_2": d2,
+            "delta_decisions": d2 - d1,
+            "messages_1": m1,
+            "messages_2": m2,
+            "delta_messages": m2 - m1,
+            "confidence_1": float(c1) if c1 is not None else None,
+            "confidence_2": float(c2) if c2 is not None else None,
+            "new_hitl_overrides": {"count": new_hitl, "verdict": "BLOCK"},
+            "policy_changes_learned": [],
+            "escalation_delta": {
+                "count": esc_new,
+                "type": "governance_negative_regression" if esc_new > 0 else "",
+            },
+        }
+    except Exception:
+        log.exception("checkpoint-versioning: compare failed; degrading to empty")
+        return {}
+
+
+# ============= BETA #undefined : session-dna-heatmap-cross-pattern-topology =============
+
+# --- GET /api/patterns/cross-session-topology ---
+# --- GET /api/patterns/cross-session-topology ---
+@app.get("/api/patterns/cross-session-topology")
+async def api_patterns_cross_session_topology(
+    session_id: str | None = None,
+    limit: int = 20000,
+):
+    """Cross-session pattern topology for the BETA session-dna-heatmap (#30).
+
+    Read-only, post-hoc (M18): a render-ready aggregation over the EXISTING
+    decisions(matched_hash, confidence) + messages(session_id) + sessions
+    (project_slug) + agents rows. ZERO writes, ZERO FROZEN-surface touch, ZERO
+    new bus envelope, ZERO new table/column.
+
+    Groups every non-empty matched_hash by (matched_hash, session_id), takes the
+    MEAN confidence per (hash, session) pair, then derives a graph:
+      nodes:    one per governed (non-SM) session that participated in any
+                hashed decision, with its agent roster slugs (FROM DATA, M16).
+      patterns: { hash: {level, payload} } from the patterns table (best-effort).
+      edges:    one per hash present in >= 2 sessions (the SHARED / spreading
+                patterns), carrying the two HIGHEST-confidence sessions + their
+                per-session mean confidence (session_a/conf_a, session_b/conf_b).
+      isolated: one per hash present in exactly 1 session (single-session only).
+
+    POLARITY (G2 / M15): the SM-own session is excluded at the SQL WHERE on
+    sessions.project_slug -- a session whose project_slug is in the SM exclusion
+    set (BRIDGE_SM_PROJECT_SLUGS, default {'streamManager'}) can NEVER appear as
+    a node; SM_OWN_SESSION_ID is applied as the cheap session-id backstop. The
+    dropped tally surfaces as `excluded_self` so the UI can render the polarity
+    readout on screen. A decision whose session has no sessions-row is KEPT (it
+    is not SM-self) via the IS NULL leg, mirroring /api/escalation-timeline.
+
+    Returns {used_mock, excluded_self, nodes, patterns, edges, isolated}. Always
+    used_mock=False here (the live shape); the client substitutes its own mock
+    fixture only when this degrades to an EMPTY graph. Degrades to an empty graph
+    (HTTP 200, never a 500 / stack leak) on any error or fresh DB.
+    """
+    empty = {
+        "used_mock": False,
+        "excluded_self": 0,
+        "nodes": [],
+        "patterns": {},
+        "edges": [],
+        "isolated": [],
+    }
+
+    # Polarity: durable read key (project_slug) + cheap session-id backstop.
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = [s.strip() for s in _sm_slugs_raw.split(",") if s.strip()]
+    sm_own_sid = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    try:
+        cap = max(1, min(int(limit or 20000), 50000))
+    except Exception:
+        cap = 20000
+
+    try:
+        conn = _open()
+    except Exception:
+        log.exception("cross-session-topology: open failed")
+        return empty
+
+    try:
+        # Aggregate mean confidence per (matched_hash, session_id), SM-self
+        # excluded at the SQL WHERE. LEFT JOIN keeps no-session-row decisions
+        # (not self). Bounded scan via LIMIT on the newest decisions.
+        where = ["d.matched_hash IS NOT NULL", "d.matched_hash != ''"]
+        params: list = []
+        if session_id:
+            where.append("m.session_id = ?")
+            params.append(session_id)
+        if sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            where.append(
+                f"(s.project_slug IS NULL OR s.project_slug NOT IN ({placeholders}))"
+            )
+            params.extend(sm_slugs)
+        if sm_own_sid:
+            where.append("m.session_id != ?")
+            params.append(sm_own_sid)
+        scan_sql = (
+            "SELECT d.matched_hash AS hash, m.session_id AS sid, "
+            "d.confidence AS conf "
+            "FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY d.rowid DESC LIMIT ?"
+        )
+        params.append(cap)
+        rows = conn.execute(scan_sql, tuple(params)).fetchall()
+
+        # excluded_self: how many hashed-decision sessions the filter dropped.
+        excluded_self = 0
+        try:
+            self_where = ["d.matched_hash IS NOT NULL", "d.matched_hash != ''"]
+            self_params: list = []
+            self_terms = []
+            if sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                self_terms.append(f"s.project_slug IN ({ph})")
+                self_params.extend(sm_slugs)
+            if sm_own_sid:
+                self_terms.append("m.session_id = ?")
+                self_params.append(sm_own_sid)
+            if self_terms:
+                self_where.append("(" + " OR ".join(self_terms) + ")")
+                er = conn.execute(
+                    "SELECT COUNT(DISTINCT m.session_id) "
+                    "FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    f"WHERE {' AND '.join(self_where)}",
+                    tuple(self_params),
+                ).fetchone()
+                excluded_self = int(er[0] or 0) if er else 0
+        except Exception:
+            excluded_self = 0
+
+        # pattern metadata (best-effort; the matrix renders without it).
+        pat_meta: dict[str, dict] = {}
+        try:
+            if _has_table(conn, "patterns"):
+                for pr in conn.execute(
+                    "SELECT hash, level, payload FROM patterns"
+                ).fetchall():
+                    pat_meta[str(pr["hash"])] = {
+                        "level": pr["level"],
+                        "payload": str(pr["payload"] or ""),
+                    }
+        except Exception:
+            pat_meta = {}
+        conn_has_agents = _has_agents_table(conn)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        log.exception("cross-session-topology: scan failed; degrading to empty")
+        return empty
+
+    # Aggregate mean confidence per (hash, sid) in Python (portable across
+    # SQLite builds; the scan is already capped + indexed on rowid).
+    sums: dict[tuple[str, str], list[float]] = {}
+    for r in rows:
+        h = str(r["hash"])
+        sid = str(r["sid"])
+        try:
+            c = float(r["conf"])
+        except (TypeError, ValueError):
+            continue
+        sums.setdefault((h, sid), [0.0, 0])
+        agg = sums[(h, sid)]
+        agg[0] += c
+        agg[1] += 1
+
+    # mean[(hash,sid)] = confidence; collect the session set per hash.
+    mean: dict[tuple[str, str], float] = {}
+    by_hash: dict[str, dict[str, float]] = {}
+    sess_ids: set[str] = set()
+    for (h, sid), (tot, n) in sums.items():
+        if n <= 0:
+            continue
+        m = round(tot / n, 4)
+        mean[(h, sid)] = m
+        by_hash.setdefault(h, {})[sid] = m
+        sess_ids.add(sid)
+
+    if not by_hash:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {**empty, "excluded_self": excluded_self}
+
+    # node roster: slug (first 8 chars of session id) + project_slug + agents.
+    nodes: list[dict] = []
+    try:
+        for sid in sorted(sess_ids):
+            slug = sid[:8] if sid else sid
+            proj = ""
+            try:
+                srow = conn.execute(
+                    "SELECT project_slug FROM sessions WHERE id = ?", (sid,)
+                ).fetchone()
+                if srow is not None:
+                    proj = str(srow["project_slug"] or "")
+            except Exception:
+                proj = ""
+            agent_slugs: list[str] = []
+            if conn_has_agents:
+                try:
+                    for ar in conn.execute(
+                        "SELECT DISTINCT profile_slug FROM agents "
+                        "WHERE session_id = ? AND profile_slug != '' "
+                        "ORDER BY profile_slug LIMIT 8",
+                        (sid,),
+                    ).fetchall():
+                        ps = str(ar["profile_slug"] or "").strip()
+                        if ps and ps != "unknown":
+                            agent_slugs.append(ps)
+                except Exception:
+                    agent_slugs = []
+            nodes.append(
+                {
+                    "id": sid,
+                    "slug": slug,
+                    "project_slug": proj,
+                    "agent_slugs": agent_slugs,
+                }
+            )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # edges (>=2 sessions) carry the two highest-confidence sessions; isolated
+    # (exactly 1 session) carry the single occurrence.
+    edges: list[dict] = []
+    isolated: list[dict] = []
+    patterns_out: dict[str, dict] = {}
+    for h, per in by_hash.items():
+        patterns_out[h] = pat_meta.get(h, {"level": "", "payload": ""})
+        ranked = sorted(per.items(), key=lambda kv: kv[1], reverse=True)
+        if len(ranked) >= 2:
+            (sa, ca), (sb, cb) = ranked[0], ranked[1]
+            edges.append(
+                {
+                    "hash": h,
+                    "session_a": sa,
+                    "conf_a": ca,
+                    "session_b": sb,
+                    "conf_b": cb,
+                }
+            )
+        elif len(ranked) == 1:
+            (sid_only, c_only) = ranked[0]
+            isolated.append(
+                {"hash": h, "session_id": sid_only, "confidence": c_only}
+            )
+
+    return {
+        "used_mock": False,
+        "excluded_self": excluded_self,
+        "nodes": nodes,
+        "patterns": patterns_out,
+        "edges": edges,
+        "isolated": isolated,
+    }
+
+
+# ============= BETA #undefined : session-story-panel-narrative-arc =============
+
+# --- GET /api/sessions/{session_id}/story ---
+def _ensure_session_story_columns(conn: sqlite3.Connection) -> set[str]:
+    """Guarded additive ALTER: add the metadata-only narrative columns to the
+    sessions table if missing (narrative_markdown / narrative_composed_at /
+    narrative_model). SQLite lacks ADD COLUMN IF NOT EXISTS, so check
+    table_info first. Idempotent + best-effort; on a read-only (mode=ro)
+    connection the ALTER simply fails and we return whatever columns exist.
+    Mirrors _ensure_sessions_deleted_at. Returns the present sessions columns.
+
+    NO FROZEN touch: this is a metadata-only additive extension (ADR-18 Rule 1
+    precedent); no new table, no new bus envelope, no governance.py /
+    message_bus schema-flow change. The columns are written ONLY by the
+    deferred out-of-process compose_story CLI tool, never by this UI path.
+    """
+    want = ("narrative_markdown", "narrative_composed_at", "narrative_model")
+    types = {
+        "narrative_markdown": "TEXT",
+        "narrative_composed_at": "REAL",
+        "narrative_model": "TEXT",
+    }
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    except Exception:
+        return set()
+    for c in want:
+        if c not in cols:
+            try:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {c} {types[c]}")
+                cols.add(c)
+            except Exception:
+                # read-only conn or concurrent add -- not fatal; treat as absent.
+                pass
+    return cols
+
+
+@app.get("/api/sessions/{session_id}/story")
+async def api_session_story(session_id: str):
+    """BETA #37 session-story-panel-narrative-arc: read the PERSISTED narrative
+    metadata for ONE session (if an out-of-process compose has ever written it).
+
+    READ-ONLY + additive. Touches NO FROZEN surface (no governance.py, no
+    message_bus schema-flow change, no new bus envelope). The three narrative_*
+    columns are a metadata-only additive extension of the sessions table
+    (ADR-18 Rule 1 precedent), added lazily + guarded. The live, always-
+    available narrative ARC is derived CLIENT-SIDE from the open decision feed;
+    this endpoint only surfaces a richer persisted story when one exists and
+    otherwise returns {composed:false} so the component falls back to the
+    client-side arc / mock.
+
+    POLARITY (G2 / no-self-monitor): returns {composed:false} when the session's
+    project_slug is in the SM exclusion set (BRIDGE_SM_PROJECT_SLUGS, default
+    {streamManager}) OR the session_id equals SM_OWN_SESSION_ID. The durable
+    read key is project_slug; the session-id is the cheap backstop -- mirrors
+    the CLAUDE.md polarity split and the sparkline-data endpoint.
+
+    Degrades to {composed:false} on any error / unknown session / fresh DB
+    (never a 500 / stack leak / path leak).
+    """
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    sm_slugs = _sm_own_slugs()  # lowercased SM-self slug set (polarity G2)
+
+    empty = {
+        "session_id": session_id,
+        "composed": False,
+        "narrative_markdown": None,
+        "narrative_composed_at": None,
+        "narrative_model": None,
+        "decision_count": 0,
+    }
+
+    # Session-id backstop: never serve the SM own session's story.
+    if sm_own and session_id == sm_own:
+        return empty
+
+    try:
+        conn = _open()
+        cols = _ensure_session_story_columns(conn)
+        # Durable read-side polarity key: resolve the session's project_slug and
+        # suppress it if it is in the SM exclusion set (case-insensitive). A
+        # missing session row yields the empty (not-composed) shape below.
+        try:
+            srow = conn.execute(
+                "SELECT project_slug FROM sessions WHERE id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except Exception:
+            srow = None
+        if srow is None:
+            conn.close()
+            return empty
+        slug = (srow["project_slug"] if isinstance(srow, sqlite3.Row) else srow[0]) or ""
+        if str(slug).strip().lower() in sm_slugs:
+            conn.close()
+            return empty
+
+        # Pull the persisted narrative metadata IF the columns exist. When the
+        # compose CLI has never run they are all NULL -> composed:false.
+        narrative = None
+        composed_at = None
+        model = None
+        if {"narrative_markdown", "narrative_composed_at", "narrative_model"}.issubset(cols):
+            try:
+                nrow = conn.execute(
+                    "SELECT narrative_markdown, narrative_composed_at, narrative_model "
+                    "FROM sessions WHERE id = ? LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+            except Exception:
+                nrow = None
+            if nrow is not None:
+                narrative = nrow["narrative_markdown"] if isinstance(nrow, sqlite3.Row) else nrow[0]
+                composed_at = (
+                    nrow["narrative_composed_at"]
+                    if isinstance(nrow, sqlite3.Row)
+                    else nrow[1]
+                )
+                model = nrow["narrative_model"] if isinstance(nrow, sqlite3.Row) else nrow[2]
+
+        # A best-effort decision count for the meta line (polarity already
+        # enforced above via the project_slug suppression).
+        try:
+            crow = conn.execute(
+                "SELECT COUNT(*) AS n FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id WHERE m.session_id = ?",
+                (session_id,),
+            ).fetchone()
+            dcount = int(crow["n"] if isinstance(crow, sqlite3.Row) else crow[0]) if crow else 0
+        except Exception:
+            dcount = 0
+        conn.close()
+    except Exception:
+        log.exception("session-story: query failed")
+        return empty
+
+    has_narrative = isinstance(narrative, str) and narrative.strip() != ""
+    return {
+        "session_id": session_id,
+        "composed": bool(has_narrative),
+        "narrative_markdown": narrative if has_narrative else None,
+        "narrative_composed_at": float(composed_at) if composed_at is not None else None,
+        "narrative_model": model if model else None,
+        "decision_count": dcount,
+    }
+
+
+# ============= BETA #undefined : sonification-escalation-layer =============
+
+
+# ============= BETA #undefined : spatial-session-sidebar =============
+
+# --- GET /api/sessions/spatial-overview ---
+# ===================== BETA #spatial-session-sidebar : spatial-overview =====================
+
+# Action -> governance-mode map for the spatial node ring. Decisions carry an
+# action (ALLOW / L2 / L3 / L4 / BLOCK); the sidebar surfaces the operator-facing
+# governance MODE word. Unknown actions fall back to OBSERVE so a node is never
+# rendered color-only (M4). Domain-agnostic (M16): no monitored-project vocab.
+_SPATIAL_MODE_BY_ACTION = {
+    "ALLOW": "OBSERVE",
+    "L2": "SUGGEST",
+    "L3": "GUIDE",
+    "L4": "INTERVENE",
+    "BLOCK": "BLOCK",
+}
+
+
+def _spatial_sm_keys() -> tuple[set[str], str]:
+    """Polarity keys: the SM project-slug exclusion set (durable read key) and
+    the SM own session id (cheap session-id backstop). Mirrors the health-digest
+    endpoint exactly."""
+    _raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    slugs = {s.strip() for s in _raw.split(",") if s.strip()}
+    own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    return slugs, own
+
+
+def _spatial_pattern_edges(conn, sids: list[str], min_count: int = 1) -> list[dict]:
+    """Shared-pattern edges between distinct governed sessions. Two sessions are
+    linked when they share >= min_count learned pattern hashes (decisions.
+    matched_hash) -- the cross-session pattern-flow signal. Read-only. Returns
+    [{from_session_id, to_session_id, pattern_count, pattern_hashes}]. The hash
+    set per session is bounded; only non-empty matched_hash values count. Edges
+    are undirected; we emit one orientation (the more-recent session as `from`
+    is not load-bearing -- the UI draws a line either way)."""
+    if len(sids) < 2:
+        return []
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+        if "matched_hash" not in cols:
+            return []
+    except Exception:
+        return []
+    # hash set per session (cap the scan so a huge DB cannot stall the read).
+    hashes_by_sid: dict[str, set[str]] = {}
+    for sid in sids:
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT d.matched_hash FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "WHERE m.session_id = ? AND d.matched_hash IS NOT NULL "
+                "AND d.matched_hash != '' "
+                "ORDER BY d.rowid DESC LIMIT 500",
+                (sid,),
+            ).fetchall()
+            hashes_by_sid[sid] = {str(r[0]) for r in rows if r[0]}
+        except Exception:
+            hashes_by_sid[sid] = set()
+    edges: list[dict] = []
+    for i in range(len(sids)):
+        for j in range(i + 1, len(sids)):
+            a, b = sids[i], sids[j]
+            shared = sorted(hashes_by_sid.get(a, set()) & hashes_by_sid.get(b, set()))
+            if len(shared) >= max(1, int(min_count or 1)):
+                edges.append(
+                    {
+                        "from_session_id": a,
+                        "to_session_id": b,
+                        "pattern_count": len(shared),
+                        "pattern_hashes": shared[:12],
+                    }
+                )
+    return edges
+
+
+@app.get("/api/sessions/spatial-overview")
+async def api_sessions_spatial_overview(limit: int = 20):
+    """BETA #45 spatial-session-sidebar -- one aggregated read of every governed
+    NON-SM session as a spatial NODE plus the shared-pattern EDGES between them,
+    for the right-rail spatial overview. Read-only (M18, post-hoc -- never on the
+    verdict hot path). Opens the DB with the same _open() (mode=ro) pattern as
+    every other read endpoint and closes it before returning.
+
+    Node shape: { session_id, project_slug, governance_mode (derived from the
+    latest decision action), last_activity_ts, open_hitl, agent_slug,
+    latency_sparkline (the last <=10 decision inter-arrival gaps, ms, oldest-
+    first -- a SHAPE-only trace, never a severity signal), alert (BLOCK -> the
+    M2 'static-rule' word, else null) }. Edge shape: { from_session_id,
+    to_session_id, pattern_count, pattern_hashes }.
+
+    POLARITY (G2, CLAUDE.md): SM never presents its own sessions as governed
+    targets. The durable read key is project_slug NOT IN the SM slug set
+    (BRIDGE_SM_PROJECT_SLUGS, default {streamManager}); SM_OWN_SESSION_ID is the
+    cheap session-id backstop. excluded_self surfaces how many rows the filter
+    dropped so the UI shows the polarity readout on screen.
+
+    Touches NO FROZEN surface (no governance.py, no message_bus schema change,
+    no new bus envelope). Degrades to an empty set (never an error body that
+    flips the UI to a false 'live' state) on any failure or fresh DB.
+    """
+    import time as _time
+
+    now = int(_time.time())
+    empty = {"now": now, "excluded_self": 0, "nodes": [], "edges": []}
+    sm_slugs, sm_own_sid = _spatial_sm_keys()
+
+    try:
+        conn = _open()
+    except Exception:
+        log.exception("spatial-overview: open failed")
+        return empty
+
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        has_hitl = "hitl_mode" in cols
+        sel = (
+            "id, project_slug, pid, started_at, ended_at, hitl_mode"
+            if has_hitl
+            else "id, project_slug, pid, started_at, ended_at"
+        )
+        sess_rows = conn.execute(
+            f"SELECT {sel} FROM sessions ORDER BY started_at DESC LIMIT ?",
+            (min(max(int(limit or 20), 1), 50),),
+        ).fetchall()
+
+        has_agents = _has_agents_table(conn)
+        has_hitl_tbl = _has_table(conn, "hitl_pending")
+
+        nodes: list[dict] = []
+        kept_sids: list[str] = []
+        excluded_self = 0
+        for sr in sess_rows:
+            sid = sr["id"]
+            slug = (sr["project_slug"] or "").strip()
+            # POLARITY filter -- durable slug key + session-id backstop.
+            if slug in sm_slugs or (sm_own_sid and sid == sm_own_sid):
+                excluded_self += 1
+                continue
+
+            # latest decision: action -> governance_mode, last_activity_ts.
+            governance_mode = "OBSERVE"
+            last_activity_ts = 0
+            spark: list[int] = []
+            try:
+                drows = conn.execute(
+                    "SELECT d.action AS action, d.timestamp AS ts "
+                    "FROM decisions d JOIN messages m ON d.message_id = m.id "
+                    "WHERE m.session_id = ? "
+                    "ORDER BY d.rowid DESC LIMIT 11",
+                    (sid,),
+                ).fetchall()
+                if drows:
+                    latest_action = str(drows[0]["action"] or "").upper()
+                    governance_mode = _SPATIAL_MODE_BY_ACTION.get(latest_action, "OBSERVE")
+                    try:
+                        last_activity_ts = int(float(drows[0]["ts"] or 0))
+                    except Exception:
+                        last_activity_ts = 0
+                    # latency sparkline: inter-arrival gaps (ms) between the last
+                    # <=11 decisions, oldest-first -> <=10 points. Shape-only.
+                    ts_desc = [d["ts"] for d in drows if d["ts"] is not None]
+                    ts_chron = list(reversed(ts_desc))
+                    for k in range(1, len(ts_chron)):
+                        try:
+                            gap = max(0.0, (float(ts_chron[k]) - float(ts_chron[k - 1])) * 1000.0)
+                            spark.append(int(min(gap, 60000)))
+                        except Exception:
+                            continue
+            except Exception:
+                governance_mode = "OBSERVE"
+
+            if last_activity_ts == 0:
+                # fall back to session timing so recency placement is stable.
+                try:
+                    last_activity_ts = int(float(
+                        sr["ended_at"]
+                        if sr["ended_at"] is not None
+                        else (sr["started_at"] or now)
+                    ))
+                except Exception:
+                    last_activity_ts = now
+
+            # open_hitl (unresolved hitl_pending rows joined on the session).
+            open_hitl = 0
+            if has_hitl_tbl:
+                try:
+                    open_hitl = conn.execute(
+                        "SELECT COUNT(*) FROM hitl_pending hp "
+                        "JOIN messages m ON hp.message_id = m.id "
+                        "WHERE hp.resolved_at IS NULL AND m.session_id = ?",
+                        (sid,),
+                    ).fetchone()[0]
+                except Exception:
+                    open_hitl = int(open_hitl or 0)
+
+            # agent_slug -- the most-recently-seen agent profile for the session.
+            agent_slug = ""
+            if has_agents:
+                try:
+                    arow = conn.execute(
+                        "SELECT profile_slug FROM agents "
+                        "WHERE session_id = ? ORDER BY last_seen DESC LIMIT 1",
+                        (sid,),
+                    ).fetchone()
+                    if arow is not None:
+                        agent_slug = str(arow["profile_slug"] or "")
+                except Exception:
+                    agent_slug = ""
+
+            # alert: a BLOCK-mode node carries the literal M2 'static-rule' word
+            # (paired with the pulsing outline in the UI). No escalation table
+            # exists in the schema; the alert is reachable from the verdict mode
+            # only (never fabricated). Non-BLOCK -> null.
+            alert = "static-rule" if governance_mode == "BLOCK" else None
+
+            nodes.append(
+                {
+                    "session_id": sid,
+                    "project_slug": slug or str(sid),
+                    "governance_mode": governance_mode,
+                    "last_activity_ts": last_activity_ts,
+                    "open_hitl": int(open_hitl or 0),
+                    "agent_slug": agent_slug,
+                    "latency_sparkline": spark[-10:],
+                    "alert": alert,
+                }
+            )
+            kept_sids.append(sid)
+
+        edges = _spatial_pattern_edges(conn, kept_sids, min_count=1)
+        conn.close()
+        return {"now": now, "excluded_self": excluded_self, "nodes": nodes, "edges": edges}
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        log.exception("spatial-overview: aggregation failed")
+        return empty
+
+# --- GET /api/sessions/pattern-edges ---
+@app.get("/api/sessions/pattern-edges")
+async def api_sessions_pattern_edges(min_pattern_count: int = 1, limit: int = 20):
+    """BETA #45 spatial-session-sidebar -- standalone shared-pattern EDGE read
+    (used when the overview is already cached and only the cross-session pattern
+    flows need refreshing). Returns { edges:[{from_session_id, to_session_id,
+    pattern_count, pattern_hashes}], excluded_self }. Two governed sessions are
+    linked when they share >= min_pattern_count learned pattern hashes
+    (decisions.matched_hash).
+
+    READ-ONLY (M18, post-hoc). POLARITY (G2): only governed NON-SM sessions are
+    considered -- project_slug NOT IN the SM slug set (durable key) AND session_id
+    != SM_OWN_SESSION_ID (backstop); excluded_self surfaces the dropped self
+    rows. Touches NO FROZEN surface. Degrades to {edges:[], excluded_self:0} on
+    any error / fresh DB.
+    """
+    empty = {"edges": [], "excluded_self": 0}
+    sm_slugs, sm_own_sid = _spatial_sm_keys()
+
+    try:
+        conn = _open()
+    except Exception:
+        log.exception("pattern-edges: open failed")
+        return empty
+
+    try:
+        if not _has_table(conn, "sessions"):
+            conn.close()
+            return empty
+        sess_rows = conn.execute(
+            "SELECT id, project_slug FROM sessions ORDER BY started_at DESC LIMIT ?",
+            (min(max(int(limit or 20), 1), 50),),
+        ).fetchall()
+        kept_sids: list[str] = []
+        excluded_self = 0
+        for sr in sess_rows:
+            sid = sr["id"]
+            slug = (sr["project_slug"] or "").strip()
+            if slug in sm_slugs or (sm_own_sid and sid == sm_own_sid):
+                excluded_self += 1
+                continue
+            kept_sids.append(sid)
+        edges = _spatial_pattern_edges(conn, kept_sids, min_count=min_pattern_count)
+        conn.close()
+        return {"edges": edges, "excluded_self": excluded_self}
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        log.exception("pattern-edges: query failed")
+        return empty
+
+
+# ============= BETA #undefined : temporal-scrubber-governance-audit =============
+
+# --- GET /api/decisions/replay-diff/sessions ---
+# ===================== BETA #temporal-scrubber-governance-audit =====================
+
+# --- GET /api/decisions/replay-diff/sessions ---
+@app.get("/api/decisions/replay-diff/sessions")
+async def api_replay_diff_sessions():
+    """Polarity-filtered NON-SM session picker for the BETA temporal-scrubber
+    (#47). Additive READ-ONLY. Returns governed sessions that carry stored
+    decisions, each {session_id, project_slug, decision_count}, newest-activity
+    first, plus an {excluded_self} tally so the picker renders self-exclusion as
+    a VISIBLE feature (G2). SM-self is excluded server-side:
+
+      - project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)  -- durable read key
+      - session_id != SM_OWN_SESSION_ID                     -- session backstop
+
+    Read-only, post-hoc (M18): aggregates only sessions + decisions + messages.
+    ZERO writes, ZERO FROZEN-surface touch, ZERO new bus envelope. Degrades to
+    {sessions: []} with HTTP 200 on any error / fresh DB (never a 500 / stack
+    leak) so the client falls back to deterministic mock.
+    """
+    try:
+        conn = _open()
+        if not _has_table(conn, "decisions") or not _has_table(conn, "messages"):
+            conn.close()
+            return {"sessions": [], "excluded_self": 0, "own_session_id": None}
+        sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+        sm_slugs = [s.strip().lower() for s in sm_slugs_raw.split(",") if s.strip()]
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        has_sessions = _has_table(conn, "sessions")
+        join_sql = "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+        slug_sel = "s.project_slug AS project_slug " if has_sessions else "'' AS project_slug "
+        # Count governed decisions per session; surface the dropped self tally.
+        where = ["1=1"]
+        params: list = []
+        if has_sessions and sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            where.append(
+                "(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN (" + placeholders + "))"
+            )
+            params.extend(sm_slugs)
+        if sm_own:
+            where.append("m.session_id != ?")
+            params.append(sm_own)
+        sql = (
+            "SELECT m.session_id AS session_id, " + slug_sel + ", "
+            "COUNT(*) AS decision_count, MAX(d.timestamp) AS last_ts "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            + join_sql
+            + "WHERE " + " AND ".join(where)
+            + " GROUP BY m.session_id ORDER BY last_ts DESC LIMIT 200"
+        )
+        gov_rows = conn.execute(sql, tuple(params)).fetchall()
+        # excluded_self = governed-decision-bearing sessions that ARE SM-self.
+        excluded_self = 0
+        if has_sessions and (sm_slugs or sm_own):
+            self_where = []
+            self_params: list = []
+            if sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                self_where.append("LOWER(s.project_slug) IN (" + ph + ")")
+                self_params.extend(sm_slugs)
+            if sm_own:
+                self_where.append("m.session_id = ?")
+                self_params.append(sm_own)
+            self_sql = (
+                "SELECT COUNT(DISTINCT m.session_id) AS n "
+                "FROM decisions d JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON m.session_id = s.id "
+                "WHERE " + " OR ".join(self_where)
+            )
+            r = conn.execute(self_sql, tuple(self_params)).fetchone()
+            excluded_self = int(r["n"]) if r and r["n"] is not None else 0
+        conn.close()
+        out = []
+        for r in gov_rows:
+            d = dict(r)
+            out.append({
+                "session_id": d.get("session_id"),
+                "project_slug": d.get("project_slug") or "",
+                "decision_count": int(d.get("decision_count") or 0),
+            })
+        return {"sessions": out, "excluded_self": excluded_self, "own_session_id": (sm_own or None)}
+    except Exception:
+        log.exception("replay-diff/sessions: query failed; degrading to empty")
+        return {"sessions": [], "excluded_self": 0, "own_session_id": None}
+
+# --- GET /api/decisions/replay-diff ---
+# --- GET /api/decisions/replay-diff ---
+@app.get("/api/decisions/replay-diff")
+async def api_replay_diff(
+    session_id: str | None = None,
+    a: float = 8.0,
+    b: float = 70.0,
+):
+    """READ-ONLY replay-diff over the STORED decision stream for one governed
+    session, for the BETA temporal-scrubber (#47).
+
+    `a` and `b` are 0..100 scrubber-handle positions across the session's
+    decision-time span (min(timestamp)..max(timestamp)). The server slices a
+    window around each handle, keys comparable decisions by a normalized content
+    fingerprint, takes the NEWEST decision per fingerprint within each window,
+    and pairs fingerprints that appear in BOTH windows into diff rows. Each row:
+      {key, content,
+       window_a:{action,confidence,layer,model_used,matched_hash,content,timestamp},
+       window_b:{...}}
+    The client pre-computes the confidence delta + verdict-change + heat band
+    from the two sides (deterministic archaeology).
+
+    POLARITY (G2 / M15): SM-self is excluded server-side BEFORE any window slice
+      - project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)  -- durable read key
+      - m.session_id != SM_OWN_SESSION_ID                   -- session backstop
+    An SM-self session_id therefore yields zero rows (the scope can never be
+    self). {excluded_self} surfaces the dropped self tally for the visible
+    polarity readout.
+
+    Read-only, post-hoc (M18): a single aggregation over indexed
+    decisions(timestamp) + messages(session_id). ZERO writes, ZERO FROZEN-surface
+    touch, ZERO new bus envelope, ZERO spawn/cron/subprocess. Degrades to a
+    {rows: []} shape with HTTP 200 on any error / empty window (never a 500 /
+    stack leak); the client then falls back to deterministic mock.
+    """
+    try:
+        if not session_id:
+            return {
+                "session_id": "",
+                "project_slug": "",
+                "window_a_label": "window A",
+                "window_b_label": "window B",
+                "rows": [],
+                "excluded_self": 0,
+                "polarity_filtered": True,
+            }
+        # clamp + order the two handle positions into a low/high pair.
+        try:
+            pa = max(0.0, min(100.0, float(a)))
+            pb = max(0.0, min(100.0, float(b)))
+        except (TypeError, ValueError):
+            pa, pb = 8.0, 70.0
+        plo, phi = (pa, pb) if pa <= pb else (pb, pa)
+        conn = _open()
+        if not _has_table(conn, "decisions") or not _has_table(conn, "messages"):
+            conn.close()
+            return {
+                "session_id": session_id,
+                "project_slug": "",
+                "window_a_label": "window A",
+                "window_b_label": "window B",
+                "rows": [],
+                "excluded_self": 0,
+                "polarity_filtered": True,
+            }
+        sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+        sm_slugs = [s.strip().lower() for s in sm_slugs_raw.split(",") if s.strip()]
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        has_sessions = _has_table(conn, "sessions")
+        # Resolve the requested scope's project_slug + assert it is NOT SM-self.
+        project_slug = ""
+        is_self = False
+        if has_sessions:
+            srow = conn.execute(
+                "SELECT project_slug FROM sessions WHERE id = ? LIMIT 1", (session_id,)
+            ).fetchone()
+            if srow is not None:
+                project_slug = (srow["project_slug"] or "")
+                if sm_slugs and project_slug.strip().lower() in sm_slugs:
+                    is_self = True
+        if sm_own and session_id == sm_own:
+            is_self = True
+        if is_self:
+            conn.close()
+            # Polarity: an SM-self scope yields zero rows + a surfaced self tally.
+            return {
+                "session_id": session_id,
+                "project_slug": project_slug,
+                "window_a_label": "window A",
+                "window_b_label": "window B",
+                "rows": [],
+                "excluded_self": 1,
+                "polarity_filtered": True,
+            }
+        # Pull this governed session's decision stream (oldest-first), with the
+        # polarity WHERE applied belt-and-suspenders (the scope is already proven
+        # non-self above; this guards a NULL-session join edge).
+        join_sql = "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+        where = ["m.session_id = ?"]
+        params: list = [session_id]
+        if has_sessions and sm_slugs:
+            ph = ",".join("?" for _ in sm_slugs)
+            where.append("(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN (" + ph + "))")
+            params.extend(sm_slugs)
+        if sm_own:
+            where.append("m.session_id != ?")
+            params.append(sm_own)
+        sql = (
+            "SELECT d.action AS action, d.confidence AS confidence, "
+            "COALESCE(d.layer, 0) AS layer, COALESCE(d.model_used, '') AS model_used, "
+            "COALESCE(d.matched_hash, '') AS matched_hash, d.timestamp AS ts, "
+            "COALESCE(m.content, '') AS content "
+            "FROM decisions d JOIN messages m ON d.message_id = m.id "
+            + join_sql
+            + "WHERE " + " AND ".join(where)
+            + " ORDER BY d.timestamp ASC LIMIT 20000"
+        )
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+        recs = []
+        for r in rows:
+            try:
+                ts = float(r["ts"])
+            except (TypeError, ValueError):
+                continue
+            recs.append({
+                "action": str(r["action"] or "ALLOW").upper(),
+                "confidence": float(r["confidence"]) if r["confidence"] is not None else 0.0,
+                "layer": int(r["layer"] or 0),
+                "model_used": str(r["model_used"] or ""),
+                "matched_hash": str(r["matched_hash"] or ""),
+                "timestamp": ts,
+                "content": str(r["content"] or ""),
+            })
+        if len(recs) < 2:
+            return {
+                "session_id": session_id,
+                "project_slug": project_slug,
+                "window_a_label": "window A",
+                "window_b_label": "window B",
+                "rows": [],
+                "excluded_self": 0,
+                "polarity_filtered": True,
+            }
+        t_min = recs[0]["timestamp"]
+        t_max = recs[-1]["timestamp"]
+        span = max(1e-6, t_max - t_min)
+        # window half-width = 12% of the span (a readable 24% band), >= 1 second.
+        half = max(1.0, span * 0.12)
+        ca = t_min + span * (plo / 100.0)
+        cb = t_min + span * (phi / 100.0)
+
+        def _norm_fp(text: str) -> str:
+            # stable content fingerprint: collapse whitespace + lowercase, cap len.
+            return " ".join(str(text or "").split()).lower()[:200]
+
+        def _slice(center: float):
+            # newest decision per fingerprint within [center-half, center+half].
+            picked: dict = {}
+            for rec in recs:
+                if rec["timestamp"] < center - half or rec["timestamp"] > center + half:
+                    continue
+                fp = _norm_fp(rec["content"])
+                if not fp:
+                    continue
+                prev = picked.get(fp)
+                if prev is None or rec["timestamp"] >= prev["timestamp"]:
+                    picked[fp] = rec
+            return picked
+
+        win_a = _slice(ca)
+        win_b = _slice(cb)
+
+        import datetime as _dt
+
+        def _clock(t: float) -> str:
+            try:
+                return _dt.datetime.fromtimestamp(t).strftime("%H:%M") + "Z"
+            except Exception:
+                return "--"
+
+        def _side(rec: dict) -> dict:
+            return {
+                "action": rec["action"],
+                "confidence": round(rec["confidence"], 4),
+                "layer": rec["layer"],
+                "model_used": rec["model_used"],
+                "matched_hash": rec["matched_hash"],
+                "content": rec["content"],
+                "timestamp": _clock(rec["timestamp"]),
+            }
+
+        # pair fingerprints present in BOTH windows (the comparable-message set).
+        out_rows = []
+        for fp in win_a:
+            if fp in win_b:
+                ra = win_a[fp]
+                rb = win_b[fp]
+                out_rows.append({
+                    "key": fp[:80] or ("row-" + str(len(out_rows))),
+                    "content": rb["content"] or ra["content"],
+                    "window_a": _side(ra),
+                    "window_b": _side(rb),
+                })
+        out_rows.sort(key=lambda x: x["content"].lower())
+        out_rows = out_rows[:200]
+        return {
+            "session_id": session_id,
+            "project_slug": project_slug,
+            "window_a_label": _clock(ca - half) + " -- " + _clock(ca + half),
+            "window_b_label": _clock(cb - half) + " -- " + _clock(cb + half),
+            "rows": out_rows,
+            "excluded_self": 0,
+            "polarity_filtered": True,
+        }
+    except Exception:
+        log.exception("replay-diff: query failed; degrading to empty")
+        return {
+            "session_id": session_id or "",
+            "project_slug": "",
+            "window_a_label": "window A",
+            "window_b_label": "window B",
+            "rows": [],
+            "excluded_self": 0,
+            "polarity_filtered": True,
+        }
+
+
+# ============= BETA #undefined : time-machine-governance-replay =============
+
+# --- POST /api/time-machine/replay ---
+# ===================== BETA #time-machine-governance-replay =====================
+
+# Action restrictiveness ranking -- mirrors governance.py _ACTION_RANK so the
+# server re-derivation matches the live post-engine overlay byte-for-byte.
+_TM_ACTION_RANK: dict[str, int] = {
+    "ALLOW": 0, "OBSERVE": 0, "SUGGEST": 1, "GUIDE": 2, "INTERVENE": 3, "BLOCK": 4,
+}
+
+
+def _tm_cap_action(current: str, ceiling: str) -> str:
+    """Cap an action UP to a ceiling (mirrors governance.py _cap_action)."""
+    cur = _TM_ACTION_RANK.get(current, 0)
+    ceil = _TM_ACTION_RANK.get(ceiling, 0)
+    return ceiling if ceil > cur else current
+
+
+# --- POST /api/time-machine/replay ---
+@app.post("/api/time-machine/replay")
+async def api_time_machine_replay(body: dict | None = None):
+    """BETA #48 time-machine-governance-replay: counterfactual REPLAY of the
+    deterministic post-engine confidence-floor overlay over already-stored
+    governed (non-SM) decisions in a time window.
+
+    READ-ONLY + additive (M18, post-hoc -- never on the verdict hot path). Opens
+    the DB with the same ``_open()`` (mode=ro) pattern as every other read
+    endpoint and closes it before returning. RE-DERIVES the overlay deterministic-
+    ally (``_tm_cap_action`` + the confidence_floor block, mirroring
+    governance.py) under the operator's TRIAL floor -- it NEVER re-calls the
+    model, NEVER publishes a bus envelope (NO new envelope kind), NEVER mutates a
+    FROZEN surface, and persists NOTHING.
+
+    POLARITY (G2 / no-self-monitor): the SM-own session is excluded at the SQL
+    WHERE on sessions.project_slug (durable read key: BRIDGE_SM_PROJECT_SLUGS,
+    default {streamManager}) plus a SM_OWN_SESSION_ID session-id backstop. The
+    dropped self-row count is surfaced as ``excluded_self``.
+
+    Body: {time_range_start:ms, time_range_end:ms, confidence_floor:0..1,
+    hitl_mode?:'sync'|'async'}. Returns {window, config_delta, summary, 
+    excluded_self, mock, rows:[...]}. Degrades to a SAFE empty {mock:true,
+    rows:[]} shape on any error / empty window so the client falls back to its
+    own deterministic mock (never reads as live when the server is down).
+    """
+    b = body if isinstance(body, dict) else {}
+    try:
+        end_ms = int(b.get("time_range_end") or 0)
+    except Exception:
+        end_ms = 0
+    try:
+        start_ms = int(b.get("time_range_start") or 0)
+    except Exception:
+        start_ms = 0
+    if end_ms <= 0:
+        end_ms = int(time.time() * 1000)
+    if start_ms <= 0 or start_ms >= end_ms:
+        start_ms = end_ms - 60 * 60 * 1000
+    try:
+        trial_floor = float(b.get("confidence_floor"))
+    except Exception:
+        trial_floor = 0.5
+    trial_floor = min(1.0, max(0.0, trial_floor))
+    hitl_mode = str(b.get("hitl_mode") or "").strip().lower() or None
+    if hitl_mode not in ("sync", "async", None):
+        hitl_mode = None
+
+    # decisions.timestamp is epoch SECONDS; convert the ms window bounds.
+    start_s = start_ms / 1000.0
+    end_s = end_ms / 1000.0
+
+    empty = {
+        "window": {"start_ms": start_ms, "end_ms": end_ms, "label": "window"},
+        "config_delta": {"confidence_floor": {"from": None, "to": trial_floor},
+                         "hitl_mode": hitl_mode},
+        "summary": {"checked": 0, "changed": 0, "escalated": 0,
+                    "released": 0, "na": 0, "mock": True},
+        "excluded_self": 0, "mock": True, "rows": [],
+    }
+
+    # Polarity: durable slug key + session-id backstop.
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = [s.strip() for s in _sm_slugs_raw.split(",") if s.strip()]
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    try:
+        conn = _open()
+    except Exception:
+        log.exception("time-machine: open failed")
+        return empty
+
+    try:
+        where = ["d.timestamp >= ?", "d.timestamp < ?"]
+        params: list = [start_s, end_s]
+        if sm_slugs:
+            placeholders = ",".join("?" for _ in sm_slugs)
+            # s.project_slug IS NULL => no session row => keep (not self).
+            where.append(
+                f"(s.project_slug IS NULL OR s.project_slug NOT IN ({placeholders}))"
+            )
+            params.extend(sm_slugs)
+        if sm_own:
+            where.append("m.session_id != ?")
+            params.append(sm_own)
+        sql = (
+            "SELECT d.id AS decision_id, d.message_id AS message_id, "
+            "d.action AS action, d.confidence AS confidence, "
+            "d.reasoning AS reasoning, d.timestamp AS ts, "
+            "m.session_id AS session_id, s.project_slug AS project_slug "
+            "FROM decisions d "
+            "JOIN messages m ON d.message_id = m.id "
+            "LEFT JOIN sessions s ON s.id = m.session_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY d.timestamp DESC LIMIT 500"
+        )
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+        # excluded_self: how many in-window rows the polarity filter dropped
+        # (slug-self OR session-id-self), surfaced for the on-screen readout.
+        excluded_self = 0
+        try:
+            ex_where = ["d.timestamp >= ?", "d.timestamp < ?"]
+            ex_params: list = [start_s, end_s]
+            ors = []
+            if sm_slugs:
+                placeholders = ",".join("?" for _ in sm_slugs)
+                ors.append(f"s.project_slug IN ({placeholders})")
+                ex_params_extra = list(sm_slugs)
+            else:
+                ex_params_extra = []
+            if sm_own:
+                ors.append("m.session_id = ?")
+            if ors:
+                ex_where.append("(" + " OR ".join(ors) + ")")
+            ex_sql = (
+                "SELECT COUNT(*) FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                f"WHERE {' AND '.join(ex_where)}"
+            )
+            ex_all = list(ex_params) + ex_params_extra + ([sm_own] if sm_own else [])
+            er = conn.execute(ex_sql, tuple(ex_all)).fetchone()
+            excluded_self = int(er[0] or 0) if er else 0
+        except Exception:
+            excluded_self = 0
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        log.exception("time-machine: replay query failed; degrading to empty")
+        return empty
+
+    if not rows:
+        # No governed in-window decisions -> let the client render its mock.
+        return empty
+
+    out_rows: list[dict] = []
+    changed = escalated = released = na = 0
+    for r in rows:
+        d = dict(r)
+        orig = str(d.get("action") or "ALLOW").upper()
+        try:
+            conf = float(d.get("confidence") or 0.0)
+        except Exception:
+            conf = 0.0
+        orig_rank = _TM_ACTION_RANK.get(orig, 0)
+        # N/A: an escalation the confidence floor did NOT cause (a hard
+        # blocked-op / restricted-op match) -- the floor knob cannot move it.
+        # Heuristic mirrors the client: confidence at/above the trial floor yet
+        # the action is already >= GUIDE.
+        if conf >= trial_floor and orig_rank >= _TM_ACTION_RANK["GUIDE"]:
+            replay = orig
+            applies = False
+        else:
+            # The trial floor IS the lever. A row the floor escalated rides at an
+            # ALLOW baseline when un-floored; we model that baseline as ALLOW for
+            # rows that are >= GUIDE and below the floor, else keep the original.
+            base = (
+                "ALLOW"
+                if (orig_rank >= _TM_ACTION_RANK["GUIDE"] and conf < trial_floor)
+                else orig
+            )
+            replay = _tm_cap_action(base, "GUIDE") if conf < trial_floor else base
+            applies = True
+        affected = applies and replay != orig
+        if applies:
+            if affected:
+                changed += 1
+                if _TM_ACTION_RANK.get(replay, 0) > orig_rank:
+                    escalated += 1
+                else:
+                    released += 1
+        else:
+            na += 1
+        replay_reason = (
+            str(d.get("reasoning") or "floor does not apply to this decision")
+            if not applies
+            else (
+                f"confidence_floor {trial_floor:.2f} (got {conf:.2f}) -> escalated to GUIDE"
+                if conf < trial_floor
+                else (
+                    f"confidence_floor {trial_floor:.2f} (got {conf:.2f}) -> "
+                    f"floor not tripped; {replay}"
+                )
+            )
+        )
+        try:
+            ts_ms = int(float(d.get("ts") or 0) * 1000)
+        except Exception:
+            ts_ms = 0
+        out_rows.append({
+            "decision_id": str(d.get("decision_id") or ""),
+            "message_id": str(d.get("message_id") or ""),
+            "timestamp_ms": ts_ms,
+            "confidence": conf,
+            "original_action": orig,
+            "replay_action": replay,
+            "applies": applies,
+            "affected": affected,
+            "original_reason": str(d.get("reasoning") or "original decision"),
+            "replay_reason": replay_reason,
+            "project_slug": str(d.get("project_slug") or ""),
+            "session_id": str(d.get("session_id") or ""),
+        })
+
+    return {
+        "window": {"start_ms": start_ms, "end_ms": end_ms, "label": "window"},
+        "config_delta": {
+            "confidence_floor": {"from": None, "to": trial_floor},
+            "hitl_mode": hitl_mode,
+        },
+        "summary": {
+            "checked": len(out_rows), "changed": changed, "escalated": escalated,
+            "released": released, "na": na, "mock": False,
+        },
+        "excluded_self": excluded_self,
+        "mock": False,
+        "rows": out_rows,
+    }
+
+
+# --- policy-preview-chip endpoint (#21) ---
+# READ-ONLY corpus retrieval for the BETA "policy-preview-chip". DERIVES a
+# per-shape verdict distribution from the EXISTING decision rows. It NEVER calls
+# governance.evaluate / the live engine (M18: off the verdict hot path) -- it is
+# pure post-hoc retrieval. Additive read endpoint; touches NO FROZEN surface (no
+# governance.py, no message_bus schema, no new bus envelope). Polarity (G2): the
+# corpus is filtered at the SQL WHERE on sessions.project_slug (durable read key:
+# project_slug NOT IN the SM exclusion set, BRIDGE_SM_PROJECT_SLUGS default
+# {streamManager}) AND on m.session_id != SM_OWN_SESSION_ID (session backstop) --
+# SM-self NEVER enters the predictive corpus -- and the dropped self tally is
+# surfaced as excluded_self.
+@app.get("/api/governance/predict")
+async def api_governance_predict(
+    session_id: str | None = None, shape: str | None = None, limit: int = 400
+):
+    """Return the corpus action distribution for the command-shapes of the
+    SELECTED session (or an explicit ``shape`` hash). Retrieval is exact-shape
+    first (decisions.matched_hash), then a cheap normalized-content nearest
+    neighbor over recent rows when no exact match exists. Read-only, post-hoc
+    (M18). NEVER invokes the engine.
+
+    Shape:
+      { shape, session_id, n, match_kind ('exact'|'knn'|'none'),
+        action_hist:{ALLOW,SUGGEST,GUIDE,INTERVENE,BLOCK},
+        dominant_action, dominant_share, mean_conf, dominant_layer,
+        excluded_self, mock }
+
+    Polarity (G2): the corpus EXCLUDES SM-self (project_slug NOT IN the SM slug
+    set AND session_id != SM_OWN_SESSION_ID); excluded_self surfaces the dropped
+    tally. Degrades to a SAFE n:0 / mock:true shape on any error / empty DB so
+    the chip falls back to deterministic mock (never reads as live when down).
+    """
+    empty = {
+        "shape": (shape or ""),
+        "session_id": (session_id or ""),
+        "n": 0,
+        "match_kind": "none",
+        "action_hist": {},
+        "dominant_action": None,
+        "dominant_share": 0.0,
+        "mean_conf": None,
+        "dominant_layer": None,
+        "excluded_self": 0,
+        "mock": True,
+    }
+    _ACTIONS = ("ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK")
+    try:
+        cap = min(max(int(limit or 400), 1), 2000)
+        sm_slugs = list(_sm_own_slugs())
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        conn = _open()
+
+        # Polarity WHERE shared by every query below. LEFT JOIN keeps decisions
+        # whose session row is absent (not self); an SM project_slug OR the SM
+        # own session id is excluded.
+        polarity = []
+        pol_params: list = []
+        if sm_own:
+            polarity.append("m.session_id != ?")
+            pol_params.append(sm_own)
+        if sm_slugs:
+            ph = ",".join("?" for _ in sm_slugs)
+            polarity.append(
+                f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({ph}))"
+            )
+            pol_params.extend(sm_slugs)
+        pol_sql = (" AND " + " AND ".join(polarity)) if polarity else ""
+
+        has_layer = _has_decision_routing_cols(conn)
+        layer_sel = "COALESCE(d.layer, 0) AS layer" if has_layer else "0 AS layer"
+
+        # excluded_self: count rows that the polarity WHERE drops (self leak
+        # surface), so suppression is a visible feature.
+        excluded_self = 0
+        try:
+            if sm_slugs or sm_own:
+                self_where = []
+                self_params: list = []
+                if sm_own:
+                    self_where.append("m.session_id = ?")
+                    self_params.append(sm_own)
+                if sm_slugs:
+                    ph2 = ",".join("?" for _ in sm_slugs)
+                    self_where.append(
+                        f"LOWER(s.project_slug) IN ({ph2})"
+                    )
+                    self_params.extend(sm_slugs)
+                joiner = " OR " if self_where else ""
+                row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    f"WHERE {joiner.join(self_where)}",
+                    tuple(self_params),
+                ).fetchone()
+                excluded_self = int(row["c"]) if row and row["c"] is not None else 0
+        except Exception:
+            excluded_self = 0
+
+        # 1) Resolve the target shape. An explicit ?shape wins; else read the
+        #    newest matched_hash for the selected session (the shape the operator
+        #    is most likely eyeballing). When neither resolves we fall to k-NN.
+        target_shape = (shape or "").strip()
+        if not target_shape and session_id:
+            try:
+                r = conn.execute(
+                    "SELECT d.matched_hash AS h FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    "WHERE m.session_id = ? AND d.matched_hash IS NOT NULL "
+                    "AND d.matched_hash != ''" + pol_sql + " "
+                    "ORDER BY d.timestamp DESC LIMIT 1",
+                    tuple([session_id, *pol_params]),
+                ).fetchone()
+                if r and r["h"]:
+                    target_shape = str(r["h"]).strip()
+            except Exception:
+                target_shape = ""
+
+        def _aggregate(rows):
+            hist = {a: 0 for a in _ACTIONS}
+            conf_sum = 0.0
+            conf_n = 0
+            layer_counts: dict = {}
+            for rr in rows:
+                act = str(rr["action"] or "").strip().upper()
+                if act not in hist:
+                    continue
+                hist[act] += 1
+                try:
+                    conf_sum += float(rr["confidence"])
+                    conf_n += 1
+                except (TypeError, ValueError):
+                    pass
+                lyr = rr["layer"]
+                key = f"L{int(lyr)}" if lyr is not None and str(lyr) != "" else None
+                if key is not None:
+                    layer_counts[key] = layer_counts.get(key, 0) + 1
+            n = sum(hist.values())
+            if n == 0:
+                return None
+            dom = max(_ACTIONS, key=lambda a: hist[a])
+            dom_layer = (
+                max(layer_counts, key=lambda k: layer_counts[k]) if layer_counts else None
+            )
+            mean_conf = round(conf_sum / conf_n, 4) if conf_n else None
+            return {
+                "n": n,
+                "action_hist": {a: hist[a] for a in _ACTIONS},
+                "dominant_action": dom,
+                "dominant_share": round(hist[dom] / n, 4),
+                "mean_conf": mean_conf,
+                "dominant_layer": dom_layer,
+            }
+
+        agg = None
+        match_kind = "none"
+
+        # 2) Exact-shape match (the cheap indexed query on matched_hash).
+        if target_shape:
+            rows = conn.execute(
+                "SELECT d.action AS action, d.confidence AS confidence, "
+                f"{layer_sel} FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                "WHERE d.matched_hash = ?" + pol_sql + " "
+                "ORDER BY d.timestamp DESC LIMIT ?",
+                tuple([target_shape, *pol_params, cap]),
+            ).fetchall()
+            agg = _aggregate(rows)
+            if agg is not None:
+                match_kind = "exact"
+
+        # 3) k-NN fallback: when no exact-shape history exists, approximate by the
+        #    selected session's own recent decisions (the nearest available
+        #    neighborhood) -- v1 normalized-string neighborhood, no embeddings.
+        if agg is None and session_id:
+            rows = conn.execute(
+                "SELECT d.action AS action, d.confidence AS confidence, "
+                f"{layer_sel} FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                "WHERE m.session_id = ?" + pol_sql + " "
+                "ORDER BY d.timestamp DESC LIMIT ?",
+                tuple([session_id, *pol_params, min(cap, 50)]),
+            ).fetchall()
+            agg = _aggregate(rows)
+            if agg is not None:
+                match_kind = "knn"
+
+        conn.close()
+
+        if agg is None:
+            # Cold shape: no exact + no neighborhood. Honest "no history" (live,
+            # not mock -- the chip renders the NO HISTORY headline).
+            return {
+                "shape": target_shape,
+                "session_id": (session_id or ""),
+                "n": 0,
+                "match_kind": "none",
+                "action_hist": {},
+                "dominant_action": None,
+                "dominant_share": 0.0,
+                "mean_conf": None,
+                "dominant_layer": None,
+                "excluded_self": excluded_self,
+                "mock": False,
+            }
+
+        return {
+            "shape": target_shape,
+            "session_id": (session_id or ""),
+            "n": agg["n"],
+            "match_kind": match_kind,
+            "action_hist": agg["action_hist"],
+            "dominant_action": agg["dominant_action"],
+            "dominant_share": agg["dominant_share"],
+            "mean_conf": agg["mean_conf"],
+            "dominant_layer": agg["dominant_layer"],
+            "excluded_self": excluded_self,
+            "mock": False,
+        }
+    except Exception:
+        log.exception("governance-predict: query failed; degrading to mock-safe empty")
+        return empty
+
+
+# ============= BETA #8 : confidence-calibration-loop =============
+
+# --- GET /api/governance/calibration ---
+# ---------------------------------------------------------------------------
+# BETA confidence-calibration-loop (#8): a READ-ONLY reliability measurement.
+# Buckets the existing governed decisions by predicted confidence (deciles) and,
+# for each decile, computes realized operator-agreement = 1 - override_rate
+# against hitl_overrides. Returns a per-decile reliability table + headline
+# overall_agreement + Brier score + a fitted (monotone-ish) advisory transform.
+#
+# Additive, read-only (M18, post-hoc -- never on the verdict hot path). Touches
+# NO FROZEN surface: no governance.py, no message_bus schema change, no new bus
+# envelope, no new table, NO change to engine confidence semantics. It joins
+# only decisions + messages(session_id) + sessions(project_slug) + the existing
+# hitl_overrides table.
+#
+# POLARITY (G2, CLAUDE.md 'Session-source exception rule'): SM-self is excluded
+# server-side. Durable read key = project_slug NOT IN the SM exclusion set
+# (BRIDGE_SM_PROJECT_SLUGS, default {'streamManager'}); the SM_OWN_SESSION_ID
+# session id is the cheap backstop. An SM-self session can NEVER contribute a
+# decision OR an override to the curve, so SM never calibrates against itself.
+# excluded_self surfaces the dropped self-session count.
+#
+# Domain-agnostic (M16): scope is rendered FROM DATA; no monitored-project
+# vocabulary. Defensive: any error / fresh DB degrades to an empty shape (HTTP
+# 200, total_decisions:0) so the UI falls back to its deterministic mock fixture
+# (never reads as live when the server is down).
+@app.get("/api/governance/calibration")
+async def api_governance_calibration(days: int = 30, buckets: int = 10):
+    """Predicted-confidence-vs-realized-agreement calibration table (#8)."""
+    import time as _time
+
+    nbuckets = 10  # deciles are fixed; `buckets` is accepted for forward-compat.
+    win_days = int(days) if int(days or 0) > 0 else 30
+    now_s = _time.time()
+    now_ms = int(now_s * 1000)
+    win_lo_s = now_s - win_days * 86400.0
+
+    def _empty() -> dict:
+        return {
+            "now_ms": now_ms,
+            "bucket_count": nbuckets,
+            "days": win_days,
+            "excluded_self": 0,
+            "total_decisions": 0,
+            "total_overrides": 0,
+            "overall_agreement": 0.0,
+            "brier": 0.0,
+            "scope": "all governed sessions",
+            "buckets": [],
+            "transform": [],
+            "mock": False,
+        }
+
+    # Polarity: durable read key (project_slug) + cheap session-id backstop.
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = [s.strip() for s in _sm_slugs_raw.split(",") if s.strip()]
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    try:
+        conn = _open()
+        try:
+            if not (_has_table(conn, "decisions") and _has_table(conn, "messages")):
+                return _empty()
+            has_sessions = _has_table(conn, "sessions")
+            has_overrides = _has_table(conn, "hitl_overrides")
+
+            # Build the self-exclude WHERE fragment (durable project_slug key +
+            # the session-id backstop). LEFT JOIN keeps rows with no sessions-row
+            # (NULL slug is NOT in the SM set -> kept; it is not SM-own).
+            join_sessions = (
+                "LEFT JOIN sessions s ON s.id = m.session_id " if has_sessions else ""
+            )
+            where = ["d.timestamp >= ?"]
+            params: list = [win_lo_s]
+            if has_sessions and sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                where.append(
+                    f"(s.project_slug IS NULL OR s.project_slug NOT IN ({ph}))"
+                )
+                params.extend(sm_slugs)
+            if sm_own:
+                where.append("m.session_id != ?")
+                params.append(sm_own)
+            where_sql = " AND ".join(where)
+
+            # Pull the governed decisions in-window: id, predicted confidence,
+            # and whether the decision was overridden (LEFT JOIN hitl_overrides;
+            # any override row => operator did NOT agree with the verdict).
+            over_join = (
+                "LEFT JOIN hitl_overrides ho ON ho.decision_id = d.id "
+                if has_overrides
+                else ""
+            )
+            over_sel = "ho.id AS override_id" if has_overrides else "NULL AS override_id"
+            sql = (
+                f"SELECT d.id AS did, d.confidence AS confidence, {over_sel} "
+                "FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                f"{join_sessions}{over_join}"
+                f"WHERE {where_sql}"
+            )
+            rows = conn.execute(sql, tuple(params)).fetchall()
+
+            # Discover the governed scope label (the distinct project_slug, or
+            # 'all governed sessions' when more than one is present).
+            scope = "all governed sessions"
+            if has_sessions:
+                try:
+                    sp = [
+                        sr[0]
+                        for sr in conn.execute(
+                            "SELECT DISTINCT project_slug FROM sessions"
+                        ).fetchall()
+                        if (sr[0] or "").strip()
+                        and (sr[0] or "").strip() not in sm_slugs
+                    ]
+                    if len(sp) == 1:
+                        scope = sp[0]
+                except Exception:
+                    pass
+
+            # excluded_self readout (decisions on the SM-own session id).
+            excluded_self = 0
+            if sm_own:
+                er = conn.execute(
+                    "SELECT COUNT(DISTINCT s2.id) FROM sessions s2 WHERE s2.id = ?"
+                    if has_sessions
+                    else "SELECT 0",
+                    (sm_own,) if has_sessions else (),
+                ).fetchone()
+                excluded_self = int(er[0] or 0) if er else 0
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("calibration: query failed; degrading to empty")
+        return _empty()
+
+    # A decision is counted ONCE; it is 'overridden' if it has >=1 override row.
+    # Deduplicate the LEFT-JOIN fan-out by decision id.
+    seen: dict[str, bool] = {}
+    for r in rows:
+        did = r["did"]
+        try:
+            conf = float(r["confidence"])
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.0:
+            conf = 0.0
+        elif conf > 1.0:
+            conf = 1.0
+        overridden = r["override_id"] is not None
+        prev = seen.get(did)
+        if prev is None:
+            seen[did] = overridden
+        elif overridden:
+            seen[did] = True
+        # stash confidence alongside (first-seen value is stable per id)
+        if did not in _conf_cache:
+            _conf_cache[did] = conf
+
+    if not seen:
+        out = _empty()
+        out["excluded_self"] = excluded_self
+        out["scope"] = scope
+        return out
+
+    # Accumulate per decile: n, overrides, sum(confidence), sum(agreement),
+    # and the Brier accumulation (predicted vs the realized 0/1 agreement).
+    acc = [
+        {"n": 0, "ov": 0, "sum_conf": 0.0, "brier_sum": 0.0}
+        for _ in range(nbuckets)
+    ]
+    total_n = 0
+    total_ov = 0
+    brier_total = 0.0
+    for did, overridden in seen.items():
+        conf = _conf_cache.get(did, 0.0)
+        agree = 0.0 if overridden else 1.0
+        idx = int(conf * nbuckets)
+        if idx >= nbuckets:
+            idx = nbuckets - 1
+        a = acc[idx]
+        a["n"] += 1
+        if overridden:
+            a["ov"] += 1
+        a["sum_conf"] += conf
+        a["brier_sum"] += (conf - agree) ** 2
+        total_n += 1
+        if overridden:
+            total_ov += 1
+        brier_total += (conf - agree) ** 2
+
+    _conf_cache.clear()
+
+    tol = 0.025  # +/-2.5 points => CALIBRATED
+    bucket_rows = []
+    for i in range(nbuckets):
+        a = acc[i]
+        if a["n"] == 0:
+            continue
+        lo = i / nbuckets
+        hi = (i + 1) / nbuckets
+        mid = a["sum_conf"] / a["n"]  # mean predicted confidence in the decile
+        realized = 1.0 - (a["ov"] / a["n"])  # realized operator-agreement
+        gap = realized - mid
+        if gap > tol:
+            sign = "UNDER"
+        elif gap < -tol:
+            sign = "OVER"
+        else:
+            sign = "CALIBRATED"
+        if mid >= 0.75:
+            band = "HIGH"
+        elif mid >= 0.60:
+            band = "OK"
+        elif mid >= 0.45:
+            band = "WATCH"
+        else:
+            band = "LOW"
+        bucket_rows.append(
+            {
+                "idx": i,
+                "lo": round(lo, 2),
+                "hi": round(hi, 2),
+                "mid": round(mid, 4),
+                "n": a["n"],
+                "overrides": a["ov"],
+                "predicted": round(mid, 4),
+                "realized": round(realized, 4),
+                "gap": round(gap, 4),
+                "sign": sign,
+                "band": band,
+            }
+        )
+
+    overall_agreement = 1.0 - (total_ov / total_n) if total_n else 0.0
+    brier = brier_total / total_n if total_n else 0.0
+
+    # Fitted advisory transform: for each decile with >= 30 decisions, map the
+    # mean predicted confidence to the realized agreement (the operator-calibrated
+    # value). Advisory-only -- the UI applies this ONLY behind the opt-in display
+    # toggle; it never touches the verdict or decisions.confidence.
+    transform = [
+        {"from": b["predicted"], "to": b["realized"]}
+        for b in bucket_rows
+        if b["n"] >= 30
+    ]
+
+    return {
+        "now_ms": now_ms,
+        "bucket_count": nbuckets,
+        "days": win_days,
+        "excluded_self": excluded_self,
+        "total_decisions": total_n,
+        "total_overrides": total_ov,
+        "overall_agreement": round(overall_agreement, 4),
+        "brier": round(brier, 4),
+        "scope": scope,
+        "buckets": bucket_rows,
+        "transform": transform,
+        "mock": False,
+    }
+
+
+# Module-level scratch dict reused by the calibration aggregator above to carry
+# per-decision confidence across the LEFT-JOIN dedup pass (cleared each call).
+_conf_cache: dict[str, float] = {}
+
+
+@app.get("/api/governance/regret")
+async def api_governance_regret(window_days: int = 30, limit: int = 50):
+    """BETA regret-mining-override-loop (#24): the operator-override regret
+    ledger. READ-ONLY aggregate over the EXISTING hitl_overrides + decisions +
+    messages + sessions tables -- NO FROZEN surface, no new bus envelope, no new
+    column. For each divergence cluster (keyed by matched_hash, falling back to
+    the routing layer) it computes n_overridden, the per-shape denominator
+    n_decisions (governed decisions of that shape in the window), override_rate,
+    the dominant override DIRECTION (operator ESCALATED vs DE-ESCALATED), and the
+    underlying override rows. Hottest-first (override_rate x volume).
+
+    POLARITY (G2): SM-self is EXCLUDED at the SQL WHERE -- the durable read key
+    project_slug NOT IN the SM slug set (BRIDGE_SM_PROJECT_SLUGS, default
+    {'streamManager'}) AND the SM_OWN_SESSION_ID session-id backstop. The dropped
+    self-override tally surfaces as excluded_self (self-exclusion as a feature).
+    A leaked SM-self override can NEVER enter the regret corpus.
+
+    ADVISORY-ONLY: this endpoint mutates nothing. The 'Draft as proposal'
+    affordance composes markdown CLIENT-SIDE; there is no write-back path here.
+    Read-only, post-hoc (M18) -- never on the verdict hot path.
+
+    Degrades to an empty (zero-cluster) shape on any error / fresh DB so the UI
+    falls back to deterministic mock (never reads as live when the DB is empty).
+    """
+    sm_slugs = _sm_own_slugs()
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    try:
+        wd = max(1, min(int(window_days or 30), 3650))
+    except Exception:
+        wd = 30
+    try:
+        cap = max(1, min(int(limit or 50), 200))
+    except Exception:
+        cap = 50
+    empty = {
+        "generated_at": _iso_now(),
+        "window_days": wd,
+        "excluded_self": 0,
+        "own_session_id": sm_own or None,
+        "total_overrides": 0,
+        "mock": False,
+        "clusters": [],
+    }
+    try:
+        conn = _open()
+        try:
+            if not (
+                _has_table(conn, "hitl_overrides")
+                and _has_table(conn, "decisions")
+                and _has_table(conn, "messages")
+            ):
+                return empty
+            has_sessions = _has_table(conn, "sessions")
+            has_layer = _has_decision_routing_cols(conn)
+            layer_expr = "COALESCE(d.layer, 0)" if has_layer else "0"
+
+            # Window cutoff: hitl_overrides.timestamp is an ISO string; compare
+            # lexicographically against the ISO cutoff (sortable). Rows with a
+            # non-ISO / null timestamp are kept (defensive -- never silently drop).
+            cutoff_iso = _iso_now()
+            try:
+                import datetime as _dt
+                cutoff_iso = (
+                    _dt.datetime.utcnow() - _dt.timedelta(days=wd)
+                ).replace(microsecond=0).isoformat() + "Z"
+            except Exception:
+                cutoff_iso = ""
+
+            # SM-self exclusion fragment (durable project_slug key + session
+            # backstop). NULL slug is NOT in the SM set -> kept (governed).
+            join_sessions = (
+                "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+            )
+            self_excl: list[str] = []
+            self_params: list = []
+            if has_sessions and sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                self_excl.append(
+                    f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({ph}))"
+                )
+                self_params.extend(sorted(sm_slugs))
+            if sm_own:
+                self_excl.append("m.session_id != ?")
+                self_params.append(sm_own)
+            self_clause = (" AND " + " AND ".join(self_excl)) if self_excl else ""
+
+            win_clause = ""
+            win_params: list = []
+            if cutoff_iso:
+                win_clause = " AND (h.timestamp IS NULL OR h.timestamp >= ?)"
+                win_params.append(cutoff_iso)
+
+            # Pull every governed (non-SM) override joined to its decision +
+            # message + session, newest-first. This is the corpus to cluster.
+            ov_sql = (
+                "SELECT h.decision_id AS decision_id, "
+                "COALESCE(h.original_action, d.action, '') AS original_action, "
+                "COALESCE(h.override_action, '') AS override_action, "
+                "h.note AS note, h.timestamp AS ts, "
+                "COALESCE(d.matched_hash, '') AS matched_hash, "
+                f"{layer_expr} AS layer, "
+                "COALESCE(m.content, '') AS content, "
+                "COALESCE(m.session_id, '') AS session_id, "
+                "COALESCE(s.project_slug, '') AS project_slug "
+                "FROM hitl_overrides h "
+                "JOIN decisions d ON h.decision_id = d.id "
+                "JOIN messages m ON d.message_id = m.id "
+                + join_sessions +
+                "WHERE 1=1" + self_clause + win_clause + " ORDER BY h.timestamp DESC"
+            )
+            ov_rows = conn.execute(
+                ov_sql, tuple(self_params + win_params)
+            ).fetchall()
+
+            # excluded_self tally: governed-shaped overrides that WOULD have been
+            # SM-self (so the operator sees the polarity filter working).
+            excluded_self = 0
+            if has_sessions and (sm_slugs or sm_own):
+                incl: list[str] = []
+                incl_params: list = []
+                if sm_slugs:
+                    ph2 = ",".join("?" for _ in sm_slugs)
+                    parts = [f"LOWER(s.project_slug) IN ({ph2})"]
+                    incl_params.extend(sorted(sm_slugs))
+                    if sm_own:
+                        parts.append("m.session_id = ?")
+                        incl_params.append(sm_own)
+                    incl.append("(" + " OR ".join(parts) + ")")
+                elif sm_own:
+                    incl.append("m.session_id = ?")
+                    incl_params.append(sm_own)
+                try:
+                    er = conn.execute(
+                        "SELECT COUNT(*) FROM hitl_overrides h "
+                        "JOIN decisions d ON h.decision_id = d.id "
+                        "JOIN messages m ON d.message_id = m.id "
+                        "LEFT JOIN sessions s ON m.session_id = s.id "
+                        "WHERE " + " AND ".join(incl),
+                        tuple(incl_params),
+                    ).fetchone()
+                    excluded_self = int(er[0]) if er else 0
+                except Exception:
+                    excluded_self = 0
+
+            # Cluster the overrides in Python (transparent, domain-agnostic).
+            _RANK = {"APPROVE": 0, "ALLOW": 0, "DISMISS": 1, "SUGGEST": 2,
+                     "GUIDE": 3, "INTERVENE": 4, "BLOCK": 5}
+
+            def _direction(orig: str, over: str) -> str:
+                o = _RANK.get((orig or "").upper())
+                v = _RANK.get((over or "").upper())
+                if o is not None and v is not None:
+                    return "ESCALATED" if v > o else "DE-ESCALATED"
+                return "DE-ESCALATED"
+
+            clusters: dict[str, dict] = {}
+            total_overrides = 0
+            for r in ov_rows:
+                total_overrides += 1
+                h = (r["matched_hash"] or "").strip()
+                layer = int(r["layer"] or 0)
+                if h:
+                    label_dim, identity, key = "matched_hash", h[:6], f"h:{h[:6]}"
+                else:
+                    label_dim, identity, key = "layer", f"L{layer}", f"layer:{layer}"
+                orig = (r["original_action"] or "").upper()
+                over = (r["override_action"] or "").upper()
+                d = _direction(orig, over)
+                acc = clusters.get(key)
+                if acc is None:
+                    acc = {
+                        "cluster_key": key, "label_dim": label_dim,
+                        "identity": identity, "layer": layer,
+                        "n_overridden": 0, "n_decisions": 0, "override_rate": 0.0,
+                        "dominant_direction": d, "direction_label": "",
+                        "from_action": orig, "to_action": over,
+                        "sample_content": (r["content"] or "")[:80],
+                        "project_slug": r["project_slug"] or "",
+                        "_hash": h, "_esc": 0, "_de": 0, "overrides": [],
+                    }
+                    clusters[key] = acc
+                acc["n_overridden"] += 1
+                acc["_esc" if d == "ESCALATED" else "_de"] += 1
+                if not acc["sample_content"] and r["content"]:
+                    acc["sample_content"] = (r["content"] or "")[:80]
+                if not acc["project_slug"] and r["project_slug"]:
+                    acc["project_slug"] = r["project_slug"]
+                if len(acc["overrides"]) < 12:
+                    acc["overrides"].append({
+                        "decision_id": r["decision_id"] or "",
+                        "timestamp": r["ts"] or "",
+                        "original_action": orig,
+                        "override_action": over,
+                        "note": r["note"],
+                        "session_id": r["session_id"] or "",
+                        "project_slug": r["project_slug"] or "",
+                        "content": r["content"] or "",
+                    })
+
+            # Per-cluster denominator: count governed decisions of the same shape
+            # in the window (matched_hash match, or layer match when no hash).
+            for acc in clusters.values():
+                denom = acc["n_overridden"]
+                try:
+                    if acc["_hash"]:
+                        dc = conn.execute(
+                            "SELECT COUNT(*) FROM decisions d "
+                            "JOIN messages m ON d.message_id = m.id "
+                            + join_sessions +
+                            "WHERE d.matched_hash = ?" + self_clause,
+                            tuple([acc["_hash"], *self_params]),
+                        ).fetchone()
+                    elif has_layer:
+                        dc = conn.execute(
+                            "SELECT COUNT(*) FROM decisions d "
+                            "JOIN messages m ON d.message_id = m.id "
+                            + join_sessions +
+                            "WHERE COALESCE(d.layer,0) = ?" + self_clause,
+                            tuple([acc["layer"], *self_params]),
+                        ).fetchone()
+                    else:
+                        dc = None
+                    if dc and int(dc[0]) >= acc["n_overridden"]:
+                        denom = int(dc[0])
+                except Exception:
+                    denom = acc["n_overridden"]
+                acc["n_decisions"] = denom
+                acc["override_rate"] = round(
+                    acc["n_overridden"] / denom, 4) if denom > 0 else 0.0
+                acc["dominant_direction"] = (
+                    "ESCALATED" if acc["_esc"] >= acc["_de"] else "DE-ESCALATED")
+                acc["direction_label"] = (
+                    f"you {acc['dominant_direction']} "
+                    f"{acc['n_overridden']}/{acc['n_decisions']}")
+                acc.pop("_hash", None)
+                acc.pop("_esc", None)
+                acc.pop("_de", None)
+
+            out = sorted(
+                clusters.values(),
+                key=lambda c: c["override_rate"] * c["n_decisions"],
+                reverse=True,
+            )[:cap]
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("governance/regret: query failed")
+        return empty
+
+    return {
+        "generated_at": _iso_now(),
+        "window_days": wd,
+        "excluded_self": excluded_self,
+        "own_session_id": sm_own or None,
+        "total_overrides": total_overrides,
+        "mock": False,
+        "clusters": out,
+    }
 
 
 _DEFAULT_TIMEOUT_S = 60.0

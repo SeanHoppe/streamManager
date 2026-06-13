@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4317 --strictPort",
-    "axe": "node ../../tools/axe_audit.mjs --url http://127.0.0.1:4317/"
+    "axe": "node ../../tools/axe_audit.mjs --url http://127.0.0.1:4317/",
+    "test": "node --test test/render-validator.test.js"
   },
   "devDependencies": {
     "@axe-core/puppeteer": "^4.10.0",

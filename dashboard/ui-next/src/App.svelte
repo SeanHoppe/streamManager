@@ -42,6 +42,40 @@
   import AgentRoster from './lib/components/AgentRoster.svelte';
   import FrameC_Jobs from './lib/components/FrameC_Jobs.svelte';
   import HitlDock from './lib/components/HitlDock.svelte';
+  import AuditDock from './lib/components/AuditDock.svelte';
+  import SettingsDrawer from './lib/components/SettingsDrawer.svelte';
+  // BETA features (default-OFF, gated on $betaFlags[...]). Each component also
+  // self-gates internally; the {#if} wrappers keep the DOM clean when OFF.
+  import AwayMode from './lib/components/beta/AwayMode.svelte';
+  import VelocityHeatmap from './lib/components/beta/VelocityHeatmap.svelte';
+  import WhatChanged from './lib/components/beta/WhatChanged.svelte';
+  import SessionPinning from './lib/components/beta/SessionPinning.svelte';
+  import CoverageAnalyzer from './lib/components/beta/CoverageAnalyzer.svelte';
+  import EscalationHeatmap from './lib/components/beta/EscalationHeatmap.svelte';
+  import HitlBulkDismiss from './lib/components/beta/HitlBulkDismiss.svelte';
+  import DecisionOracle from './lib/components/beta/DecisionOracle.svelte';
+  import HealthSparklines from './lib/components/beta/HealthSparklines.svelte';
+  import StaleCleanup from './lib/components/beta/StaleCleanup.svelte';
+  import EventCursor from './lib/components/beta/EventCursor.svelte';
+  import SoakPanel from './lib/components/beta/SoakPanel.svelte';
+  // BETA batch-2 (default-OFF; each self-gates internally too).
+  import SessionStoryPanelNarrativeArc from './lib/components/beta/SessionStoryPanelNarrativeArc.svelte';
+  import SessionDnaHeatmapCrossPatternTopology from './lib/components/beta/SessionDnaHeatmapCrossPatternTopology.svelte';
+  import ConfidenceHeatmapPane from './lib/components/beta/ConfidenceHeatmapPane.svelte';
+  import EscalationTimelineCausalForensics from './lib/components/beta/EscalationTimelineCausalForensics.svelte';
+  import SessionCheckpointVersioning from './lib/components/beta/SessionCheckpointVersioning.svelte';
+  import AmbientSoakTask from './lib/components/beta/AmbientSoakTask.svelte';
+  import RecordedSessionReplayForensics from './lib/components/beta/RecordedSessionReplayForensics.svelte';
+  import CrossSessionPatternAuditApis from './lib/components/beta/CrossSessionPatternAuditApis.svelte';
+  import BreachCartographyConstrained from './lib/components/beta/BreachCartographyConstrained.svelte';
+  import SonificationEscalationLayer from './lib/components/beta/SonificationEscalationLayer.svelte';
+  import SpatialSessionSidebar from './lib/components/beta/SpatialSessionSidebar.svelte';
+  import TemporalScrubberGovernanceAudit from './lib/components/beta/TemporalScrubberGovernanceAudit.svelte';
+  // BETA batch-3 (gap-fill governance-semantics; read-only/advisory, self-gating).
+  import ConfidenceCalibrationLoop from './lib/components/beta/ConfidenceCalibrationLoop.svelte';
+  import RegretMiningOverrideLoop from './lib/components/beta/RegretMiningOverrideLoop.svelte';
+  // ADR-18 Amendment F (allow-pattern auto-graduation; amendment APPROVED).
+  import GraduationCandidates from './lib/components/beta/GraduationCandidates.svelte';
 
   import { connect, disconnect, seedDecisions, connectionState, escalationStore } from './lib/sse.js';
   import { startPollers, stopPollers, agentsStore, statsStore } from './lib/pollers.js';
@@ -52,6 +86,7 @@
     selectedSessionId,
   } from './lib/stores/session.js';
   import { settings, patch as patchSettings } from './lib/stores/settings.js';
+  import { betaFlags, hydrateBetaFlags } from './lib/stores/beta.js';
 
   // -- M15 self-exclude (defense-in-depth) -----------------------------------
   // Read the SM-own session id once at DOM-ready. The stores already filter SM
@@ -97,6 +132,11 @@
     if (d.frame === 'A') frameACount = Number(d.count) || 0;
     else if (d.frame === 'C') frameCCount = Number(d.count) || 0;
   }
+
+  // BETA #15 hitl-bulk-dismiss: the optimistic dock cull is cosmetic; the next
+  // /api/hitl/pending re-seed (+ the dock's own bus events) reconciles the
+  // authoritative list, so this handler is intentionally a no-op.
+  function onBulkCulled() {}
 
   // -- M2 foreground (Frame A escalation), fed ONLY by the escalation stream --
   // sse.js produces escalationStore strictly from the lib/escalation.js
@@ -145,6 +185,11 @@
 
   let actionCountsBySession = {};
   const PENDING_REFRESH_MS = 4000;
+
+  // -- Operator settings drawer (hosts the FR-UI-9 fields + the BETA features
+  // toggle panel). Orphan until now; App owns its open state + the footer
+  // affordance that opens it. Additive -- no existing seam changes.
+  let settingsOpen = false;
   async function refreshPendingCounts() {
     try {
       const rows = await getHitlPending({}); // UNSCOPED: counts across all lanes
@@ -220,6 +265,11 @@
     ownSessionId = readOwnSession();
     syncReducedMotion();
 
+    // Hydrate the BETA feature flags from the backend at APP BOOT so gated
+    // features mounted in the main UI (not just the Settings drawer) render on
+    // load. Best-effort; degrades to the localStorage mirror / all-OFF.
+    hydrateBetaFlags();
+
     // Boot the read-only transports (M18 post-hoc): one SSE connection + the
     // REST poller registry. Both write the shared stores the panes subscribe to.
     seedDecisionFeed();
@@ -279,11 +329,21 @@
        the M2 allow-list stream, actionCounts from the unscoped HITL-pending
        poll). On narrow viewports AppShell collapses this column and the header
        picker below takes over scope. -->
-  <SessionRail
-    slot="rail"
-    actionCounts={actionCountsBySession}
-    escalations={escBySession}
-  />
+  <svelte:fragment slot="rail">
+    <SessionRail
+      actionCounts={actionCountsBySession}
+      escalations={escBySession}
+    />
+    {#if $betaFlags['health-sparklines']}
+      <HealthSparklines />
+    {/if}
+    {#if $betaFlags['stale-cleanup']}
+      <StaleCleanup />
+    {/if}
+    {#if $betaFlags['session-checkpoint-versioning']}
+      <SessionCheckpointVersioning />
+    {/if}
+  </svelte:fragment>
 
   <!-- HEADER: compact session scope picker. On WIDE viewports the rail is the
        scope control and this is hidden (see .seam--header media query); on
@@ -298,9 +358,42 @@
        dock mounted in its `pending` seam (reachable above the ambient stream).
        HitlDock emits its open-action tally up for M3. -->
   <svelte:fragment slot="frameA">
-    <FrameA_Sessions {hitlOn} on:takeaction={onTakeAction}>
-      <HitlDock slot="pending" on:actioncount={onFrameActionCount} />
-    </FrameA_Sessions>
+    {#if $betaFlags['session-story-panel-narrative-arc']}
+      <SessionStoryPanelNarrativeArc />
+    {/if}
+    {#if $betaFlags['velocity-heatmap']}
+      <VelocityHeatmap />
+    {/if}
+    {#if $betaFlags['session-dna-heatmap-cross-pattern-topology']}
+      <SessionDnaHeatmapCrossPatternTopology />
+    {/if}
+    {#if $betaFlags['regret-mining-override-loop']}
+      <RegretMiningOverrideLoop />
+    {/if}
+    {#if $betaFlags['graduation-candidates']}
+      <GraduationCandidates />
+    {/if}
+    <div class="fa-with-gutter" class:fa-with-gutter--on={$betaFlags['escalation-heatmap']}>
+      {#if $betaFlags['escalation-heatmap']}
+        <div class="fa-gutter"><EscalationHeatmap /></div>
+      {/if}
+      <div class="fa-stream">
+        <FrameA_Sessions {hitlOn} on:takeaction={onTakeAction}>
+          <svelte:fragment slot="pending">
+            <HitlDock on:actioncount={onFrameActionCount} />
+            {#if $betaFlags['hitl-bulk-dismiss']}
+              <HitlBulkDismiss dockCount={frameACount} on:culled={onBulkCulled} />
+            {/if}
+            <!-- FR-PPP provenance-audit surface (M11/M12): the audit peer of the
+                 HITL dock. Owns the audit-probe attestation rows + the canary /
+                 hallucination leaves, correlated from the existing audit.* SSE
+                 events. No new envelope, no cassette change -- it consumes the
+                 named bus events sse.js already fans out. -->
+            <AuditDock />
+          </svelte:fragment>
+        </FrameA_Sessions>
+      </div>
+    </div>
   </svelte:fragment>
 
   <!-- FRAME B: Sub-Agents roster, bound to the 8s /api/agents poller store +
@@ -308,17 +401,30 @@
        re-pin. (AppShell already provides Frame B's shelf -- we mount the body
        only, never a nested Frame.) -->
   <svelte:fragment slot="frameB">
-    <AgentRoster
-      agents={$agentsStore}
-      activityWindowSec={$settings.activityWindowSec}
-      {nowMs}
-    />
+    {#if $betaFlags['what-changed']}
+      <WhatChanged />
+    {/if}
+    {#if $betaFlags['session-pinning']}
+      <SessionPinning actionCount={frames.B.count} />
+    {:else}
+      <AgentRoster
+        agents={$agentsStore}
+        activityWindowSec={$settings.activityWindowSec}
+        {nowMs}
+      />
+    {/if}
+    {#if $betaFlags['confidence-heatmap-pane']}
+      <ConfidenceHeatmapPane />
+    {/if}
   </svelte:fragment>
 
   <!-- FRAME C: Background Jobs lifecycle (live 2s poller via LifecyclePanel) +
        the ASYNC HITL host. Emits its undecided async tally up for M3. -->
   <svelte:fragment slot="frameC">
     <FrameC_Jobs on:actioncount={onFrameActionCount} />
+    {#if $betaFlags['escalation-timeline-causal-forensics']}
+      <EscalationTimelineCausalForensics />
+    {/if}
   </svelte:fragment>
 
   <!-- FOOTER: live connection dot + a calm decision/session tally. -->
@@ -330,8 +436,95 @@
     <span class="foot__stats" aria-label="governance totals">
       {totalDecisions} decisions &middot; {activeSessions} active session{activeSessions === 1 ? '' : 's'}
     </span>
+    {#if $betaFlags['event-cursor']}
+      <EventCursor />
+    {/if}
+    {#if $betaFlags['coverage-analyzer']}
+      <CoverageAnalyzer />
+    {/if}
+    {#if $betaFlags['soak-panel']}
+      <SoakPanel />
+    {/if}
+    {#if $betaFlags['ambient-soak-task']}
+      <AmbientSoakTask />
+    {/if}
+    {#if $betaFlags['recorded-session-replay-forensics']}
+      <RecordedSessionReplayForensics />
+    {/if}
+    <button
+      type="button"
+      class="foot__settings"
+      aria-label="Open operator settings and BETA features"
+      on:click={() => (settingsOpen = true)}
+    >
+      Settings
+    </button>
   </div>
 </AppShell>
+
+<!-- Operator settings drawer (FR-UI-9 fields + BETA features panel). Mounted at
+     the composition root so it overlays the whole shell; opened from the footer
+     affordance. Default-closed; self-manages focus + Escape. -->
+<SettingsDrawer bind:open={settingsOpen} />
+
+<!-- BETA: Temporal Scrubber -- self-managed launcher chip + focus-trapped
+     replay-diff modal overlay. Composition-root sibling; gated default-OFF.
+     Renders nothing + registers no listeners/fetch/timers when OFF. -->
+{#if $betaFlags['temporal-scrubber-governance-audit']}
+  <TemporalScrubberGovernanceAudit />
+{/if}
+
+<!-- BETA: Away/Calm posture pill -- mounted at the composition root so the
+     masthead pill stays visible at all viewport widths; its Activity Summary
+     overlay is position:fixed and escapes this mount. Gated default-OFF. -->
+{#if $betaFlags['away-mode']}
+  <AwayMode />
+{/if}
+
+<!-- BETA: Decision Oracle -- self-managed launcher rail + right-edge whisper
+     pane overlay. Composition-root sibling; gated default-OFF. -->
+{#if $betaFlags['decision-oracle']}
+  <DecisionOracle />
+{/if}
+
+<!-- BETA: Cross-session pattern audit & applicability inspector -- self-managed
+     scope picker + fixed right-edge audit rail + focus-trapped probe drawer.
+     Composition-root sibling; gated default-OFF. -->
+{#if $betaFlags['cross-session-pattern-audit-apis']}
+  <CrossSessionPatternAuditApis />
+{/if}
+
+<!-- BETA: Confidence calibration loop -- quiet launcher chip + focus-trapped
+     reliability-diagram drawer (predicted confidence vs realized agreement).
+     Composition-root sibling; gated default-OFF. Renders nothing + registers no
+     listeners/fetch/timers when OFF. Observability only, never a 4th Frame. -->
+{#if $betaFlags['confidence-calibration-loop']}
+  <ConfidenceCalibrationLoop />
+{/if}
+
+<!-- BETA: Breach Cartography (constrained) -- transient causal-map modal
+     launched ONLY from a governance negative-regression escalation. Self-
+     managed launch chip + position:fixed scrim/modal that escape this mount.
+     Composition-root sibling; gated default-OFF. -->
+{#if $betaFlags['breach-cartography-constrained']}
+  <BreachCartographyConstrained />
+{/if}
+
+<!-- BETA: Escalation Sonification -- invisible escalationStore subscriber +
+     a quiet bottom-left launcher / settings sub-panel overlay. Derived audio
+     confirmation on a real escalation; sound is paired with the visual badge,
+     never the only signal (ADR-18 M5). Gated default-OFF; renders nothing +
+     registers no subscriber/AudioContext when OFF. -->
+{#if $betaFlags['sonification-escalation-layer']}
+  <SonificationEscalationLayer />
+{/if}
+
+<!-- BETA: Spatial session sidebar -- position:fixed right-edge overlay sibling
+     to AwayMode / DecisionOracle. Overlays the shell without displacing the
+     frames or the left rail. Gated default-OFF. -->
+{#if $betaFlags['spatial-session-sidebar']}
+  <SpatialSessionSidebar />
+{/if}
 
 <style>
   /* The composition seam wrappers are quiet -- they only position the slotted
@@ -374,4 +567,32 @@
     color: var(--sm-text-dim, #94a3b8);
     letter-spacing: 0.02em;
   }
+
+  /* Settings affordance -- quiet, text-labelled (M4 spirit), pushed to the far
+     right of the footer. Opens the operator settings drawer (FR-UI-9 + BETA). */
+  .foot__settings {
+    margin-left: auto;
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--sm-border, var(--border, #192030));
+    border-radius: 2px;
+    color: var(--sm-text-dim, #94a3b8);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.6rem;
+    cursor: pointer;
+    transition: color 0.18s, border-color 0.18s;
+  }
+  .foot__settings:hover {
+    color: var(--sm-accent, var(--accent, #f59e0b));
+    border-color: var(--border-hi, rgba(245, 158, 11, 0.25));
+  }
+
+  /* BETA escalation-heatmap: a 2-col gutter grid in Frame A. When the flag is
+     OFF the grid is a single column so there is no empty gutter. */
+  .fa-with-gutter { display: grid; grid-template-columns: 1fr; gap: 0.75rem; min-width: 0; }
+  .fa-with-gutter--on { grid-template-columns: 14px 1fr; }
+  .fa-gutter { min-width: 0; }
+  .fa-stream { min-width: 0; }
 </style>

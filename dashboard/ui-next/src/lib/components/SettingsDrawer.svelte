@@ -95,6 +95,10 @@
   import { settings, patch, resetLayout, DEFAULT_SETTINGS } from '../stores/settings.js';
   import { selectedSessionId } from '../stores/session.js';
   import HitlModeToggle from './HitlModeToggle.svelte';
+  import BetaToggles from './BetaToggles.svelte';
+  import { betaFlags } from '../stores/beta.js';
+  import QuickFilters from './beta/QuickFilters.svelte';
+  import TimeMachineGovernanceReplay from './beta/TimeMachineGovernanceReplay.svelte';
 
   /** open: whether the drawer is shown. Two-way bindable from the parent. */
   export let open = false;
@@ -332,6 +336,21 @@
     </header>
 
     <div class="sd-body">
+      {#if $betaFlags['time-machine-governance-replay']}
+        <!-- BETA #48: counterfactual governance replay. Self-gated; default OFF.
+             Renders nothing + registers no pollers/SSE/timers when the flag is OFF. -->
+        <section class="sd-field">
+          <TimeMachineGovernanceReplay />
+        </section>
+      {/if}
+      {#if $betaFlags['quick-filters']}
+        <!-- BETA #22: quick-filter presets -- one click sets the FR-UI-9 knobs
+             below via the shared settings store. Self-gated; default OFF. -->
+        <section class="sd-field">
+          <QuickFilters />
+        </section>
+      {/if}
+
       <!-- 1. HITL MODE (M5: SYNC | ASYNC only) ------------------------------ -->
       <section class="sd-field" aria-labelledby="sd-hitl-lbl">
         <div class="sd-field__head">
@@ -504,6 +523,11 @@
         <button type="button" class="sd-reset" on:click={onResetLayout}>
           Reset layout
         </button>
+      </section>
+
+      <!-- 9. BETA FEATURES (2026-06-11 BETA proposals initiative) ----------- -->
+      <section class="sd-field sd-field--action">
+        <BetaToggles />
       </section>
     </div>
   </div>

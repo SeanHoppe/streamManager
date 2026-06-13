@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<!--
+  policy-preview-chip.html -- KingMode mockup (BETA #21).
+
+  Self-contained preview of the "Policy-preview chip: what governance will do,
+  read from the corpus" BETA feature. ONE file: inline <style> + inline <script>,
+  no external assets/CDNs/fonts (system font stack only).
+
+  This mockup is a DESIGN PREVIEW so the operator can confirm the UI approach
+  BEFORE any code is written. It re-uses the REAL ui-next theme tokens
+  (theme.css obsidian/phosphor/paper + the --calm-* bridge + the action palette)
+  so it previews the production look. The chip mirrors AdvisoryChip's M8 dashed
+  NON-VERDICT grammar and ConfidenceChip's degrade-to-mock SAMPLE-DATA idiom.
+
+  ADR-18 MUST honored in the mockup:
+    - paired label+color everywhere (the literal verb + share + n carry meaning;
+      tint only reinforces -- color is never the sole signal).
+    - advisory only: the chip NEVER pre-selects a mode, emits no selection event,
+      sits OFF the verdict hot path (M18).
+    - role="note" (passive, never "alert"); only the optional expand is a real
+      <button> in tab order with the global 2px focus ring.
+    - domain-agnostic: session ids / shapes / actions are rendered FROM DATA,
+      no monitored-project vocabulary baked in.
+    - polarity: excluded_self readout makes SM-self suppression visible.
+
+  ASCII-only (cp1252-safe): dash rendered as "--", no smart quotes, no
+  em-dashes, no box-drawing characters.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Policy-preview chip -- KingMode mockup (BETA #21)</title>
+<style>
+  /* ======================================================================
+     TOKEN LAYER -- lifted verbatim from dashboard/ui-next/src/styles/theme.css
+     + calm.css so the mockup previews the REAL production palette. Only the
+     tokens this mockup consumes are carried.
+  ====================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* action palette (shared default) -- always paired with a text label (M4) */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* spacing rhythm + radius (calm.css) */
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+    --t-calm: 180ms ease;
+
+    /* fixed focus ring (theme-invariant; the ACTION REQUIRED amber) */
+    --focus-ring-width: 2px;
+    --focus-ring-style: solid;
+    --focus-ring-color: #d97706;
+
+    /* fixed badge tokens (M4 -- theme-invariant) */
+    --badge-ar-fg: #d97706; --badge-ar-bg: #fef3c7; --badge-ar-border: #d97706;
+  }
+
+  [data-theme="obsidian"] {
+    --bg: #080a0c; --bg-card: #0c1118; --bg-row: #0e141e; --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --border: #192030; --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098; --text-dim: #948870; --text-ui: #8a8068; --text-bright: #e8e0cc;
+    --accent: #f59e0b; --accent-dim: rgba(245,158,11,0.09); --accent-glow: rgba(245,158,11,0.35);
+  }
+  [data-theme="phosphor"] {
+    --bg: #010602; --bg-card: #010d03; --bg-row: #021005; --bg-row-alt: #010d03;
+    --bg-row-hover: #031508;
+    --border: #082510; --border-hi: rgba(57,255,20,0.3);
+    --text: #5aaa60; --text-dim: #429056; --text-ui: #4ea060; --text-bright: #9de89e;
+    --accent: #39ff14; --accent-dim: rgba(57,255,20,0.07); --accent-glow: rgba(57,255,20,0.3);
+    --c-allow: #39ff14; --c-suggest: #7fff00; --c-guide: #ccff00;
+    --c-intervene: #ffaa00; --c-block: #ff3333;
+  }
+  [data-theme="paper"] {
+    --bg: #ede8df; --bg-card: #f8f4ee; --bg-row: #fefefc; --bg-row-alt: #f5f1ea;
+    --bg-row-hover: #f0eae0;
+    --border: #ccc4b4; --border-hi: rgba(192,57,43,0.35);
+    --text: #2a2018; --text-dim: #6a5040; --text-ui: #5a4030; --text-bright: #140c04;
+    --accent: #c0392b; --accent-dim: rgba(192,57,43,0.07); --accent-glow: rgba(192,57,43,0.2);
+    --c-allow: #16a34a; --c-suggest: #65a30d; --c-guide: #ca8a04;
+    --c-intervene: #ea580c; --c-block: #dc2626;
+  }
+
+  /* --calm-* bridge (calm.css) -- resolves against the active [data-theme]. */
+  :root {
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-row:    var(--bg-row);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-accent-glow:    var(--accent-glow);
+  }
+
+  /* ======================================================================
+     PAGE CHROME -- mockup scaffold only (not part of the shipped component).
+  ====================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: var(--space-6);
+    min-height: 100vh;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; }
+
+  /* header strip: title + BETA pill + inline on/off toggle */
+  .strip {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: var(--space-5) 0 var(--space-5);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    margin-bottom: var(--space-6);
+  }
+  .strip__id {
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .strip__title {
+    font-family: var(--ff-system); font-size: 19px; font-weight: 750;
+    letter-spacing: -0.01em; color: var(--calm-ink-loud); margin: 0;
+    flex: 1 1 320px; min-width: 0;
+  }
+  .strip__sub {
+    display: block; font-size: 12px; font-weight: 400; letter-spacing: 0.01em;
+    color: var(--calm-ink-quiet); margin-top: 2px;
+  }
+
+  /* BETA pill -- paired text + dashed amber chrome (never color-only). */
+  .pill {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--calm-accent-wash);
+    border: 1px dashed var(--badge-ar-border);
+    border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+  }
+
+  /* inline on/off toggle (wired client-side) */
+  .gate {
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    margin-left: auto;
+  }
+  .gate__label {
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .gate__state {
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.1em; min-width: 4ch; text-align: right;
+  }
+  .gate__state.is-on  { color: var(--c-allow); }
+  .gate__state.is-off { color: var(--calm-ink-quiet); }
+  .switch {
+    appearance: none; position: relative; width: 46px; height: 24px;
+    border-radius: 999px; cursor: pointer;
+    background: var(--calm-surface-alt);
+    border: 1px solid var(--calm-hairline);
+    transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--calm-ink-chrome);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch[aria-pressed="true"] {
+    background: var(--calm-accent-wash); border-color: var(--badge-ar-border);
+  }
+  .switch[aria-pressed="true"]::after {
+    transform: translateX(22px); background: var(--badge-ar-fg);
+  }
+  .switch:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* theme + scenario pickers */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: var(--space-6);
+    margin-bottom: var(--space-6);
+  }
+  .ctl { display: flex; flex-direction: column; gap: var(--space-2); }
+  .ctl__cap {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--calm-ink-quiet);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-soft); overflow: hidden; }
+  .seg button {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 12px; letter-spacing: 0.04em;
+    color: var(--calm-ink-chrome); padding: 6px 12px;
+    border-right: 1px solid var(--calm-hairline);
+    transition: background var(--t-calm), color var(--t-calm);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button.is-active {
+    background: var(--calm-accent-wash); color: var(--calm-ink-loud); font-weight: 700;
+  }
+  .seg button:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+
+  /* ======================================================================
+     HOST CARD -- the HitlDock header site where the operator flips a session
+     SYNC <-> ASYNC. The chip mounts directly BELOW this toggle.
+  ====================================================================== */
+  .dock {
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-6);
+    max-width: 560px;
+  }
+  .dock__head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: var(--space-4); margin-bottom: var(--space-5);
+  }
+  .dock__who { min-width: 0; }
+  .dock__eyebrow {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--calm-ink-quiet);
+  }
+  .dock__sess {
+    font-family: var(--ff-mono); font-size: 15px; font-weight: 700;
+    color: var(--calm-ink-loud); letter-spacing: 0.01em; margin-top: 2px;
+    word-break: break-all;
+  }
+  .dock__scope {
+    font-size: 12px; color: var(--calm-ink-quiet); margin-top: 3px;
+  }
+
+  /* the SYNC/ASYNC radiogroup (HitlModeToggle facsimile) */
+  .hmt {
+    display: inline-flex; align-items: stretch; gap: 0;
+    border: 1px solid var(--calm-hairline); border-radius: var(--radius-soft);
+    overflow: hidden; background: var(--calm-surface-raised);
+  }
+  .hmt__seg {
+    appearance: none; display: inline-flex; align-items: center; gap: var(--space-2);
+    border: none; background: transparent; cursor: pointer;
+    color: var(--calm-ink-chrome);
+    font-family: var(--ff-mono); font-size: 13px; letter-spacing: 0.06em;
+    padding: 8px 16px;
+    border-right: 1px solid var(--calm-hairline);
+    transition: background var(--t-calm), color var(--t-calm);
+  }
+  .hmt__seg:last-child { border-right: 0; }
+  .hmt__seg.is-active {
+    background: var(--calm-accent-wash); color: var(--calm-ink-loud); font-weight: 700;
+  }
+  .hmt__seg:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+  .hmt__dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; opacity: 0.55;
+  }
+  .hmt__seg.is-active .hmt__dot { opacity: 1; }
+
+  .toggle-label {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--calm-ink-quiet);
+    margin-bottom: var(--space-2);
+  }
+
+  /* a thin dashed connector aligning the chip's left edge to the toggle's
+     left edge -- "this preview belongs to that choice". */
+  .chip-anchor {
+    position: relative;
+    padding-left: var(--space-4);
+    margin-top: var(--space-4);
+  }
+  .chip-anchor::before {
+    content: ""; position: absolute; left: 3px; top: -6px; bottom: 8px;
+    width: 0; border-left: 1px dashed var(--calm-hairline-hi);
+  }
+
+  /* ======================================================================
+     THE CHIP -- PolicyPreviewChip facsimile. Mirrors AdvisoryChip M8 grammar:
+     1px DASHED hairline, low-saturation calm wash, italic quiet ink. It is the
+     QUIETEST element at its site -- a preview, not a verdict.
+  ====================================================================== */
+  .ppc {
+    display: block; width: 100%;
+    border: 1px dashed var(--calm-hairline-hi);
+    border-radius: var(--radius-soft);
+    background: var(--calm-accent-wash);
+    padding: var(--space-4) var(--space-5);
+  }
+  /* tint reinforcement only -- a left edge that REINFORCES the literal verb.
+     The literal text always carries the meaning (M4); the edge is decorative.
+     calm  = routine (ALLOW-dominant)  -> slate-green
+     mixed = neutral (no clear winner) -> slate
+     block = BLOCK-dominant history    -> muted amber edge (earns a look)
+     cold  = no history                -> no tint claim (neutral hairline)   */
+  .ppc[data-band="calm"]  { border-left: 3px solid var(--c-allow); }
+  .ppc[data-band="mixed"] { border-left: 3px solid var(--calm-ink-chrome); }
+  .ppc[data-band="block"] { border-left: 3px solid var(--badge-ar-border); }
+  .ppc[data-band="cold"]  { border-left: 3px dashed var(--calm-hairline); }
+
+  .ppc__tagrow {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .ppc__tag {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  /* "ADVISORY -- your decision stands" paired text (AdvisoryChip idiom). */
+  .ppc__advisory {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--calm-ink-quiet);
+    border: 1px dashed var(--calm-hairline-hi);
+    border-radius: 3px; padding: 1px 6px;
+  }
+  /* "SAMPLE DATA" paired-text tag (ConfidenceChip usedMock idiom). Hidden
+     unless the fetch degraded to the offline fixture. */
+  .ppc__mock {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 3px; padding: 0 5px;
+  }
+
+  /* HEADLINE -- a literal sentence carrying ALL meaning. The dominant-action
+     verb is the load-bearing label; share fraction (14/15) gives sample-size
+     intuition; mean + layer are the routing tells. */
+  .ppc__headline {
+    font-family: var(--ff-system); font-size: 15px; line-height: 1.45;
+    color: var(--calm-ink-loud); font-style: italic;
+  }
+  .ppc__key {
+    font-family: var(--ff-mono); font-style: normal; font-weight: 700;
+    letter-spacing: 0.06em; color: var(--calm-ink-chrome);
+    font-size: 12px; margin-right: 2px;
+  }
+  /* the dominant verb -- the paired text signal. Color REINFORCES; the word
+     itself carries meaning if color is stripped (M4). */
+  .ppc__verb { font-style: normal; font-weight: 800; letter-spacing: 0.02em; }
+  .ppc__verb[data-action="ALLOW"]     { color: var(--c-allow); }
+  .ppc__verb[data-action="SUGGEST"]   { color: var(--c-suggest); }
+  .ppc__verb[data-action="GUIDE"]     { color: var(--c-guide); }
+  .ppc__verb[data-action="INTERVENE"] { color: var(--c-intervene); }
+  .ppc__verb[data-action="BLOCK"]     { color: var(--c-block); }
+  .ppc__num {
+    font-family: var(--ff-mono); font-style: normal; font-weight: 700;
+    font-variant-numeric: tabular-nums; color: var(--calm-ink-loud);
+  }
+  .ppc__sep { color: var(--calm-ink-quiet); font-style: normal; padding: 0 4px; }
+  .ppc__read {
+    font-style: normal; color: var(--calm-ink); font-weight: 600;
+  }
+
+  /* secondary line: the plain-English read + the polarity readout. */
+  .ppc__meta {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4);
+    margin-top: var(--space-3);
+  }
+  .ppc__metaitem {
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.02em;
+    color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums;
+  }
+  .ppc__metaitem b { color: var(--calm-ink); font-weight: 700; }
+
+  /* the optional EXPAND toggle -- the ONLY interactive element. A real
+     <button> in tab order. role on the root stays "note". */
+  .ppc__expand {
+    appearance: none; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.04em;
+    color: var(--calm-ink-chrome);
+    background: transparent; border: 1px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); padding: 3px 9px;
+    transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .ppc__expand:hover { background: var(--calm-surface-hover); }
+  .ppc__expand:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* HISTOGRAM reveal -- calm height reveal (mirrors ConfidenceChip breakdown).
+     Each bar pairs a literal label + count + percent (never color-only). */
+  .ppc__hist {
+    overflow: hidden; max-height: 0; opacity: 0;
+    transition: max-height var(--t-calm), opacity var(--t-calm), margin var(--t-calm);
+    border-left: 1px dashed var(--calm-hairline-hi);
+    margin: 0 0 0 var(--space-1); padding-left: 0;
+  }
+  .ppc__hist.is-open {
+    max-height: 360px; opacity: 1;
+    margin: var(--space-4) 0 var(--space-1) var(--space-1);
+    padding-left: var(--space-5);
+  }
+  .ppc__hist-head {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--calm-ink-quiet);
+    margin-bottom: var(--space-3);
+  }
+  .ppc__bar {
+    display: grid; grid-template-columns: 11ch 1fr 7ch;
+    align-items: center; gap: var(--space-3); margin-bottom: var(--space-3);
+  }
+  .ppc__bar-label {
+    font-family: var(--ff-mono); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.04em; color: var(--calm-ink);
+  }
+  .ppc__bar-track {
+    height: 8px; background: var(--calm-surface-alt);
+    border-radius: 2px; overflow: hidden;
+  }
+  .ppc__bar-fill { display: block; height: 100%; border-radius: 2px; }
+  .ppc__bar-fill[data-action="ALLOW"]     { background: var(--c-allow); }
+  .ppc__bar-fill[data-action="SUGGEST"]   { background: var(--c-suggest); }
+  .ppc__bar-fill[data-action="GUIDE"]     { background: var(--c-guide); }
+  .ppc__bar-fill[data-action="INTERVENE"] { background: var(--c-intervene); }
+  .ppc__bar-fill[data-action="BLOCK"]     { background: var(--c-block); }
+  .ppc__bar-num {
+    font-family: var(--ff-mono); font-size: 12px; font-weight: 700;
+    color: var(--calm-ink-loud); font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .ppc__hist-foot {
+    font-family: var(--ff-system); font-size: 12px; font-style: italic;
+    color: var(--calm-ink-quiet); margin: var(--space-3) 0 0;
+  }
+
+  /* the BETA annotation under the chip (mockup-only -- makes the gate explicit) */
+  .ppc-beta-note {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em;
+    color: var(--calm-ink-quiet); margin-top: var(--space-3);
+    padding-left: var(--space-4);
+  }
+
+  /* OFF state placeholder (renders NOTHING in production; the mockup shows an
+     explanatory ghost so the gated behavior is legible). */
+  .ppc-off {
+    border: 1px dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4) var(--space-5);
+    font-family: var(--ff-mono); font-size: 12px; letter-spacing: 0.03em;
+    color: var(--calm-ink-quiet); font-style: italic;
+    background: transparent;
+  }
+
+  /* reduced-motion: the reveal snaps instead of sliding. */
+  @media (prefers-reduced-motion: reduce) {
+    .ppc__hist, .switch, .switch::after { transition: none; }
+  }
+
+  .notes {
+    margin-top: var(--space-7); padding-top: var(--space-5);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    font-size: 12.5px; color: var(--calm-ink-quiet); max-width: 720px;
+  }
+  .notes h2 {
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--calm-ink-chrome);
+    margin: 0 0 var(--space-3);
+  }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { margin-bottom: var(--space-2); }
+  .notes b { color: var(--calm-ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============================================================
+       HEADER STRIP: feature title + BETA pill + inline on/off toggle
+  ============================================================ -->
+  <div class="strip">
+    <div>
+      <div class="strip__id">BETA #21 -- group: hitl</div>
+      <h1 class="strip__title">
+        Policy-preview chip
+        <span class="strip__sub">What governance will do, read from the 21k-decision corpus -- rendered at the SYNC/ASYNC/floor decision point.</span>
+      </h1>
+    </div>
+    <span class="pill" title="Default OFF; turned on in Settings &gt; BETA features">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    <div class="gate">
+      <span class="gate__label">flag</span>
+      <button id="gate" class="switch" type="button" role="switch" aria-pressed="true"
+              aria-label="policy-preview-chip BETA flag"></button>
+      <span id="gateState" class="gate__state is-on">ON</span>
+    </div>
+  </div>
+
+  <!-- theme + scenario pickers (mockup scaffold) -->
+  <div class="controls">
+    <div class="ctl">
+      <span class="ctl__cap">theme</span>
+      <div class="seg" id="themeSeg" role="group" aria-label="theme">
+        <button data-theme-pick="obsidian" class="is-active" type="button">obsidian</button>
+        <button data-theme-pick="phosphor" type="button">phosphor</button>
+        <button data-theme-pick="paper" type="button">paper</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="ctl__cap">scenario (mock corpus readout)</span>
+      <div class="seg" id="scenarioSeg" role="group" aria-label="scenario">
+        <button data-scn="routine" class="is-active" type="button">routine 14/15 ALLOW</button>
+        <button data-scn="block" type="button">BLOCK-dominant</button>
+        <button data-scn="cold" type="button">cold -- no history</button>
+        <button data-scn="sample" type="button">server down (SAMPLE)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       HOST: the HitlDock header -- the SYNC/ASYNC site the chip mounts beneath
+  ============================================================ -->
+  <div class="dock">
+    <div class="dock__head">
+      <div class="dock__who">
+        <div class="dock__eyebrow">HITL dock -- selected session</div>
+        <div class="dock__sess" id="sessId">sess-demo-routine</div>
+        <div class="dock__scope" id="sessScope">scope rendered from data -- 3 sessions in rail</div>
+      </div>
+    </div>
+
+    <div class="toggle-label">HITL mode -- your choice, the chip never pre-selects</div>
+    <div class="hmt" role="radiogroup" aria-label="HITL mode">
+      <button class="hmt__seg is-active" type="button" role="radio" aria-checked="true"
+              aria-label="HITL SYNC -- approve every row live" data-mode="sync">
+        <span class="hmt__dot" aria-hidden="true"></span><span>SYNC</span>
+      </button>
+      <button class="hmt__seg" type="button" role="radio" aria-checked="false"
+              aria-label="HITL ASYNC -- batch routine rows, escalate only" data-mode="async">
+        <span class="hmt__dot" aria-hidden="true"></span><span>ASYNC</span>
+      </button>
+    </div>
+
+    <!-- THE CHIP, anchored directly under the toggle by a dashed connector. -->
+    <div class="chip-anchor">
+      <div id="chipMount"><!-- PolicyPreviewChip renders here (JS) --></div>
+      <div class="ppc-beta-note">BETA -- default OFF, toggled in Settings &gt; BETA features (group "hitl").</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       DESIGNER NOTES (mockup-only; not shipped)
+  ============================================================ -->
+  <div class="notes">
+    <h2>Why this earns its place</h2>
+    <ul>
+      <li><b>Pure GLANCE.</b> The one-line headline (CORPUS: 14/15 ALLOW -- mean 0.97 -- L1) answers "is this session boring enough to ignore?" at the exact instant the operator reaches for the SYNC/ASYNC switch. Zero clicks for the headline.</li>
+      <li><b>Never a verdict.</b> 1px DASHED border + the literal "ADVISORY -- your decision stands" tag mean it reads as provisional by structure, not chrome. It emits no selection event and sits OFF the verdict hot path (M18).</li>
+      <li><b>Paired label + color (ADR-18 M4).</b> The dominant verb word + share fraction carry all meaning; the calm-green / amber edge only reinforces. A colorblind operator reads the number and the word. Strip the tint -- the signal survives.</li>
+      <li><b>Cold shape degrades honestly.</b> n=0 renders "NO HISTORY -- novel shape, earns attention" with no tint claim, rather than a misleading calm verdict. The inverse signal is what makes the calm signal trustworthy.</li>
+      <li><b>Polarity made visible.</b> The excluded_self readout surfaces SM-self decisions dropped from the corpus (project_slug NOT IN {streamManager}); it shows 0 here, non-zero when relevant.</li>
+      <li><b>Server-down safety.</b> On fetch error the chip falls back to the offline fixture AND paints a literal "SAMPLE DATA" tag (ConfidenceChip idiom) so the operator is never misled that sample data is live.</li>
+      <li><b>Optional expand.</b> Enter/Space on the chip's expand button reveals the per-action histogram + n + match kind (exact shape vs nearest k-NN). Esc collapses. Honors prefers-reduced-motion (snap, not slide).</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  // ======================================================================
+  // MOCK DATA -- the exact shape of GET /api/governance/predict, mirroring
+  // PolicyPreviewChip-data.js mockPrediction() / mockColdPrediction().
+  // Domain-agnostic: session ids + shape hashes + actions are data, not vocab.
+  // ======================================================================
+  var ACTION_ORDER = ["ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK"];
+
+  var FIXTURES = {
+    // routine: 14/15 ALLOW at 0.97 mean on L1 -- the calm "look away" state.
+    routine: {
+      shape: "a1b9c4e2", session_id: "sess-demo-routine", n: 15,
+      match_kind: "exact",
+      action_hist: { ALLOW: 14, SUGGEST: 1, GUIDE: 0, INTERVENE: 0, BLOCK: 0 },
+      dominant_action: "ALLOW", dominant_share: 0.93, mean_conf: 0.97,
+      dominant_layer: "L1", excluded_self: 0, mock: false
+    },
+    // BLOCK-dominant: history says governance pushed back -- earns a look.
+    block: {
+      shape: "7d3f0a91", session_id: "sess-demo-guarded", n: 12,
+      match_kind: "knn",
+      action_hist: { ALLOW: 2, SUGGEST: 1, GUIDE: 2, INTERVENE: 1, BLOCK: 6 },
+      dominant_action: "BLOCK", dominant_share: 0.50, mean_conf: 0.71,
+      dominant_layer: "L3", excluded_self: 2, mock: false
+    },
+    // cold: no exact + no near neighbor -> degrade silently to "no history".
+    cold: {
+      shape: "", session_id: "sess-demo-novel", n: 0, match_kind: "none",
+      action_hist: {}, dominant_action: null, dominant_share: 0,
+      mean_conf: null, dominant_layer: null, excluded_self: 0, mock: false
+    },
+    // sample: server down / non-2xx -> fall back to the routine fixture AND
+    // flag it as SAMPLE DATA so the operator knows it is not live.
+    sample: {
+      shape: "a1b9c4e2", session_id: "sess-demo-routine", n: 15,
+      match_kind: "exact",
+      action_hist: { ALLOW: 14, SUGGEST: 1, GUIDE: 0, INTERVENE: 0, BLOCK: 0 },
+      dominant_action: "ALLOW", dominant_share: 0.93, mean_conf: 0.97,
+      dominant_layer: "L1", excluded_self: 0, mock: true
+    }
+  };
+
+  // ======================================================================
+  // CHIP RENDERER -- the PolicyPreviewChip facsimile. role="note" root; the
+  // only interactive node is the expand <button>.
+  // ======================================================================
+  var state = { on: true, scenario: "routine", open: false };
+
+  function esc(s) {
+    return String(s).replace(/[&<>]/g, function (c) {
+      return c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;";
+    });
+  }
+  function pct(x) { return Math.round(x * 100); }
+
+  // band drives the decorative left-edge tint (reinforcement only).
+  function bandFor(p) {
+    if (p.n === 0) return "cold";
+    if (p.dominant_action === "ALLOW" && p.dominant_share >= 0.66) return "calm";
+    if (p.dominant_action === "BLOCK" || p.dominant_action === "INTERVENE") return "block";
+    return "mixed";
+  }
+
+  // The full aria-label sentence (carries meaning to assistive tech).
+  function ariaFor(p) {
+    if (p.n === 0) {
+      return "Corpus prediction: no history for this shape; novel shape, earns attention. Advisory only, your decision stands.";
+    }
+    var num = p.action_hist[p.dominant_action];
+    return "Corpus prediction: " + num + " of " + p.n + " " + p.dominant_action +
+      ", mean confidence " + p.mean_conf.toFixed(2) +
+      ", layer " + p.dominant_layer.replace(/^L/, "") +
+      "; advisory only, your decision stands.";
+  }
+
+  function renderChip() {
+    var mount = document.getElementById("chipMount");
+
+    // BETA gate: OFF renders NOTHING in production. The mockup shows a ghost.
+    if (!state.on) {
+      mount.innerHTML =
+        '<div class="ppc-off" role="note">policy-preview-chip is OFF -- ' +
+        'the chip renders nothing (no fetch, no DOM). Turn the BETA flag ON to preview.</div>';
+      return;
+    }
+
+    var p = FIXTURES[state.scenario];
+    var band = bandFor(p);
+    var isCold = p.n === 0;
+    var isMock = !!p.mock;
+
+    // reflect the selected session id into the host (rendered FROM DATA).
+    document.getElementById("sessId").textContent = p.session_id;
+
+    var html = "";
+    html += '<div class="ppc" role="note" data-band="' + band +
+            '" aria-label="' + esc(ariaFor(p)) + '">';
+
+    // tag row: CORPUS PREVIEW + ADVISORY + (SAMPLE DATA when degraded)
+    html += '<div class="ppc__tagrow">';
+    html += '<span class="ppc__tag">corpus preview</span>';
+    html += '<span class="ppc__advisory">ADVISORY -- your decision stands</span>';
+    if (isMock) {
+      html += '<span class="ppc__mock" title="Server unavailable -- showing sample data, not live">SAMPLE DATA</span>';
+    }
+    html += '</div>';
+
+    // headline -- literal sentence carrying ALL meaning.
+    if (isCold) {
+      html += '<div class="ppc__headline">';
+      html += '<span class="ppc__key">NO HISTORY</span> -- ';
+      html += '<span class="ppc__read">novel shape, earns attention.</span>';
+      html += ' No precedent in the corpus for this command-shape; do not assume routine.';
+      html += '</div>';
+    } else {
+      var domCount = p.action_hist[p.dominant_action];
+      html += '<div class="ppc__headline">';
+      html += '<span class="ppc__key">CORPUS:</span> ';
+      html += '<span class="ppc__num">' + domCount + "/" + p.n + '</span> ';
+      html += '<span class="ppc__verb" data-action="' + p.dominant_action + '">' + p.dominant_action + '</span>';
+      html += '<span class="ppc__sep">--</span>';
+      html += 'mean <span class="ppc__num">' + p.mean_conf.toFixed(2) + '</span>';
+      html += '<span class="ppc__sep">--</span>';
+      // dominant_layer rendered FROM DATA (layer label, never hard-coded vocab).
+      html += '<span class="ppc__num">' + esc(p.dominant_layer) + '</span>';
+      // a short plain-English read so the headline tells the operator what to do.
+      var read = band === "calm" ? "looks routine -- safe to leave ASYNC"
+               : band === "block" ? "governance has pushed back here -- worth a second look"
+               : "mixed precedent -- not clearly routine";
+      html += '<div class="ppc__meta">';
+      html += '<span class="ppc__metaitem"><b>' + esc(read) + '</b></span>';
+      html += '</div>';
+      html += '</div>';
+    }
+
+    // meta line: n + match kind + polarity readout.
+    if (!isCold) {
+      var matchTxt = p.match_kind === "exact" ? "exact shape match"
+                   : p.match_kind === "knn" ? "nearest k-NN (no exact match)"
+                   : "no match";
+      html += '<div class="ppc__meta">';
+      html += '<span class="ppc__metaitem">n <b>' + p.n + '</b></span>';
+      html += '<span class="ppc__metaitem">' + esc(matchTxt) + '</span>';
+      html += '<span class="ppc__metaitem">SM-self excluded <b>' + p.excluded_self + '</b></span>';
+      // the optional expand toggle -- the only interactive node.
+      html += '<button class="ppc__expand" id="ppcExpand" type="button" ' +
+              'aria-expanded="' + (state.open ? "true" : "false") + '" ' +
+              'aria-controls="ppcHist">' +
+              (state.open ? "hide histogram" : "show histogram") + '</button>';
+      html += '</div>';
+    } else {
+      // cold still shows the polarity readout (always honest about exclusions).
+      html += '<div class="ppc__meta">';
+      html += '<span class="ppc__metaitem">n <b>0</b></span>';
+      html += '<span class="ppc__metaitem">match: none</span>';
+      html += '<span class="ppc__metaitem">SM-self excluded <b>' + p.excluded_self + '</b></span>';
+      html += '</div>';
+    }
+
+    // histogram reveal (per-action label + count + percent; never color-only).
+    if (!isCold) {
+      html += '<div class="ppc__hist' + (state.open ? " is-open" : "") + '" id="ppcHist" role="note" ' +
+              'aria-label="Per-action history -- each bar is a literal label, count, and percent">';
+      html += '<div class="ppc__hist-head">action histogram -- ' + p.n + ' matched decisions</div>';
+      for (var i = 0; i < ACTION_ORDER.length; i++) {
+        var act = ACTION_ORDER[i];
+        var cnt = p.action_hist[act] || 0;
+        var share = p.n ? Math.round((cnt / p.n) * 100) : 0;
+        html += '<div class="ppc__bar">';
+        html += '<span class="ppc__bar-label">' + act + '</span>';
+        html += '<span class="ppc__bar-track"><span class="ppc__bar-fill" data-action="' + act +
+                '" style="width:' + share + '%"></span></span>';
+        html += '<span class="ppc__bar-num">' + cnt + " / " + share + '%</span>';
+        html += '</div>';
+      }
+      html += '<p class="ppc__hist-foot">' +
+        (isMock
+          ? "Sample data (server unavailable). Advisory only -- this reads the corpus, it does not pre-decide your mode."
+          : "Read from the decision corpus, polarity-filtered. Advisory only -- this does not pre-decide your mode. Esc collapses.") +
+        '</p>';
+      html += '</div>';
+    }
+
+    html += "</div>"; // .ppc
+
+    mount.innerHTML = html;
+
+    // wire the expand toggle (Enter/Space via native button; click too).
+    var btn = document.getElementById("ppcExpand");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        state.open = !state.open;
+        renderChip();
+        var b = document.getElementById("ppcExpand");
+        if (b) b.focus();
+      });
+    }
+  }
+
+  // Esc collapses the reveal from anywhere inside the chip (M6/M8 idiom).
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && state.open) {
+      state.open = false;
+      renderChip();
+    }
+  });
+
+  // ======================================================================
+  // WIRING -- BETA flag switch, theme picker, scenario picker.
+  // ======================================================================
+  var gate = document.getElementById("gate");
+  var gateState = document.getElementById("gateState");
+  gate.addEventListener("click", function () {
+    state.on = !state.on;
+    gate.setAttribute("aria-pressed", state.on ? "true" : "false");
+    gateState.textContent = state.on ? "ON" : "OFF";
+    gateState.className = "gate__state " + (state.on ? "is-on" : "is-off");
+    if (!state.on) state.open = false;
+    renderChip();
+  });
+
+  var themeSeg = document.getElementById("themeSeg");
+  themeSeg.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-theme-pick]");
+    if (!b) return;
+    document.documentElement.setAttribute("data-theme", b.getAttribute("data-theme-pick"));
+    themeSeg.querySelectorAll("button").forEach(function (x) { x.classList.remove("is-active"); });
+    b.classList.add("is-active");
+  });
+
+  var scnSeg = document.getElementById("scenarioSeg");
+  scnSeg.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-scn]");
+    if (!b) return;
+    state.scenario = b.getAttribute("data-scn");
+    state.open = false;
+    scnSeg.querySelectorAll("button").forEach(function (x) { x.classList.remove("is-active"); });
+    b.classList.add("is-active");
+    renderChip();
+  });
+
+  // the SYNC/ASYNC radiogroup is fully operable -- it proves the chip emits NO
+  // selection event (toggling mode never touches the chip's readout).
+  document.querySelectorAll(".hmt__seg").forEach(function (seg) {
+    seg.addEventListener("click", function () {
+      document.querySelectorAll(".hmt__seg").forEach(function (s) {
+        s.classList.remove("is-active");
+        s.setAttribute("aria-checked", "false");
+      });
+      seg.classList.add("is-active");
+      seg.setAttribute("aria-checked", "true");
+      // NOTE: the chip is intentionally NOT re-rendered here. The preview is
+      // bound to the SELECTED SESSION's shapes, not to the mode choice -- the
+      // operator's mode selection never alters the corpus readout (M18).
+    });
+  });
+
+  // initial paint
+  renderChip();
+</script>
+</body>
+</html>

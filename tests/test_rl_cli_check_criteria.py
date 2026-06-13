@@ -130,3 +130,19 @@ def test_render_report_lists_all_criteria() -> None:
               "posterior_ci", "parameter_drift"):
         assert n in body
     assert "Overall verdict: **PASS**" in body
+
+
+def test_v10_1_mode_prints_pass_infra_and_dormant(tmp_path: Path) -> None:
+    # ADR-18 Amendment D legibility: --mode v10.1 renders the reward
+    # criterion DORMANT, the verdict as PASS-INFRA, and exits 0.
+    db, mdir = _seed_passing(tmp_path)
+    rc = cli_check.main([
+        "--shadow-db", str(db), "--manifests", str(mdir),
+        "--reports-dir", str(tmp_path / "reports"), "--mode", "v10.1",
+    ])
+    assert rc == 0
+    body = next((tmp_path / "reports").glob("v10-criteria-*.md")
+                ).read_text(encoding="utf-8")
+    assert "Mode: **v10.1**" in body
+    assert "Overall verdict: **PASS-INFRA**" in body
+    assert "**shadow_reward_improvement** — DORMANT" in body

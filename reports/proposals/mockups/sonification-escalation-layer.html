@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<!--
+  sonification-escalation-layer.html -- KingMode mockup for BETA feature
+  "sonification-escalation-layer" (#44: Sonification as derived escalation
+  confirmation layer).
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written
+  (directive #2). PREVIEW, not the build. Self-contained (inline style + script,
+  no external assets / CDNs / fonts, system font stack) and reuses the REAL
+  dashboard/ui-next theme tokens (theme.css) so the operator sees the actual
+  obsidian / phosphor / paper palette + the frozen paired label+color badges.
+
+  THE WHY-FACTOR (anti-generic stance): this is the rare feature whose primary
+  OUTPUT is non-visual. Its visual footprint is therefore deliberately near-zero
+  -- the playback engine is an INVISIBLE composition-root component (App.svelte
+  sibling to AwayMode / DecisionOracle). The ONLY visible surface is a settings
+  sub-panel inside the existing BETA features section of SettingsDrawer, rendered
+  ONLY when the flag is ON. Every pixel it would add competes with the calm
+  monitor it serves, so it adds almost none.
+
+  SOUND IS CONFIRMATION, NEVER SIGNAL (the M5 guarantee, structural):
+    - The controller subscribes to the EXISTING escalationStore (sse.js:174),
+      fed only via the FROZEN lib/escalation.js allow-list. It classifies
+      NOTHING itself -- single source of truth preserved (M2).
+    - A tone plays ONLY while the paired ACTION REQUIRED / BLOCKED badge is on
+      screen. The same 20s ESC_WINDOW the Frame-A foreground already uses governs
+      sound start/stop. The tone STOPS the instant the badge clears -- silence ==
+      handled. Sound can never be the lone signal.
+    - The visible badge remains FULLY sufficient for a deaf or muted operator;
+      sound only ADDS a channel for the sighted-but-looking-away case (AAA-spirit
+      move: audio is a SUPPLEMENT, never a substitute).
+
+  SOUND GRAMMAR (1:1 keyed to escalation.js types, NOT one undifferentiated
+  beep): the dormant "Audible cue" toggle (settings.js:44 + SettingsDrawer.svelte
+  :208-211, set but never consumed) becomes a real, type-differentiated channel.
+  Foreground triggers get heavier, more arresting timbres; badge-in-place
+  advisories get quiet-and-distinct two-notes so the operator LEARNS not to break
+  focus for them. The grammar teaches discrimination a single beep never could.
+
+  ADR-18 floor honoured here:
+    - 3 frames untouched; nothing foregrounds from this feature. It adds NO
+      escalation policy -- it only reads the existing store + window.
+    - Escalation-only foreground (M2): the controller defers to the ONE table in
+      lib/escalation.js; it never re-decides foreground vs badge-in-place.
+    - Paired label+color badges everywhere (M4): every settings row + every live
+      escalation carries the LITERAL type label as text first; a painted
+      severity dot only REINFORCES it. Color is never the sole carrier.
+    - Absolute HITL gate: sound is advisory-of-a-badge only; it auto-resolves
+      nothing.
+    - Domain-agnostic (M16): sessionId placeholders render FROM DATA only
+      (sess-mock-1..3). No monitored-project vocabulary.
+    - a11y AAA: slate #475569 on #f1f5f9, amber #d97706 on #fef3c7, red on
+      #fee2e2 all >=7:1 on the badge chips; native inputs carry the 2px amber
+      focus ring at 2px offset; every control has an explicit aria-label;
+      prefers-reduced-motion drops motion on the preview affordances; sound is a
+      SUPPLEMENT, the badge is the sufficient signal.
+
+  BETA GATING (footprint: ui-only -- frozenTouch false, no new envelope, no new
+  table, no new endpoint): default-OFF, toggled in Settings > BETA features
+  (group "Monitor & glance-readability"). Shown ON here with realistic mock data
+  PLUS the gated annotation. Flipping the inline gate OFF hides the settings
+  sub-panel AND tears down the audio subscriber (default-OFF == zero runtime
+  cost: with the flag false the controller registers NO subscriber and never
+  touches AudioContext).
+
+  REAL FILES this previews (footprint):
+    - lib/components/beta/SonificationController.svelte (new; invisible
+      composition-root subscriber; renders no DOM; plays Web Audio tones)
+    - lib/stores/sonification.js (new; UI-only per-type enabled+volume + master
+      mute + localStorage mirror)
+    - lib/sound/grammar.js (new leaf; data-only Object.freeze synthesis table)
+    - lib/beta/registry.js (EDIT: append key 'sonification', num 44,
+      group 'monitor', defaultEnabled false)
+    - App.svelte (EDIT: {#if $betaFlags['sonification']}<SonificationController/>)
+
+  ASCII-only: no smart quotes, no em-dashes (written as --), no box-drawing.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sonification-escalation-layer -- KingMode mockup</title>
+<style>
+  /* ========================================================================
+     TOKEN LAYER -- lifted verbatim from dashboard/ui-next/src/styles/theme.css
+     so this mockup previews the REAL frozen token values. (theme.css is the
+     contract; this is a copy for the standalone preview, not a fork of it.)
+  ======================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* ACTION palette (theme-overridden where needed). */
+    --c-allow: #22c55e; --c-suggest: #84cc16; --c-guide: #eab308;
+    --c-intervene: #f97316; --c-block: #ef4444;
+
+    /* FIXED BADGE TOKENS (M4) -- theme-invariant paired label+color palette. */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:      #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border:     #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg:    #ffedd5;  --badge-warn-border:    #ea580c;
+  }
+
+  /* THEME: OBSIDIAN (default) */
+  [data-theme="obsidian"] {
+    --bg: #080a0c; --bg-card: #0c1118; --bg-row: #0e141e; --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --border: #192030; --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098; --text-dim: #948870; --text-ui: #8a8068; --text-bright: #e8e0cc;
+    --accent: #f59e0b; --accent-dim: rgba(245,158,11,0.09); --accent-glow: rgba(245,158,11,0.35);
+    --font-h: var(--ff-system); --font-d: var(--ff-mono);
+    --logo-ls: 0.12em;
+    --c-block: #ef4444; --c-guide: #eab308;
+  }
+  /* THEME: PHOSPHOR */
+  [data-theme="phosphor"] {
+    --bg: #010602; --bg-card: #010d03; --bg-row: #021005; --bg-row-alt: #010d03;
+    --bg-row-hover: #031508;
+    --border: #082510; --border-hi: rgba(57,255,20,0.3);
+    --text: #5aaa60; --text-dim: #429056; --text-ui: #4ea060; --text-bright: #9de89e;
+    --accent: #39ff14; --accent-dim: rgba(57,255,20,0.07); --accent-glow: rgba(57,255,20,0.3);
+    --font-h: var(--ff-mono); --font-d: var(--ff-mono);
+    --logo-ls: 0.2em;
+    --c-block: #ff3333; --c-guide: #ccff00;
+  }
+  /* THEME: PAPER (light) */
+  [data-theme="paper"] {
+    --bg: #ede8df; --bg-card: #f8f4ee; --bg-row: #fefefc; --bg-row-alt: #f5f1ea;
+    --bg-row-hover: #f0eae0;
+    --border: #ccc4b4; --border-hi: rgba(192,57,43,0.35);
+    --text: #2a2018; --text-dim: #6a5040; --text-ui: #5a4030; --text-bright: #140c04;
+    --accent: #c0392b; --accent-dim: rgba(192,57,43,0.07); --accent-glow: rgba(192,57,43,0.2);
+    --font-h: serif; --font-d: var(--ff-mono);
+    --logo-ls: 0.04em;
+    --c-block: #dc2626; --c-guide: #ca8a04;
+  }
+
+  /* ========================================================================
+     RESET + PAGE SHELL
+  ======================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-h, var(--ff-system));
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .page { max-width: 1080px; margin: 0 auto; padding: 0 22px 64px; }
+
+  /* ------------------------------------------------------------------------
+     MOCKUP META STRIP -- title + BETA-gated pill + inline on/off toggle.
+     Mockup chrome. The toggle mirrors Settings > BETA features gating: OFF and
+     the SonificationController is simply not mounted (no audio subscriber).
+  ------------------------------------------------------------------------ */
+  .meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: 16px 0 14px; border-bottom: 1px solid var(--border);
+  }
+  .meta__title {
+    font-size: 15px; font-weight: 680; color: var(--text-bright);
+    letter-spacing: 0.01em; margin: 0;
+  }
+  .meta__title span { color: var(--text-dim); font-weight: 320; }
+  .meta__spacer { flex: 1 1 auto; }
+
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-d, var(--ff-mono));
+    font-size: 11px; letter-spacing: 0.06em;
+    padding: 5px 11px; border-radius: 999px;
+    background: var(--badge-ar-bg); color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border);
+    font-weight: 700; white-space: nowrap;
+  }
+  .beta-pill b { font-weight: 700; }
+  .beta-pill span { font-weight: 400; opacity: 0.9; }
+
+  /* inline on/off toggle (client-side; demonstrates the gated default-OFF). */
+  .gate {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--font-d, var(--ff-mono));
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .switch {
+    position: relative; width: 46px; height: 24px; flex: 0 0 auto;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: var(--bg-row); cursor: pointer; padding: 0;
+    transition: background 180ms ease, border-color 180ms ease;
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--text-ui);
+    transition: left 180ms ease, background 180ms ease;
+  }
+  .switch[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--border-hi); }
+  .switch[aria-pressed="true"] .switch__knob { left: 24px; background: var(--accent); }
+  .gate__state { min-width: 26px; font-weight: 700; }
+  .gate__state[data-on="true"] { color: var(--accent); }
+
+  /* ========================================================================
+     EXPLAINER
+  ======================================================================== */
+  .intro {
+    display: grid; grid-template-columns: 1.35fr 1fr; gap: 22px; margin-top: 22px;
+  }
+  @media (max-width: 860px) { .intro { grid-template-columns: 1fr; } }
+  .blurb { color: var(--text-dim); font-size: 13px; line-height: 1.62; }
+  .blurb h2 {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-ui); margin: 0 0 8px; font-family: var(--font-d, var(--ff-mono));
+  }
+  .blurb p { margin: 0 0 10px; }
+  .blurb code {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 12px; color: var(--text-bright);
+    background: var(--bg-card); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border);
+  }
+
+  /* ========================================================================
+     LAYOUT: settings sub-panel (left) + live-demo strip (right).
+     The settings sub-panel is the ONLY visible surface of the real feature.
+     The live strip is mockup-only -- it proves the audio is coupled to badge
+     visibility (it stands in for the invisible controller + Frame A badge).
+  ======================================================================== */
+  .grid {
+    margin-top: 26px; display: grid; gap: 22px;
+    grid-template-columns: 1.25fr 1fr;
+  }
+  @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden;
+  }
+  .card__head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+  }
+  .card__title {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .card__body { padding: 4px 0 8px; }
+
+  /* ------------------------------------------------------------------------
+     SETTINGS SUB-PANEL: MASTER ROW + per-type rows.
+     The master "SONIFICATION ON/OFF" text toggle mirrors the BetaToggles
+     .bt__state idiom (ON = accent chip + literal "ON" text). Master-mute is a
+     one-keystroke "hush" control for "I'm in a meeting."
+  ------------------------------------------------------------------------ */
+  .master {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    background: var(--bg-row-alt);
+  }
+  .master__label {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-bright);
+  }
+  .master__spacer { flex: 1 1 auto; }
+  /* paired text+chip state (BetaToggles .bt__state idiom). */
+  .statechip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--bg-row); border: 1px solid var(--border); color: var(--text-ui);
+  }
+  .statechip[data-on="true"] {
+    background: var(--accent-dim); border-color: var(--border-hi); color: var(--accent);
+  }
+  .statechip .sc-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  /* the hush (master-mute) control: a native checkbox + literal label. */
+  .hush { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .hush input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .hush__txt {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .hush input:checked ~ .hush__txt { color: var(--badge-blocked-fg); }
+
+  /* GROUP HEADER -- FOREGROUND (3) above BADGE-IN-PLACE (3), the same partition
+     escalation.js encodes. Hairline between groups: the eye reads severity tiers
+     as a vertical gradient. */
+  .grp {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 12px 16px 6px;
+  }
+  .grp__name {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .grp__hint {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+  .grp--badge { border-top: 1px solid var(--border); margin-top: 6px; }
+
+  /* PER-TYPE ROW: label (mono, tabular) + paired severity dot + preview + enable
+     + thin volume. Foreground rows sit typographically heavier so the dangerous
+     triggers are LOUDER on the page (echoes Badge.svelte severity-by-weight). */
+  .srow {
+    display: grid; align-items: center; gap: 10px;
+    grid-template-columns: minmax(0, 1fr) auto auto 110px;
+    padding: 9px 16px; border-bottom: 1px solid var(--border);
+  }
+  .srow:last-child { border-bottom: 0; }
+  @media (max-width: 560px) {
+    .srow { grid-template-columns: 1fr auto; row-gap: 8px; }
+    .srow__vol { grid-column: 1 / -1; }
+  }
+
+  /* the literal type label is the load-bearing signal (M4 text-first). */
+  .srow__id { display: inline-flex; align-items: center; gap: 9px; min-width: 0; }
+  .sev-dot {
+    width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+    background: currentColor;
+  }
+  .srow__name {
+    font-family: var(--font-d, var(--ff-mono)); font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .srow__type {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px;
+    color: var(--text-dim); letter-spacing: 0.02em;
+  }
+  /* FOREGROUND tier: heavier weight + red dot + the loud red label ink. */
+  .srow[data-tier="foreground"] .srow__name { font-size: 14px; font-weight: 800; color: var(--text-bright); }
+  .srow[data-tier="foreground"] .sev-dot { color: var(--c-block); }
+  /* BADGE-IN-PLACE tier: lighter; variance = guide-yellow dot, advisories = slate. */
+  .srow[data-tier="badge"] .srow__name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .srow[data-tier="badge"][data-sev="warn"] .sev-dot { color: var(--c-guide); }
+  .srow[data-tier="badge"][data-sev="notice"] .sev-dot { color: var(--badge-obs-fg); }
+
+  .srow__enable { display: inline-flex; align-items: center; gap: 7px; }
+  .srow__enable input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .srow__enable .en-txt {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; min-width: 22px;
+  }
+  .srow__enable input:checked ~ .en-txt { color: var(--accent); }
+  .srow__enable input:not(:checked) ~ .en-txt { color: var(--text-dim); }
+
+  .preview {
+    appearance: none; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 10px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border); color: var(--text-bright);
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+  .preview:hover { border-color: var(--border-hi); }
+  .preview[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .preview .pv-glyph { font-size: 11px; line-height: 1; }
+  .preview.is-playing { border-color: var(--accent); color: var(--accent); }
+
+  .srow__vol { display: inline-flex; align-items: center; gap: 8px; }
+  .srow__vol input[type="range"] {
+    width: 74px; accent-color: var(--accent); cursor: pointer;
+  }
+  .srow__vol .vol-num {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; color: var(--text-dim);
+    min-width: 30px; text-align: right;
+  }
+
+  /* ------------------------------------------------------------------------
+     LIVE DEMO STRIP (mockup-only) -- the invisible controller's behaviour made
+     visible: a tiny escalation feed where SOUND is coupled to BADGE visibility.
+     This is the stand-in for App.svelte's Frame-A badge + the 20s ESC_WINDOW.
+  ------------------------------------------------------------------------ */
+  .demo__lede {
+    padding: 12px 16px; font-size: 12px; color: var(--text-dim); line-height: 1.55;
+    border-bottom: 1px solid var(--border);
+  }
+  .demo__lede b { color: var(--text); }
+  .demo__ctl {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .btn {
+    appearance: none; font-family: var(--font-h, var(--ff-system));
+    font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 8px 14px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text-bright);
+    transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+  }
+  .btn:hover { border-color: var(--border-hi); }
+  .btn--primary { background: var(--accent); color: #1a1206; border-color: var(--accent); }
+  .btn--primary:hover { filter: brightness(1.06); }
+  .demo__hint {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; color: var(--text-ui);
+    letter-spacing: 0.02em;
+  }
+
+  /* the active escalation card -- the BADGE is the signal; the speaker glyph +
+     "AUDIBLE" tag only CONFIRM the badge is currently sounding. */
+  .live {
+    min-height: 96px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .live__empty {
+    color: var(--text-dim); font-style: italic; font-size: 13px;
+    padding: 16px 0; text-align: center;
+  }
+  .live__row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-row);
+  }
+  .live__row[data-tier="foreground"] { border-color: var(--badge-ar-border); }
+  .live__meta {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; color: var(--text-dim);
+  }
+  .live__spacer { flex: 1 1 auto; }
+  /* AUDIBLE tag: paired text + speaker glyph; visible ONLY while the tone loops,
+     so the operator SEES that silence == badge cleared. */
+  .audible {
+    display: none; align-items: center; gap: 6px;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px;
+    background: var(--accent-dim); border: 1px solid var(--border-hi); color: var(--accent);
+  }
+  .audible[data-on="true"] { display: inline-flex; }
+  .audible .spk { animation: ring 1s ease-in-out infinite; }
+  @keyframes ring { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+  /* the badge-visibility window bar: drains over 20s, then the row clears +
+     the tone stops. PROVES M5 coupling (sound bound to the existing window). */
+  .winbar {
+    width: 100%; height: 4px; border-radius: 999px; overflow: hidden;
+    background: var(--bg-row-alt); border: 1px solid var(--border);
+  }
+  .winbar__fill { height: 100%; background: var(--accent); width: 100%; }
+  .live__row[data-tier="foreground"] .winbar__fill { background: var(--badge-ar-fg); }
+
+  /* event log (mockup-only) -- a terse audit of each play()/stop() the operator
+     can read after a burst. */
+  .log {
+    margin: 0; padding: 0 16px 12px; list-style: none;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; color: var(--text-dim);
+    max-height: 132px; overflow-y: auto;
+  }
+  .log li { padding: 3px 0; border-bottom: 1px dashed var(--border); display: flex; gap: 8px; }
+  .log li:last-child { border-bottom: 0; }
+  .log .lg-ts { color: var(--text-ui); }
+  .log .lg-play { color: var(--accent); }
+  .log .lg-stop { color: var(--badge-blocked-fg); }
+  .log .lg-mute { color: var(--text-dim); }
+
+  /* ========================================================================
+     PAIRED LABEL+COLOR BADGES (M4). text + bg + border + leading square swatch.
+  ======================================================================== */
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; white-space: nowrap;
+  }
+  .badge::before {
+    content: ''; width: 7px; height: 7px; border-radius: 2px; background: currentColor; opacity: 0.9;
+  }
+  .badge--ar       { color: var(--badge-ar-fg);  background: var(--badge-ar-bg);  border: 2px solid var(--badge-ar-border); }
+  .badge--blocked  { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); }
+  .badge--warn     { color: var(--badge-warn-fg); background: var(--badge-warn-bg); border: 1px dashed var(--badge-warn-border); }
+  .badge--observing{ color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+
+  /* ========================================================================
+     FOOTNOTE -- BETA-gated annotation (footprint: ui-only, additive).
+  ======================================================================== */
+  .gate-note {
+    margin-top: 30px; display: flex; gap: 12px; align-items: flex-start;
+    padding: 14px 16px; border-radius: 8px;
+    background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border);
+  }
+  .gate-note__icon {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-weight: 800;
+    font-size: 12px; color: var(--badge-obs-fg);
+    border: 2px solid var(--badge-obs-border); border-radius: 4px; padding: 2px 7px;
+    letter-spacing: 0.06em;
+  }
+  .gate-note__text { font-size: 13px; color: #334155; line-height: 1.55; }
+  .gate-note__text b { color: #1e293b; }
+  .gate-note__text code {
+    font-family: var(--ff-mono); font-size: 12px; color: #1e293b;
+    background: rgba(255,255,255,0.5); padding: 1px 4px; border-radius: 3px;
+  }
+
+  /* the OFF veil over the settings sub-panel -- when the gate is OFF the panel
+     is not rendered in the real UI; here we curtain it so the operator SEES the
+     gated relationship without losing the layout. */
+  .gated-veil {
+    position: relative;
+  }
+  .gated-veil[data-on="false"] .card__body,
+  .gated-veil[data-on="false"] .master,
+  .gated-veil[data-on="false"] .grp { opacity: 0.16; pointer-events: none; filter: grayscale(1); }
+  .gated-veil[data-on="false"]::after {
+    content: 'OFF -- not mounted. With the flag false the controller registers no subscriber and never touches AudioContext (zero runtime cost).';
+    position: absolute; inset: 50px 14px auto 14px;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 12px; line-height: 1.5;
+    color: var(--text-ui); text-align: center;
+    padding: 14px; border: 1px dashed var(--border); border-radius: 8px;
+    background: var(--bg-card);
+  }
+
+  /* A11Y: 2px amber focus ring + 2px offset on every interactive element. */
+  .switch:focus-visible, .preview:focus-visible, .btn:focus-visible,
+  .srow__vol input:focus-visible, .srow__enable input:focus-visible,
+  .hush input:focus-visible, .themeSel:focus-visible {
+    outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 6px;
+  }
+
+  /* theme switch (top-right of the demo card head). */
+  .themeSel {
+    appearance: none; -webkit-appearance: none;
+    background: var(--bg-card); color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: var(--font-h, var(--ff-system)); font-size: 12px;
+    padding: 4px 22px 4px 8px; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-ui) 50%),
+                      linear-gradient(135deg, var(--text-ui) 50%, transparent 50%);
+    background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* Reduced motion: drop preview/transition motion. (Real component also honours
+     html[data-motion='reduce'].) */
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion='allow']) * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ============ MOCKUP META STRIP: title + BETA-gated pill + toggle ====== -->
+    <div class="meta">
+      <h1 class="meta__title">Escalation sonification
+        <span>-- derived confirmation layer (#44)</span></h1>
+      <div class="meta__spacer"></div>
+      <span class="beta-pill">
+        <b>BETA</b><span>-- default OFF, toggled in Settings &gt; BETA features</span>
+      </span>
+      <div class="gate">
+        <span>Feature</span>
+        <button id="featureGate" class="switch" type="button" aria-pressed="true"
+                aria-label="Enable escalation sonification beta feature">
+          <span class="switch__knob"></span>
+        </button>
+        <span class="gate__state" id="gateState" data-on="true">ON</span>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:7px;">
+        <label class="sr-only" for="themeSelect">Color theme</label>
+        <select id="themeSelect" class="themeSel" aria-label="Color theme">
+          <option value="obsidian">Obsidian</option>
+          <option value="phosphor">Phosphor</option>
+          <option value="paper">Paper</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ============ EXPLAINER ================================================= -->
+    <div class="intro">
+      <div class="blurb">
+        <h2>What this is</h2>
+        <p>The monitor-first operator runs StreamManager on a side screen while
+          working elsewhere. A purely visual ACTION-REQUIRED pulse is invisible on
+          an unwatched screen. This turns the dashboard into a
+          <b>pre-attentive summons</b>: when a foreground-eligible escalation
+          enters the existing <code>escalationStore</code>, the controller plays
+          the type's distinct tone. Ear pulls attention -- glance -- read the
+          paired badge -- act.</p>
+        <p>Sound is the <b>summons</b>, the badge is the <b>signal</b>. The tone
+          stops the moment the badge clears (the same 20s
+          <code>ESC_WINDOW</code> the Frame-A foreground already uses), so
+          <b>silence == handled</b>. Sound can never be the lone signal: a deaf or
+          muted operator loses nothing -- the visible badge stays fully
+          sufficient.</p>
+      </div>
+      <div class="blurb">
+        <h2>Try it</h2>
+        <p>1. Press <b>Preview</b> on any row to learn that type's tone
+          deliberately (on your terms, not during a real incident).</p>
+        <p>2. Press <b>Simulate burst</b> -- 5 mock escalations enter in sequence;
+          each plays its grammar tone and the window bar drains over
+          <code>~6s</code> (compressed from 20s for the demo), then the badge
+          clears and the tone stops.</p>
+        <p>3. Toggle <b>Master mute</b> ("I'm in a meeting, hush"), flip a row OFF,
+          or flip the <b>Feature</b> gate OFF -- play() is suppressed with no
+          error and (gate OFF) the subscriber tears down entirely.</p>
+      </div>
+    </div>
+
+    <!-- ============ MAIN GRID: settings sub-panel + live demo ================= -->
+    <div class="grid">
+
+      <!-- SETTINGS SUB-PANEL (the only VISIBLE real surface) ------------------ -->
+      <section class="card gated-veil" id="panel" data-on="true"
+               aria-label="Sonification settings (Settings &gt; BETA features sub-panel)">
+        <div class="card__head">
+          <span class="card__title">Settings &gt; BETA &gt; Escalation sonification</span>
+        </div>
+
+        <!-- MASTER ROW: paired ON/OFF state chip + one-keystroke hush. -->
+        <div class="master">
+          <span class="master__label">Sonification</span>
+          <span class="statechip" id="masterState" data-on="true" aria-hidden="true">
+            <span class="sc-dot"></span><span id="masterStateTxt">ON</span>
+          </span>
+          <span class="master__spacer"></span>
+          <label class="hush" title="Hush all tones without changing per-type prefs">
+            <input type="checkbox" id="masterMute"
+                   aria-label="Master mute -- hush all escalation tones, currently off" />
+            <span class="hush__txt" id="hushTxt">Master mute</span>
+          </label>
+        </div>
+
+        <!-- GROUP: FOREGROUND (3) -- the hard triggers, typographically louder -->
+        <div class="grp grp--foreground">
+          <span class="grp__name">Foreground triggers</span>
+          <span class="grp__hint">-- auto-foreground + ACTION REQUIRED badge</span>
+        </div>
+        <div class="card__body" id="fgRows"><!-- rows injected --></div>
+
+        <!-- GROUP: BADGE-IN-PLACE (3) -- advisories, quiet-and-distinct -->
+        <div class="grp grp--badge">
+          <span class="grp__name">Badge-in-place advisories</span>
+          <span class="grp__hint">-- flag in place, never steal focus</span>
+        </div>
+        <div class="card__body" id="biRows"><!-- rows injected --></div>
+      </section>
+
+      <!-- LIVE DEMO STRIP (mockup-only -- the invisible controller made visible) -->
+      <section class="card" aria-label="Live behaviour demo (sound coupled to badge visibility)">
+        <div class="card__head">
+          <span class="card__title">Live -- sound coupled to badge</span>
+          <span class="badge badge--observing">DEMO</span>
+        </div>
+        <p class="demo__lede">
+          The real controller renders <b>no DOM</b>. This strip stands in for
+          Frame A's badge + the 20s window so you can SEE the coupling: a tone
+          loops only while its badge is up; when the window drains the badge
+          clears and the tone stops -- <b>silence confirms handled</b>.
+        </p>
+        <div class="demo__ctl">
+          <button class="btn btn--primary" id="btnBurst" type="button">Simulate burst</button>
+          <button class="btn" id="btnClear" type="button">Clear</button>
+          <span class="demo__hint" id="demoHint">idle</span>
+        </div>
+        <div class="live" id="live" aria-live="polite">
+          <div class="live__empty" id="liveEmpty">No active escalation -- silence == nothing needs you.</div>
+        </div>
+        <ul class="log" id="log" aria-label="Sonification event log"></ul>
+      </section>
+    </div>
+
+    <!-- ============ FOOTPRINT FOOTNOTE (ui-only, BETA-gated, additive) ======== -->
+    <div class="gate-note" role="note">
+      <span class="gate-note__icon">UI</span>
+      <span class="gate-note__text">
+        <b>Footprint: ui-only -- additive, no FROZEN touch.</b>
+        Three new files + two additive edits: an INVISIBLE composition-root
+        <code>lib/components/beta/SonificationController.svelte</code> (subscribes
+        to the existing <code>escalationStore</code>, plays Web Audio tones, no
+        visible DOM), a UI-only <code>lib/stores/sonification.js</code> (per-type
+        enabled+volume + master mute, localStorage mirror), and a data-only
+        <code>lib/sound/grammar.js</code> leaf (frozen synthesis table keyed 1:1
+        to <code>lib/escalation.js</code>). The edits append registry key
+        <code>sonification</code> (num 44, group monitor, defaultEnabled false)
+        and mount the controller behind <code>$betaFlags['sonification']</code> at
+        the App.svelte composition root. <b>No new bus envelope, no new table, no
+        new endpoint, no new server data.</b> Per-type prefs are client-side only
+        -- never persisted server-side, never sent over the bus. With the flag
+        OFF the controller registers no subscriber and never touches AudioContext.
+      </span>
+    </div>
+
+  </div>
+
+  <!-- aria-live region for screen-reader announcements (sound is supplemental). -->
+  <p class="sr-only" id="srLive" aria-live="polite"></p>
+
+<script>
+(function () {
+  "use strict";
+
+  // ====================================================================
+  // GRAMMAR table (data-only) -- mirrors lib/sound/grammar.js. Pure synthesis
+  // params keyed 1:1 to escalation.js trigger types. No assets, no DOM.
+  // (mockDataSpec GRAMMAR table, verbatim.)
+  // ====================================================================
+  var GRAMMAR = Object.freeze({
+    new_pattern:                    { waveform: "sine",     freqs: [523.25, 659.25],      durationMs: 200,  repeatMs: 8000 },
+    low_confidence:                 { waveform: "sine",     freqs: [523.25, 659.25],      durationMs: 200,  repeatMs: 8000 },
+    governance_variance_alert:      { waveform: "triangle", freqs: [659.25, 587.33, 523.25], durationMs: 300, repeatMs: 4000 },
+    desktop_pause:                  { waveform: "square",   freqs: [880, 880],            durationMs: 100,  repeatMs: 3000 },
+    governance_negative_regression: { waveform: "sawtooth", freqs: [80, 440],             durationMs: 1000, repeatMs: 3000 },
+    "static-rule":                  { waveform: "sawtooth", freqs: [80, 440],             durationMs: 1000, repeatMs: 3000 }
+  });
+
+  // Type metadata: M2 disposition + severity + canonical badge label, mirrors
+  // lib/escalation.js. The controller DEFERS to this table -- never re-decides.
+  var TYPES = [
+    // FOREGROUND tier (the only 3 that may auto-foreground) ----------------
+    { type: "desktop_pause",                  label: "PAUSE",         tier: "foreground", sev: "critical", badge: "ar",
+      desc: "Desktop orchestration paused -- operator attention required" },
+    { type: "governance_negative_regression", label: "NEG REGRESSION", tier: "foreground", sev: "critical", badge: "ar",
+      desc: "Governance negative regression detected" },
+    { type: "static-rule",                    label: "STATIC RULE",   tier: "foreground", sev: "critical", badge: "blocked",
+      desc: "Static rule fired -- hard governance trigger" },
+    // BADGE-IN-PLACE tier (never foreground) -------------------------------
+    { type: "governance_variance_alert",      label: "VARIANCE",      tier: "badge", sev: "warn",   badge: "warn",
+      desc: "Governance variance alert -- flagged in place" },
+    { type: "new_pattern",                    label: "NEW PATTERN",   tier: "badge", sev: "notice", badge: "observing",
+      desc: "New behavioural pattern observed -- flagged in place" },
+    { type: "low_confidence",                 label: "LOW CONFIDENCE", tier: "badge", sev: "notice", badge: "observing",
+      desc: "Low-confidence decision -- flagged in place" }
+  ];
+
+  // ====================================================================
+  // MOCK sonification store (mockDataSpec) -- per-type enabled+volume + mute.
+  // ====================================================================
+  var store = {
+    master_muted: false,
+    types: {
+      new_pattern:                    { enabled: true, volume: 0.4 },
+      low_confidence:                 { enabled: true, volume: 0.4 },
+      governance_variance_alert:      { enabled: true, volume: 0.55 },
+      desktop_pause:                  { enabled: true, volume: 0.7 },
+      governance_negative_regression: { enabled: true, volume: 0.8 },
+      "static-rule":                  { enabled: true, volume: 0.8 }
+    }
+  };
+
+  // MOCK escalation feed (mockDataSpec) -- driven in order for "Simulate burst".
+  var MOCK_FEED = [
+    { type: "new_pattern",                    sessionId: "sess-mock-1" },
+    { type: "governance_variance_alert",      sessionId: "sess-mock-1" },
+    { type: "desktop_pause",                  sessionId: "sess-mock-2" },
+    { type: "static-rule",                    sessionId: "sess-mock-2" },
+    { type: "governance_negative_regression", sessionId: "sess-mock-3" }
+  ];
+
+  // Demo window: the real ESC_WINDOW_MS is 20000; compressed to 6000 for the
+  // mockup so a burst is watchable. The COUPLING is identical: tone loops only
+  // while the window is live; window expiry clears the badge AND stops the tone.
+  var DEMO_WINDOW_MS = 6000;
+
+  // ====================================================================
+  // WEB AUDIO -- AudioContext oscillators (no static assets shipped). Mirrors
+  // what SonificationController.svelte does. Lazily created on first gesture
+  // (browser autoplay policy). play(type) renders the grammar tone for that type.
+  // ====================================================================
+  var actx = null;
+  function audio() {
+    if (!actx) {
+      try { actx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (_e) { actx = null; }
+    }
+    if (actx && actx.state === "suspended") { try { actx.resume(); } catch (_e) {} }
+    return actx;
+  }
+
+  // play one rendering of a type's grammar (a short sequence of freqs).
+  function play(type) {
+    // GATE ORDER mirrors the real controller:
+    //   feature flag -> master mute -> per-type enabled -> grammar exists.
+    if (!gateOn) return false;
+    if (store.master_muted) return false;
+    var pref = store.types[type];
+    if (!pref || !pref.enabled) return false;
+    var g = GRAMMAR[type];
+    if (!g) return false;
+    var ctx = audio();
+    if (!ctx) return false;
+
+    var t0 = ctx.currentTime;
+    var step = g.durationMs / 1000;
+    var vol = Math.max(0, Math.min(1, pref.volume)) * 0.18; // headroom-limited
+    for (var i = 0; i < g.freqs.length; i++) {
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.type = g.waveform;
+      osc.frequency.value = g.freqs[i];
+      var start = t0 + i * step;
+      var end = start + step;
+      // tiny attack/release so square/sawtooth don't click.
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(vol, start + Math.min(0.02, step * 0.3));
+      gain.gain.exponentialRampToValueAtTime(0.0001, end);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(end + 0.02);
+    }
+    return true;
+  }
+
+  // ====================================================================
+  // ELEMENT HANDLES + STATE
+  // ====================================================================
+  var gateBtn   = document.getElementById("featureGate");
+  var gateState = document.getElementById("gateState");
+  var panel     = document.getElementById("panel");
+  var masterMute= document.getElementById("masterMute");
+  var hushTxt   = document.getElementById("hushTxt");
+  var masterCh  = document.getElementById("masterState");
+  var masterTxt = document.getElementById("masterStateTxt");
+  var fgRows    = document.getElementById("fgRows");
+  var biRows    = document.getElementById("biRows");
+  var live      = document.getElementById("live");
+  var liveEmpty = document.getElementById("liveEmpty");
+  var logEl     = document.getElementById("log");
+  var btnBurst  = document.getElementById("btnBurst");
+  var btnClear  = document.getElementById("btnClear");
+  var demoHint  = document.getElementById("demoHint");
+  var themeSel  = document.getElementById("themeSelect");
+  var srLive    = document.getElementById("srLive");
+
+  var gateOn = true;
+  var active = {};   // sessionId+type -> { row, timer, repeat, deadline }
+  var burstTimer = null;
+
+  // ---- THEME SWITCH ----------------------------------------------------
+  themeSel.addEventListener("change", function (e) {
+    document.documentElement.setAttribute("data-theme", e.currentTarget.value);
+  });
+
+  // ---- LOG -------------------------------------------------------------
+  function logLine(kind, text) {
+    var li = document.createElement("li");
+    var ts = new Date().toLocaleTimeString();
+    var cls = kind === "play" ? "lg-play" : kind === "stop" ? "lg-stop" : "lg-mute";
+    li.innerHTML = '<span class="lg-ts">' + ts + '</span>' +
+                   '<span class="' + cls + '">' + kind.toUpperCase() + '</span>' +
+                   '<span>' + text + '</span>';
+    logEl.insertBefore(li, logEl.firstChild);
+    while (logEl.children.length > 40) logEl.removeChild(logEl.lastChild);
+  }
+
+  // ====================================================================
+  // SETTINGS SUB-PANEL -- render one row per type, grouped by tier.
+  // ====================================================================
+  function pct(v) { return Math.round(v * 100); }
+
+  function makeRow(t) {
+    var pref = store.types[t.type];
+    var row = document.createElement("div");
+    row.className = "srow";
+    row.setAttribute("data-tier", t.tier);
+    row.setAttribute("data-sev", t.sev);
+
+    // id: severity dot + canonical UPPERCASE label (text-first, M4) + raw type.
+    var id = document.createElement("div");
+    id.className = "srow__id";
+    id.innerHTML =
+      '<span class="sev-dot" aria-hidden="true"></span>' +
+      '<span style="min-width:0;">' +
+        '<span class="srow__name">' + t.label + '</span> ' +
+        '<span class="srow__type">' + t.type + '</span>' +
+      '</span>';
+    row.appendChild(id);
+
+    // preview button (plays the tone once).
+    var pv = document.createElement("button");
+    pv.className = "preview";
+    pv.type = "button";
+    pv.innerHTML = '<span class="pv-glyph" aria-hidden="true">&#9658;</span>Preview';
+    pv.setAttribute("aria-label", t.label + " escalation sound, preview tone");
+    pv.addEventListener("click", function () {
+      var ok = play(t.type);
+      pv.classList.add("is-playing");
+      setTimeout(function () { pv.classList.remove("is-playing"); }, 600);
+      logLine(ok ? "play" : "mute",
+        "preview " + t.type + (ok ? "" : " (suppressed)"));
+      srLive.textContent = ok
+        ? "Played " + t.label + " preview tone."
+        : t.label + " preview suppressed (muted or disabled).";
+    });
+
+    // enable checkbox (native; paired ON/OFF text).
+    var en = document.createElement("label");
+    en.className = "srow__enable";
+    en.title = "Enable the " + t.label + " tone";
+    var cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = pref.enabled;
+    cb.setAttribute("aria-label",
+      t.label + " escalation sound, currently " + (pref.enabled ? "ON" : "OFF"));
+    var enTxt = document.createElement("span");
+    enTxt.className = "en-txt";
+    enTxt.textContent = pref.enabled ? "ON" : "OFF";
+    cb.addEventListener("change", function () {
+      pref.enabled = cb.checked;
+      enTxt.textContent = cb.checked ? "ON" : "OFF";
+      cb.setAttribute("aria-label",
+        t.label + " escalation sound, currently " + (cb.checked ? "ON" : "OFF"));
+      pv.disabled = !cb.checked;
+      logLine("mute", t.type + " enabled=" + cb.checked);
+    });
+    en.appendChild(cb); en.appendChild(enTxt);
+
+    // volume range (native; arrow-key adjustable; live aria-label).
+    var vol = document.createElement("div");
+    vol.className = "srow__vol";
+    var rng = document.createElement("input");
+    rng.type = "range"; rng.min = "0"; rng.max = "100"; rng.step = "5";
+    rng.value = String(pct(pref.volume));
+    rng.setAttribute("aria-label",
+      t.label + " escalation sound volume, " + pct(pref.volume) + " percent");
+    var num = document.createElement("span");
+    num.className = "vol-num";
+    num.textContent = pct(pref.volume) + "%";
+    rng.addEventListener("input", function () {
+      pref.volume = Number(rng.value) / 100;
+      num.textContent = rng.value + "%";
+      rng.setAttribute("aria-label",
+        t.label + " escalation sound volume, " + rng.value + " percent");
+    });
+    vol.appendChild(rng); vol.appendChild(num);
+
+    row.appendChild(pv); row.appendChild(en); row.appendChild(vol);
+    return row;
+  }
+
+  function renderPanel() {
+    fgRows.innerHTML = ""; biRows.innerHTML = "";
+    TYPES.forEach(function (t) {
+      (t.tier === "foreground" ? fgRows : biRows).appendChild(makeRow(t));
+    });
+  }
+
+  // ---- MASTER MUTE -----------------------------------------------------
+  masterMute.addEventListener("change", function () {
+    store.master_muted = masterMute.checked;
+    hushTxt.textContent = masterMute.checked ? "Muted" : "Master mute";
+    masterCh.setAttribute("data-on", (gateOn && !masterMute.checked) ? "true" : "false");
+    masterTxt.textContent = (!gateOn) ? "OFF" : (masterMute.checked ? "HUSHED" : "ON");
+    masterMute.setAttribute("aria-label",
+      "Master mute -- hush all escalation tones, currently " +
+      (masterMute.checked ? "on" : "off"));
+    if (masterMute.checked) {
+      // hush stops every looping tone immediately (badges stay -- sound only).
+      Object.keys(active).forEach(function (k) {
+        if (active[k].repeat) { clearInterval(active[k].repeat); active[k].repeat = null; }
+        var aud = active[k].row.querySelector(".audible");
+        if (aud) aud.setAttribute("data-on", "false");
+      });
+      logLine("mute", "master mute ON -- all tones hushed (badges remain)");
+    } else {
+      logLine("mute", "master mute OFF -- tones re-armed");
+    }
+  });
+
+  // ====================================================================
+  // LIVE DEMO -- enqueue an escalation: render the badge row, start the
+  // looping tone, drain the window, then clear badge + stop tone (M5).
+  // ====================================================================
+  function meta(type) {
+    for (var i = 0; i < TYPES.length; i++) if (TYPES[i].type === type) return TYPES[i];
+    return null;
+  }
+
+  function enqueue(entry) {
+    var t = meta(entry.type);
+    if (!t) return;
+    if (liveEmpty) liveEmpty.style.display = "none";
+    var key = entry.sessionId + ":" + entry.type + ":" + Date.now();
+
+    var row = document.createElement("div");
+    row.className = "live__row";
+    row.setAttribute("data-tier", t.tier);
+    row.innerHTML =
+      '<span class="badge badge--' + t.badge + '">' + t.label + '</span>' +
+      '<span class="live__meta">' + entry.sessionId + ' &middot; ' + t.type + '</span>' +
+      '<span class="live__spacer"></span>' +
+      '<span class="audible" data-on="false">' +
+        '<span class="spk" aria-hidden="true">&#9834;</span>AUDIBLE</span>' +
+      '<span class="winbar"><span class="winbar__fill"></span></span>';
+    live.appendChild(row);
+
+    var aud  = row.querySelector(".audible");
+    var fill = row.querySelector(".winbar__fill");
+
+    // start the loop: play once immediately, then repeat at the grammar interval
+    // (compressed so the demo loops a few times inside the 6s window).
+    var g = GRAMMAR[entry.type];
+    var didPlay = play(entry.type);
+    if (didPlay) { aud.setAttribute("data-on", "true"); }
+    logLine(didPlay ? "play" : "mute",
+      entry.type + " enter (" + entry.sessionId + ")" + (didPlay ? "" : " (suppressed)"));
+    srLive.textContent = (didPlay ? "Sounding: " : "Badge up (silent): ") + t.label;
+
+    var demoRepeat = Math.max(1200, Math.min(g.repeatMs, 2200));
+    var rec = { row: row, repeat: null, timer: null };
+    rec.repeat = setInterval(function () {
+      if (!gateOn || store.master_muted) return; // hush keeps the badge, drops sound
+      var ok = play(entry.type);
+      if (ok) aud.setAttribute("data-on", "true");
+    }, demoRepeat);
+
+    // window bar drain -> on expiry, clear the badge AND stop the tone (M5).
+    var started = Date.now();
+    var raf = setInterval(function () {
+      var left = Math.max(0, DEMO_WINDOW_MS - (Date.now() - started));
+      fill.style.width = (left / DEMO_WINDOW_MS * 100) + "%";
+      if (left <= 0) { stop(); }
+    }, 80);
+
+    function stop() {
+      clearInterval(rec.repeat); rec.repeat = null;
+      clearInterval(raf);
+      aud.setAttribute("data-on", "false");
+      logLine("stop", entry.type + " window cleared -- badge gone, tone stopped");
+      // fade the row out (badge cleared); silence == handled.
+      row.style.transition = "opacity 400ms ease";
+      row.style.opacity = "0";
+      setTimeout(function () {
+        if (row.parentNode) row.parentNode.removeChild(row);
+        delete active[key];
+        if (live.querySelectorAll(".live__row").length === 0 && liveEmpty) {
+          liveEmpty.style.display = "";
+        }
+      }, 420);
+    }
+    rec.stop = stop;
+    active[key] = rec;
+  }
+
+  // SIMULATE BURST: feed the 5 mock escalations in order, ~1.4s apart, so the
+  // operator hears the GRAMMAR distinguish advisory two-notes from hard-trigger
+  // bass tones, and sees each badge clear (and silence) on window expiry.
+  btnBurst.addEventListener("click", function () {
+    audio(); // unlock on the user gesture
+    if (burstTimer) { clearInterval(burstTimer); burstTimer = null; }
+    var i = 0;
+    demoHint.textContent = "bursting -- 5 escalations";
+    enqueue(MOCK_FEED[i++]);
+    burstTimer = setInterval(function () {
+      if (i >= MOCK_FEED.length) {
+        clearInterval(burstTimer); burstTimer = null;
+        demoHint.textContent = "burst done -- windows draining";
+        return;
+      }
+      enqueue(MOCK_FEED[i++]);
+    }, 1400);
+  });
+
+  btnClear.addEventListener("click", function () {
+    if (burstTimer) { clearInterval(burstTimer); burstTimer = null; }
+    Object.keys(active).forEach(function (k) {
+      if (active[k].stop) active[k].stop();
+    });
+    demoHint.textContent = "cleared";
+  });
+
+  // ====================================================================
+  // FEATURE GATE (default-OFF semantics; shown ON here). OFF -> the controller
+  // is not mounted: panel curtained, audio subscriber torn down, AudioContext
+  // never touched. Zero runtime cost.
+  // ====================================================================
+  function applyGate(on) {
+    gateOn = on;
+    gateBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    gateState.textContent = on ? "ON" : "OFF";
+    gateState.setAttribute("data-on", on ? "true" : "false");
+    panel.setAttribute("data-on", on ? "true" : "false");
+    masterCh.setAttribute("data-on", (on && !store.master_muted) ? "true" : "false");
+    masterTxt.textContent = (!on) ? "OFF" : (store.master_muted ? "HUSHED" : "ON");
+    btnBurst.disabled = !on;
+    if (!on) {
+      // tear down: stop every looping tone + clear active rows.
+      Object.keys(active).forEach(function (k) { if (active[k].stop) active[k].stop(); });
+      if (burstTimer) { clearInterval(burstTimer); burstTimer = null; }
+      demoHint.textContent = "feature OFF -- no subscriber, AudioContext untouched";
+      logLine("mute", "feature OFF -- controller unmounted, subscriber torn down");
+    } else {
+      demoHint.textContent = "idle";
+      logLine("mute", "feature ON -- controller mounted, subscribed to escalationStore");
+    }
+  }
+  gateBtn.addEventListener("click", function () {
+    applyGate(gateBtn.getAttribute("aria-pressed") !== "true");
+  });
+
+  // ---- INIT ------------------------------------------------------------
+  renderPanel();
+  applyGate(true);   // mockup shows the feature ON
+})();
+</script>
+</body>
+</html>

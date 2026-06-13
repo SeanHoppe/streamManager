@@ -48,6 +48,9 @@
   import AdvisoryChip from './AdvisoryChip.svelte';
   import RankedOptionList, { FREE_TEXT_VALUE } from './RankedOptionList.svelte';
   import { postHitlResolve } from '../api.js';
+  import { betaFlags } from '../stores/beta.js';
+  import ConfidenceChip from './beta/ConfidenceChip.svelte';
+  import OperatorCoPilotGestureMacros from './beta/OperatorCoPilotGestureMacros.svelte';
 
   /**
    * pending: one /api/hitl/pending envelope (rendered FROM DATA -- M16). Shape
@@ -296,6 +299,31 @@
   <!-- M8: Learn-Mode advisory chip ABOVE the action buttons. Non-verdict,
        dashed, never bypasses the gate. Renders only when a bias is present. -->
   <AdvisoryChip bias={advisoryBias} confidence={advisoryConfidence} />
+
+  {#if $betaFlags['operator-co-pilot-gesture-macros']}
+    <!-- BETA #17: ranked one-tap macro palette. APPROVE routes the row's
+         EXISTING commit path; TUNE/ESCALATE pre-stage the OVERRIDE picker;
+         SNOOZE dims client-side. Never opens the network, never auto-acts.
+         Renders IN PLACE of the #18 ConfidenceChip (never both at once). -->
+    <OperatorCoPilotGestureMacros
+      {pending}
+      disabled={actionsDisabled}
+      onApprove={commit}
+      onTune={() => { if (!overrideOpen) toggleOverride(); }}
+      onEscalate={() => { if (!overrideOpen) toggleOverride(); }}
+      onSnooze={() => { dispatch('expired', { pendingId, sessionId: pending?.session_id ?? null }); }}
+      onDissent={() => { if (!overrideOpen) toggleOverride(); }}
+    />
+  {:else if $betaFlags['confidence-chip']}
+    <!-- BETA #18: advisory co-pilot confidence chip. Reuses the row's existing
+         commit/override path; never opens the network, never auto-acts. -->
+    <ConfidenceChip
+      {pending}
+      disabled={actionsDisabled}
+      onAccept={commit}
+      onDissent={() => { if (!overrideOpen) toggleOverride(); }}
+    />
+  {/if}
 
   <!-- M6: OVERRIDE ranked picker (revealed). FR-UI-5 ranked list | free text. -->
   {#if overrideOpen}

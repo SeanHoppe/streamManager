@@ -25,5 +25,9 @@ ENVELOPE_KINDS: frozenset[str] = frozenset(
         "audit.canary_observed",
         "audit.probe_failure",
         "audit.hallucination_detected",
+        # ADR-18 Amendment F: emitted ONCE per graduation event (operator
+        # confirm), never on the hot path. Same-PR cassette + soak coverage
+        # mandatory (test_envelope_coverage.py enforces).
+        "pattern_graduated",
     }
 )

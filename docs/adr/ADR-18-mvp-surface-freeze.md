@@ -130,9 +130,9 @@ Current lever ledger after v2.0 P3 rips:
 
 | Lever | Wired in | Dormant cycles | Status |
 |---|---|---|---|
-| _(no wired levers)_ | — | — | Both prior levers ripped at v2.0 P3 — see §"Decommissioned". DORMANT-N gate inert until next lever introduction. |
+| `graduated_short_circuit` (governance `_evaluate_inner_core` graduated-ALLOW branch) | v2.x Amendment F feature PR | DORMANT-0 | Wired at feature-build (first soak-ledger lever post-P3). Metric = graduated-hit fire rate; the Tier-1.5 soak measures it. DORMANT-N strikes per Rule 2 if 0% for 2/3 consecutive ship-gate soaks. |
 
-<!-- WIRED_LEVER_LEDGER_COUNT: 0 -->
+<!-- WIRED_LEVER_LEDGER_COUNT: 1 -->
 
 The HTML comment above is **load-bearing**: v2.0 P4 codifies a
 DORMANT-N gate in `tools/soak_driver.py` that hard-codes a
@@ -744,3 +744,257 @@ Effective cap reading at v2.4 P0 = **8** (well under the prior
 - [ ] Future cycle next-steps files use the verbatim "promotion
       criterion" or "demand signal" language for any seed
       claiming Amendment E exemption.
+
+### 2026-06-13 -- v2.x Amendment F: allow-pattern auto-graduation seam (operator-confirmed static ALLOW)
+
+**Problem.** INTENT.md ("what governance should learn": routine -> ALLOW
+within the POC window) specifies that a command-shape observed ALLOWed at
+high confidence many times with zero operator override is, empirically, a
+rule. Today that knowledge stays implicit: every `git status`, `ruff
+check`, `pytest -q` re-evaluates from scratch (latency + CLI quota)
+instead of graduating to a cheap static ALLOW. The corpus knows the
+answer; the policy never promotes it. The blocker is purely surface:
+promoting a proven-routine shape to a static ALLOW requires (a) a new
+short-circuit in the FROZEN verdict ladder and (b) a new FROZEN bus
+envelope kind. ADR-18 Rule 1 forbids both without this amendment.
+
+**Amendment.** Grant a NARROW, single-purpose exception to Rule 1 for the
+auto-graduation seam, bounded by the invariants below. The exception
+permits exactly:
+
+| FROZEN surface | Permission granted | Bound |
+|---|---|---|
+| `ENVELOPE_KINDS` frozenset (`envelope_kinds.py`) | Add one kind: `"pattern_graduated"` | Emitted ONCE per graduation event (operator confirm), never on the hot path. Same-PR `cassette_record.py` + `soak_driver.py` coverage MANDATORY (`test_envelope_coverage.py` enforces). |
+| `governance._evaluate_inner_core` verdict ladder | Add ONE new short-circuit branch: graduated-rule lookup -> `GovDecision(action="ALLOW", source="graduated")` | Branch is positioned strictly AFTER `fast_precheck` (the safety floor) and is read-only against a new `graduated_rules` table. No other ladder edit. |
+
+No other FROZEN surface moves. `model_router` bands, `RoutingDecision`
+fields, `cli_pool`, `LifecycleBridge`, `wirecli`, and the existing
+governance_decision / lifecycle envelope schemas are untouched.
+
+**Invariants (all MANDATORY -- the amendment is void if any is dropped).**
+
+1. **Safety floor wins, structurally.** `fast_precheck` runs FIRST in
+   `_evaluate_inner_core` (`governance.py:955`) and returns before any
+   graduated-rule branch. A graduated rule therefore CANNOT override a
+   BLOCK/INTERVENE even if one were somehow written. This is the second
+   of two guarantees; the first (below) is that a safety-floor shape can
+   never be graduated in the first place.
+
+2. **Safety-floor shapes are PERMANENTLY ineligible.** The candidate scan
+   excludes any shape that ever matched a safety-floor rule
+   (destructive-shell / force-push / credential-exfil / eval-exec
+   injection -- reuse `_is_safety_priority_content` +
+   `EVAL_EXEC_INJECTION_RE` so the eligibility predicate cannot drift
+   from the precheck regexes). `n_block_ever == 0` is a hard gate. The
+   floor is not learnable.
+
+3. **Operator-confirmed, no auto-apply (M8 absolute).** Graduation NEVER
+   happens automatically. The scan only proposes CANDIDATES; a static
+   ALLOW rule is written ONLY on an explicit one-tap operator confirm.
+   Grep invariant: no code path writes a `graduated_rules` row without an
+   operator-initiated request.
+
+4. **Polarity dual-key on the scan.** The candidate corpus read excludes
+   SM-self: SQL `project_slug NOT IN (STREAM_MANAGER_PROJECT_SLUGS)` +
+   `session_id != BRIDGE_SM_SELF_SESSION_ID` backstop. The endpoint
+   surfaces `excluded_self`.
+
+5. **Reversible.** Every graduation is demote-able; reuse the existing
+   `/api/patterns/{hash}/demote` affordance. A demoted rule stops
+   short-circuiting immediately.
+
+6. **Graduation eligibility predicate (the candidate gate), per shape:**
+   `n_allow >= 30` AND `mean_confidence >= 0.95` AND `n_override == 0`
+   AND `n_block_ever == 0` AND never-matched-safety-floor. (Thresholds
+   are config constants, not magic literals; defaults from the proposal.)
+
+7. **Graduated hits carry no judgment signal.** `source="graduated"` is
+   deliberately NOT added to `ELIGIBLE_SOURCES` (`governance.py:69`); a
+   static ALLOW must not feed the rolling-accuracy window or it ramps the
+   mode ladder (the bug the eligibility gate exists to prevent). Likewise
+   the graduated branch's `matched_hash` is for provenance + demote-keying
+   only: `feedback()` (`:1167`) would otherwise route a graduated hit into
+   `graph.feedback()` and let a static rule mutate the probabilistic
+   graph's success_rate. The impl MUST either guard that call for
+   `source=="graduated"` OR accept warm-keeping as a documented, tested
+   choice -- not leave it implicit.
+
+**Scope.** Touches two FROZEN surfaces under the bounded permission above;
+one new additive table (`graduated_rules`); one read-only scan endpoint;
+one new Svelte component (`GraduationCandidates.svelte`) + poller; reuses
+the existing demote affordance. The feature ships default-OFF behind a
+BETA flag like the other 45; the verdict short-circuit is additionally
+gated so that with the flag OFF and zero graduated rows the ladder is
+byte-for-byte the current ladder (the branch is a no-op lookup returning
+None on an empty table).
+
+**Reason.** This is the data-flywheel INTENT made concrete: routine toil
+stops costing a model call + a glance; the operator's repeated "yes this
+is fine" graduates into a rule once, with explicit sign-off. The
+amendment is the minimum-surface break: one new envelope (audit-only,
+cold path) + one new verdict branch (read-only, safety-floor-subordinate)
++ additive storage. Every safety invariant of the current ladder is
+preserved by construction (precheck-first ordering) AND by the candidate
+filter (safety shapes never graduate).
+
+**Soak tier.** Promotion of this seam past BETA requires a **Tier-1.5
+soak** per the ADR-17 trigger matrix (verdict-path change touching the
+decision ladder), driven from a live non-SM Claude session
+(`feedback_soak_needs_live_non_sm_session`), `--cli-pool-size 2`
+(`feedback_soak_cli_pool_flag`). The soak MUST exercise: (a) a graduated
+ALLOW hit (`source="graduated"`, 0 CLI dispatch), (b) a safety-floor
+shape that is offered NO candidate, (c) the `pattern_graduated` emit on
+confirm, (d) a demote reversing a graduation.
+
+**Lever-ledger note.** The graduated-rule short-circuit is a WIRED LEVER
+under Rule 2. It enters the WIRED_LEVER_LEDGER at wire-time and is subject
+to the DORMANT-N falsify-before-extend gate: if ship-gate soaks measure a
+0% graduated-hit fire rate for two/three consecutive cycles, it strikes
+DORMANT-2 / DORMANT-3 like any other lever. (Expected fire rate is
+non-zero by construction once any rule is graduated against the routine
+corpus mix, but the ledger discipline still applies.)
+
+**Self-application / Acceptance (gates BEFORE any feature code merges).**
+
+> **Feature-PR completion stamp (2026-06-13).** Amendment relocated + feature
+> built in the same working tree. Items 1-8 satisfied below; item 9
+> (Tier-1.5 soak) remains OPEN — firewall-blocked, see note.
+
+- [x] Amendment F text relocated VERBATIM into
+      `ADR-18-mvp-surface-freeze.md` §"Amendments" after the Amendment E
+      block; staging file `ADR-18-amendment-f-draft.md` deleted.
+- [x] WIRED_LEVER_LEDGER table + `<!-- WIRED_LEVER_LEDGER_COUNT -->`
+      counter incremented 0 -> 1 in this feature PR alongside the
+      cassette/soak coverage (`tools/soak_driver.WIRED_LEVER_LEDGER`
+      + the ledger comment + table row above;
+      `tests/test_dormant_ledger_consistency.py` green).
+- [x] `pattern_graduated` added to `ENVELOPE_KINDS`; `cassette_record.py`
+      records it (`_record_pattern_graduated_envelope`); `soak_driver.py`
+      exercises the emit (`_emit_pattern_graduated`);
+      `tests/test_envelope_coverage.py` + `test_cassette_roundtrip.py` green.
+- [x] Safety-floor ineligibility test: a seeded destructive-shell shape at
+      100% ALLOW history is NOT offered as a candidate
+      (`test_graduation_endpoints.test_scan_excludes_safety_floor_shape`,
+      `test_confirm_refuses_safety_floor`) AND if force-written is still
+      precheck-owned (`test_graduated_rules.test_safety_floor_wins_over_graduated`).
+- [x] Polarity test: candidate scan excludes SM-self rows (project_slug +
+      session_id) and surfaces `excluded_self`
+      (`test_graduation_endpoints.test_scan_polarity_excludes_sm_self`,
+      `test_confirm_refuses_sm_self_shape`).
+- [x] Operator-confirm test: no `graduated_rules` row without an explicit
+      confirm (`test_confirm_writes_rule_only_on_request` — scan writes
+      nothing; only POST /confirm writes, re-verifying server-side).
+- [x] Demote test: a graduated rule stops short-circuiting after demote
+      (`test_graduation_endpoints.test_demote_reverses_graduation`,
+      `test_graduated_rules.test_store_demote_stops_lookup`).
+- [x] Mode-ladder test: graduated ALLOW hits do NOT move the rolling
+      window / mode ladder (`source="graduated"` excluded from
+      `ELIGIBLE_SOURCES`) AND a graduated hit does not mutate the graph's
+      success_rate — guarded in `feedback()` (invariant 7, the documented
+      tested choice): `test_graduated_rules.test_graduated_feedback_does_not_
+      mutate_graph` + `..._does_not_move_mode_ladder`.
+- [ ] Tier-1.5 soak run recorded (live non-SM session) before promotion
+      past BETA. **OPEN — blocked:** the only live non-SM sessions are
+      certPortal-cwd, whose `~/.claude/projects/` transcript path is denied
+      by the enforced `.claude/settings.local.json` firewall, and an idle
+      session yields no tail data. Ships default-OFF behind the BETA flag +
+      the `BRIDGE_GRADUATED_RULES` engine gate until the soak runs.
+
+#### Implementation design (informative -- the impl PR realizes this; not law)
+
+##### New envelope: `pattern_graduated`
+
+Audit-only, emitted ONCE at operator-confirm time (never per hit). Shape
+mirrors the `audit.probe` family (cold-path audit envelope):
+
+```
+kind:     "pattern_graduated"
+metadata:
+  shape_hash:        <decision_graph sha256[:16] of canonical_text>
+  canonical_text:    <the graduated shape, generic protocol vocab only>
+  n_allow:           <int>      # corpus evidence at graduation
+  mean_confidence:   <float>
+  n_override:        0
+  n_block_ever:      0
+  excluded_self:     <int>      # polarity rows dropped from the scan
+  confirmed_by:      "operator" # M8 -- always operator, never auto
+  graduated_ts:      <iso8601>
+```
+
+Decision-time HITS do NOT emit this envelope; they carry
+`GovDecision.source="graduated"` (free-string field, additive) so the
+dashboard decisions feed can render provenance without a new envelope on
+the hot path.
+
+##### New table: `graduated_rules` (additive DDL)
+
+```
+CREATE TABLE IF NOT EXISTS graduated_rules (
+    shape_hash      TEXT PRIMARY KEY,   -- decision_graph hash; one canonicalization, no drift
+    canonical_text  TEXT NOT NULL,
+    confirmed_ts    REAL NOT NULL,
+    n_allow_at_grad INTEGER NOT NULL,
+    active          INTEGER NOT NULL DEFAULT 1  -- demote flips to 0
+);
+```
+
+`shape_hash` reuses the existing `DecisionGraph` projection/hash so there
+is exactly one canonicalization shared between the corpus, the graph, and
+the graduated store -- a second hashing scheme would be a drift bug.
+
+##### Verdict-ladder branch (the one new caller path)
+
+Inserted in `_evaluate_inner_core` AFTER the `fast_precheck` return block
+(`governance.py:984`) and BEFORE the probabilistic `graph.match`
+(`governance.py:986`) -- operator-confirmed rules outrank the
+probabilistic graph but are strictly subordinate to the safety floor:
+
+```
+# Amendment F: operator-confirmed graduated ALLOW. Subordinate to
+# fast_precheck (already returned above); outranks graph.match.
+grad = self._graduated_lookup(msg.content)   # see contract below
+if grad is not None:
+    return GovDecision(
+        action="ALLOW",
+        confidence=1.0,
+        reasoning=f"graduated rule (n_allow={grad.n_allow_at_grad}, operator-confirmed)",
+        mode=self.mode,
+        matched_hash=grad.shape_hash,   # provenance/demote-key only; see invariant 7
+        source="graduated",             # deliberately NOT in ELIGIBLE_SOURCES
+    )
+```
+
+`_graduated_lookup` contract (explicit, so the no-op claim is testable):
+checks the BETA flag FIRST and returns None WITHOUT querying when OFF;
+when ON, looks up `graduated_rules` by the decision_graph shape-hash and
+returns the row only if `active == 1`. With the flag OFF or an empty/all-
+demoted table it returns None and the ladder is byte-for-byte the current
+ladder -- a zero-cost early return, no SQL on the OFF path.
+
+##### Design alternatives considered
+
+- **Reuse `graph_patterns` (pin a synthetic Pattern at success_rate=1.0)
+  instead of a new table + branch.** Strictly smaller FROZEN footprint
+  (only the new envelope; the existing `graph.match` short-circuit at
+  `:989` catches it). REJECTED as the primary design because it conflates
+  operator-confirmed provenance with probabilistic online-learned
+  success_rate, and `observe()`/decay would mutate a graduated rule unless
+  a `pinned` flag is added anyway. The new-table design keeps graduation
+  auditable and immutable-by-default. NOTE: this alternative is a strict
+  SUBSET of the permission Amendment F grants, so the operator may elect
+  it at impl time without re-amending.
+
+##### Same-PR cassette + soak coverage
+
+- `cassette_record.py`: add a `pattern_graduated` recording path
+  (audit-envelope shape, analogous to the existing audit.probe coverage);
+  `_KIND_TO_LAYER` is decision-layer only and does NOT gain a row (this
+  envelope is not a decision layer).
+- `soak_driver.py`: add a `_write_pattern_graduated(...)` helper modeled
+  on `_write_ppp_probe` (`:1559`, which writes `audit.probe` directly) to
+  emit one synthetic `pattern_graduated` envelope so the soak corpus
+  covers the kind without requiring a live operator-confirm in the soak;
+  keep `--cli-pool-size 2`.
+- `tests/test_envelope_coverage.py`: passes once both above land.
+
+---

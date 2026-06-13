@@ -177,7 +177,11 @@
   /* ACTION REQUIRED -- amber #d97706 on #fef3c7, 2px solid amber pulsing
      border. Heaviest type weight: this is the one true escalation surface. */
   .ar-action-required {
-    color: #d97706;
+    /* ACTION REQUIRED text darkened to AA on the theme-invariant #fef3c7 chip
+       (was #d97706 = 2.86:1, below AA). Same hue; bg/border/weight/border-color
+       and the pulse animation unchanged so the escalation identity is preserved
+       -- only the text ink darkens. */
+    color: #b45309;
     background: #fef3c7;
     border: 2px solid #d97706;
     font-weight: 800;
@@ -193,20 +197,26 @@
   }
 
   .ar-decided {
-    color: #16a34a;
+    /* DECIDED text darkened to AA on the theme-invariant #dcfce7 chip (was
+       #16a34a = 3.0:1, below AA). Same hue; bg/border/weight unchanged. */
+    color: #15803d;
     background: #dcfce7;
     border: 1px solid #86efac;
   }
 
   .ar-blocked {
-    color: #dc2626;
+    /* BLOCKED text darkened to AA on the theme-invariant #fee2e2 chip (was
+       #dc2626 = 3.95:1, below AA). Same hue; bg/border/weight unchanged. */
+    color: #b91c1c;
     background: #fee2e2;
     border: 2px solid #dc2626;
     font-weight: 700;
   }
 
   .ar-warn {
-    color: #ea580c;
+    /* WARN text darkened to AA on the theme-invariant #ffedd5 chip (was #ea580c
+       = 3.1:1, below AA). The dashed border keeps the orange accent identity. */
+    color: #9a3412;
     background: #ffedd5;
     border: 1px dashed #ea580c;
   }

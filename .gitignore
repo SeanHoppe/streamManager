@@ -45,8 +45,8 @@ Thumbs.db
 .claude/scheduled_tasks.lock
 
 # Replay reports (may contain transcript-derived path/file names).
-# The directory itself is tracked so `reports/axe-*` audit artifacts
-# (NFR-UI-1) commit. Specific noisy outputs are excluded by glob.
+# The reports/ dir is tracked for md summaries (axe-latest.md etc.); noisy
+# machine outputs are excluded by glob (see axe-*.json rule lower down).
 reports/cli_failures.jsonl
 reports/dashboard*.log
 reports/soak_*
@@ -55,8 +55,21 @@ reports/replay_*.md
 
 # Local-only dev artifacts (per-session, ephemeral)
 .claude/worktrees/
+.claude/state/
 tmp/
 tmpv2-*.log
+
+# Tool caches (per-machine, regenerable)
+.understand-anything/
+
+# Review/walkthrough screenshots + scratch outputs (no md refs, not history).
+reports/*.png
+reports/_*
+
+# axe-*.json are machine DOM dumps (~1.45M lines across a run history) — too
+# heavy for main history. NFR-UI-1 evidence is the live `npm run axe` gate +
+# the regenerated reports/axe-latest.md human summary (tracked).
+reports/axe-*.json
 
 # ADR-20: KingMode UI redesign EXPERIMENTAL spike build artifacts.
 # Source under dashboard/ui-next/ is tracked; node_modules + build output are not.

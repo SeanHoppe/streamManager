@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<!--
+  session-pinning.html -- KingMode BETA mockup for feature #25
+  "Session-per-Agent Pinning swim-lane (Frame B)".
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written.
+  Self-contained: inline <style> + inline <script>, no external assets/CDNs/fonts.
+  System font stack only. ASCII-only (no smart quotes, no em-dashes -- "--", no
+  box-drawing). The CSS variables below are lifted VERBATIM from
+  dashboard/ui-next/src/styles/theme.css so this previews the REAL tokens across
+  obsidian / phosphor / paper.
+
+  WHAT THIS DEMONSTRATES (mockDataSpec): "developer" has the OLDEST last_seen and
+  would normally sink into the idle group off the bottom of a 13-inch viewport.
+  It is PINNED, so it renders in a new "PINNED" group at row 1 -- a fixed gaze
+  anchor ABOVE the auto "ACTIVE IN WINDOW" group. Pin fill is a DISTINCT, calm
+  slate-cyan -- NEVER the FROZEN amber action-required identity (theme.css:75,181).
+-->
+<html lang="en" data-theme="obsidian" data-motion="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Session-per-Agent Pinning swim-lane</title>
+<style>
+  /* === theme tokens lifted verbatim from theme.css ===================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+  }
+  [data-theme="obsidian"] {
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018;
+    --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,0.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,0.09);
+    /* PIN TOKEN (new, per-feature): desaturated slate-cyan. Deliberately NOT
+       amber. Reads as "anchored / structural", orthogonal to action language. */
+    --pin-fg:#67c5d6; --pin-bg:rgba(103,197,214,0.13); --pin-bd:rgba(103,197,214,0.45);
+    --live-fg:#22c55e;
+  }
+  [data-theme="phosphor"] {
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03;
+    --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,0.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,0.07);
+    /* pin token tuned for green-on-black: cool cyan, still non-action. */
+    --pin-fg:#5fe0ff; --pin-bg:rgba(95,224,255,0.10); --pin-bd:rgba(95,224,255,0.40);
+    --live-fg:#39ff14;
+  }
+  [data-theme="paper"] {
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea;
+    --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,0.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,0.07);
+    /* pin token darkened for AAA on a light surface (>=7:1 on cream chip bg). */
+    --pin-fg:#0c5563; --pin-bg:#dbeef2; --pin-bd:#0c5563;
+    --live-fg:#16a34a;
+  }
+  /* ACTION-REQUIRED amber badge tokens (theme-invariant, FROZEN -- M4).
+     Present ONLY so the mock can show the M3 action count in its real colour
+     RIGHT NEXT TO the pin count, proving the two are visually distinct. */
+  :root {
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 0 0 4rem;
+  }
+
+  /* === page chrome ===================================================== */
+  .page { max-width: 880px; margin: 0 auto; padding: 1.5rem 1.25rem; }
+
+  .titlebar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
+    padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+  }
+  .titlebar h1 {
+    margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-bright); flex: 1 1 auto; min-width: 14rem;
+  }
+  .titlebar .sub {
+    display: block; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.04em;
+    color: var(--text-dim); text-transform: none; margin-top: 0.15rem;
+  }
+
+  /* BETA pill (paired text + color). */
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.55rem; border-radius: 999px;
+    color: var(--pin-fg); background: var(--pin-bg);
+    border: 1px solid var(--pin-bd);
+  }
+  .beta-pill .dot {
+    width: 0.42rem; height: 0.42rem; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline on/off toggle (real switch behaviour, client-side only) */
+  .feat-toggle {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    cursor: pointer; user-select: none;
+  }
+  .feat-toggle__text {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .feat-toggle__text[data-on="true"] { color: var(--pin-fg); }
+  .switch { position: relative; width: 40px; height: 22px; flex: 0 0 auto; }
+  .switch input {
+    position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0;
+    cursor: pointer;
+  }
+  .switch__track {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: var(--bg-row); border: 1px solid var(--border);
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch input:checked + .switch__track {
+    background: var(--pin-bg); border-color: var(--pin-bd);
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--text-dim);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch input:checked + .switch__track .switch__knob {
+    transform: translateX(18px); background: var(--pin-fg);
+  }
+  /* focus ring -- the live build's 2px amber-ish ring (focus.css). */
+  .switch input:focus-visible + .switch__track,
+  .pin-btn:focus-visible,
+  .agent-row:focus-visible,
+  .theme-pick:focus-visible {
+    outline: 2px solid #d97706; outline-offset: 2px;
+  }
+
+  .settings-note {
+    margin: 0.9rem 0 0; font-size: 0.72rem; color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* === Frame B card ==================================================== */
+  .frame {
+    margin-top: 1.5rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .frame__head {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.75rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .frame__key {
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.16em;
+    color: var(--pin-fg); border: 1px solid var(--pin-bd);
+    border-radius: 4px; padding: 0.1rem 0.35rem; flex: 0 0 auto;
+  }
+  .frame__title {
+    font-size: 0.92rem; font-weight: 700; color: var(--text-bright);
+    flex: 0 0 auto;
+  }
+  .frame__hint {
+    font-size: 0.68rem; color: var(--text-dim); flex: 1 1 auto;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* header count chips -- M3 amber action count + the NEW "pinned N" pin chip.
+     Side by side ON PURPOSE so the operator sees they are different signals. */
+  .count-chip {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em;
+    padding: 0.18rem 0.45rem; border-radius: 999px;
+    flex: 0 0 auto; font-variant-numeric: tabular-nums;
+  }
+  .count-chip--action {
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+  }
+  .count-chip--pinned {
+    color: var(--pin-fg); background: var(--pin-bg);
+    border: 1px solid var(--pin-bd);
+  }
+  .count-chip__num { font-weight: 800; }
+
+  /* === roster ========================================================== */
+  .roster { display: flex; flex-direction: column; gap: 2px; padding: 0.6rem; }
+
+  /* group divider -- shared chrome type with the existing active/idle dividers */
+  .group {
+    display: flex; align-items: center; gap: 0.45rem;
+    padding: 0.5rem 0.1rem 0.3rem;
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .group--idle, .group--active {
+    margin-top: 0.35rem;
+    border-top: 1px dashed var(--border); padding-top: 0.55rem;
+  }
+  .group__glyph { flex: 0 0 auto; display: inline-flex; }
+  .group__dot {
+    width: 0.42rem; height: 0.42rem; border-radius: 50%;
+    background: var(--text-dim); opacity: 0.7;
+  }
+  .group__dot--live { background: var(--live-fg); opacity: 1; }
+  .group__label { flex: 1 1 auto; }
+  .group--pinned .group__label { color: var(--pin-fg); }
+  .group__count {
+    font-variant-numeric: tabular-nums; color: var(--text-bright);
+  }
+
+  /* one agent row */
+  .agent-row {
+    display: flex; flex-direction: column; gap: 0.3rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 6px; border: 1px solid transparent;
+    transition: background-color 0.2s ease, opacity 0.2s ease, border-color 0.2s ease;
+  }
+  .agent-row:hover, .agent-row:focus-within { background: var(--bg-row-hover); }
+  .agent-row--active {
+    background: var(--bg-row); border-color: var(--border); position: relative;
+  }
+  .agent-row--active::before {
+    content: ''; position: absolute; inset: 0.4rem auto 0.4rem 0;
+    width: 2px; border-radius: 2px; background: var(--live-fg); opacity: 0.7;
+  }
+  .agent-row--idle { opacity: 0.62; }
+  /* PINNED rows keep FULL opacity even when their last_seen is idle -- the whole
+     point is they do not recede. They also get a calm slate-cyan left rail. */
+  .agent-row--pinned {
+    opacity: 1; position: relative;
+    background: var(--bg-row); border-color: var(--pin-bd);
+  }
+  .agent-row--pinned::before {
+    content: ''; position: absolute; inset: 0.4rem auto 0.4rem 0;
+    width: 2px; border-radius: 2px; background: var(--pin-fg);
+  }
+
+  .agent-row__lead { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+
+  /* role chip (paired label + editorial tone, never colour alone) */
+  .role-badge {
+    font-family: var(--ff-mono); font-size: 0.6rem; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 0.12rem 0.4rem; border-radius: 4px; flex: 0 0 auto;
+    color: var(--text-dim); background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+  }
+  .role-badge--watch { color: var(--accent); border-color: var(--border-hi); }
+
+  .agent-row__name {
+    font-family: var(--ff-mono); font-size: 0.78rem; font-weight: 500;
+    color: var(--text); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; min-width: 0; flex: 1 1 auto;
+  }
+  .agent-row--active .agent-row__name,
+  .agent-row--pinned .agent-row__name {
+    font-weight: 700; color: var(--text-bright);
+  }
+
+  /* live marker (paired text + dot) */
+  .live {
+    display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--live-fg);
+  }
+  .live__dot { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: currentColor; }
+
+  /* PINNED text chip -- the load-bearing signal (fill is the SECOND channel).
+     Triple signal = filled glyph (in the button) + this text chip + group position. */
+  .pinned-chip {
+    display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    font-size: 0.6rem; font-weight: 800; letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--pin-fg); background: var(--pin-bg);
+    border: 1px solid var(--pin-bd);
+    padding: 0.1rem 0.4rem; border-radius: 4px;
+  }
+
+  /* the pin button (real <button> so the global focus ring applies) */
+  .pin-btn {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0; margin-left: auto;
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    color: var(--text-ui); cursor: pointer;
+    opacity: 0; transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  }
+  /* REST affordance: pin glyph is quiet + only appears on hover/focus when unpinned */
+  .agent-row:hover .pin-btn,
+  .agent-row:focus-within .pin-btn,
+  .pin-btn:focus-visible { opacity: 1; }
+  .pin-btn:hover { background: var(--bg-row-hover); color: var(--text-bright); }
+  /* a pinned row's button is ALWAYS visible (filled), it is the unpin control */
+  .agent-row--pinned .pin-btn {
+    opacity: 1; color: var(--pin-fg);
+  }
+  .pin-btn svg { width: 15px; height: 15px; display: block; }
+  /* the round-pin glyph: outline at rest, filled when pinned */
+  .pin-btn .pin-fill { fill: none; }
+  .agent-row--pinned .pin-btn .pin-fill { fill: var(--pin-fg); }
+
+  .agent-row__events {
+    display: flex; flex-wrap: wrap; gap: 4px; padding-left: 0.1rem;
+  }
+  .event-chip {
+    font-family: var(--ff-mono); font-size: 0.66rem; line-height: 1;
+    padding: 3px 6px; border-radius: 3px;
+    color: var(--text-dim); background: var(--bg-row-alt);
+    border: 1px solid var(--border); white-space: nowrap;
+  }
+  .event-chip--active { color: var(--live-fg); border-color: rgba(34,197,94,0.3); }
+
+  /* visually-hidden live region */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* === legend + theme picker (mock chrome, not part of the feature) ==== */
+  .footnote {
+    margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 1.25rem 2rem; align-items: flex-start;
+  }
+  .legend { font-size: 0.72rem; color: var(--text-dim); }
+  .legend h2 {
+    margin: 0 0 0.5rem; font-size: 0.64rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .legend ul { margin: 0; padding-left: 1rem; }
+  .legend li { margin: 0.2rem 0; }
+  .legend code {
+    font-family: var(--ff-mono); font-size: 0.68rem; color: var(--text-bright);
+  }
+  .swatch {
+    display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px;
+    vertical-align: -1px; margin-right: 0.3rem; border: 1px solid var(--border);
+  }
+  .swatch--pin { background: var(--pin-fg); }
+  .swatch--action { background: var(--badge-ar-fg); }
+  .swatch--live { background: var(--live-fg); }
+
+  .themes { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .theme-pick {
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; cursor: pointer;
+    padding: 0.3rem 0.55rem; border-radius: 6px;
+    background: var(--bg-row); color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .theme-pick[aria-pressed="true"] {
+    color: var(--accent); border-color: var(--border-hi); background: var(--accent-dim);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion='allow']) * { transition: none !important; }
+  }
+  /* when the BETA flag is OFF, hide the pin affordances entirely (default state) */
+  body[data-beta="off"] .pin-btn,
+  body[data-beta="off"] .count-chip--pinned,
+  body[data-beta="off"] .group--pinned,
+  body[data-beta="off"] .pinned-chip { display: none; }
+</style>
+</head>
+<body data-beta="on">
+  <div class="page">
+
+    <!-- header strip: title + BETA pill + inline on/off toggle -->
+    <header class="titlebar">
+      <h1>
+        Session-per-Agent Pinning swim-lane
+        <span class="sub">Frame B / Sub-Agents -- nail a watched agent to row 1 so churn cannot bury it</span>
+      </h1>
+
+      <span class="beta-pill"><span class="dot" aria-hidden="true"></span>BETA</span>
+
+      <label class="feat-toggle" title="Toggle the BETA feature (client-side mock of the Settings gate)">
+        <span class="switch">
+          <input id="betaSwitch" type="checkbox" checked
+                 aria-label="Enable Sub-agent pinning BETA feature">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        </span>
+        <span class="feat-toggle__text" id="betaText" data-on="true">ON</span>
+      </label>
+    </header>
+
+    <p class="settings-note">
+      BETA -- default OFF, toggled in Settings &gt; BETA features ("Sub-agent pinning").
+      This toggle previews the gate; in the real build the flag lives in the beta-flag
+      registry and the SettingsDrawer.
+    </p>
+
+    <!-- ===================== Frame B card ===================== -->
+    <section class="frame" aria-label="Frame B -- Sub-Agents">
+      <div class="frame__head">
+        <span class="frame__key">B</span>
+        <span class="frame__title">Sub-Agents</span>
+        <span class="frame__hint">Observed agents -- monitor only, no inter-agent gating</span>
+
+        <!-- M3 action count (FROZEN amber) -- shown to contrast with the pin count -->
+        <span class="count-chip count-chip--action" title="Actions required (M3) -- escalation signal">
+          <span class="count-chip__num">2</span> action
+        </span>
+        <!-- NEW: pinned N count (non-amber pin hue, paired with the word "pinned") -->
+        <span class="count-chip count-chip--pinned" id="pinnedCount"
+              title="Sticky pins set on this session">
+          <span class="count-chip__num" id="pinnedNum">1</span> pinned
+        </span>
+      </div>
+
+      <div class="roster" id="roster" role="list" aria-label="Sub-agent roster">
+        <!-- rows are rendered by the script below from the mock /api/agents shape -->
+      </div>
+    </section>
+
+    <!-- aria-live region: announces pin / unpin -->
+    <div class="sr-only" aria-live="polite" id="liveRegion"></div>
+
+    <!-- ===================== legend + theme picker ===================== -->
+    <div class="footnote">
+      <div class="legend">
+        <h2>Paired label + colour (colour is never alone -- ADR-18 M4)</h2>
+        <ul>
+          <li><span class="swatch swatch--pin"></span><strong>PINNED</strong> -- slate-cyan
+            <code>--pin-fg</code>. Anchored / structural. Deliberately NOT amber.</li>
+          <li><span class="swatch swatch--action"></span><strong>action</strong> -- FROZEN amber
+            <code>--badge-ar-fg</code>. Escalation / action-required (M3). Pin must never read as this.</li>
+          <li><span class="swatch swatch--live"></span><strong>live</strong> -- active in window
+            <code>--live-fg</code>. Auto activity pin, not a sticky pin.</li>
+        </ul>
+      </div>
+      <div class="legend">
+        <h2>How the pin behaves</h2>
+        <ul>
+          <li>Hover / focus a row -&gt; quiet outline pin glyph appears.</li>
+          <li>Click (or Enter / Space on the focused button) -&gt; row hops to the
+            <strong>PINNED</strong> group at row 1; glyph fills + gains a "PINNED" chip.</li>
+          <li>Focus stays on the button after re-sort -- pin several without losing your place.</li>
+          <li>"developer" has the OLDEST last_seen yet stays row 1 -- it never recedes.</li>
+          <li>Persists per-session in <code>localStorage</code> across reload (mocked here).</li>
+        </ul>
+      </div>
+      <div class="legend">
+        <h2>Preview theme</h2>
+        <div class="themes" role="group" aria-label="Preview theme">
+          <button class="theme-pick" data-theme-set="obsidian" aria-pressed="true">obsidian</button>
+          <button class="theme-pick" data-theme-set="phosphor" aria-pressed="false">phosphor</button>
+          <button class="theme-pick" data-theme-set="paper" aria-pressed="false">paper</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  "use strict";
+
+  // ===================================================================
+  // MOCK DATA -- matches the server.py:629 /api/agents SELECT verbatim,
+  // plus the synthetic key the UI derives. Domain-agnostic, ASCII-only,
+  // generic role slugs only (NO monitored-project vocabulary).
+  // ===================================================================
+  var MODEL = {
+    selectedSessionId: "sess-mock-001",
+    agents: [
+      { session_id:"sess-mock-001", profile_slug:"developer",     attribution_plugin:"code",   attribution_skill:"edit-file",   is_sidechain:false, first_seen:1749600000, last_seen:1749600420, mode_override:null },
+      { session_id:"sess-mock-001", profile_slug:"code_reviewer", attribution_plugin:"review", attribution_skill:"diff-review", is_sidechain:false, first_seen:1749600060, last_seen:1749600900, mode_override:null },
+      { session_id:"sess-mock-001", profile_slug:"tester",        attribution_plugin:"test",   attribution_skill:"run-suite",   is_sidechain:false, first_seen:1749600120, last_seen:1749600905, mode_override:null },
+      { session_id:"sess-mock-001", profile_slug:"researcher",    attribution_plugin:"search", attribution_skill:"grep",        is_sidechain:true,  first_seen:1749600200, last_seen:1749600903, mode_override:null },
+      { session_id:"sess-mock-001", profile_slug:"health_monitor",attribution_plugin:"watch",  attribution_skill:"",            is_sidechain:false, first_seen:1749600010, last_seen:1749600300, mode_override:null }
+    ],
+    nowMs: 1749600906000,
+    activityWindowSec: 10
+  };
+
+  // localStorage key idiom mirrors stores/session.js selectedSessionId.
+  var LS_KEY = "sm.next.pinnedAgents." + MODEL.selectedSessionId;
+
+  // watch role tones (subset of the FROZEN role schema, RoleBadge.svelte).
+  var WATCH_ROLES = { health_monitor: true };
+
+  // --- pin store (per-session Set, localStorage-persisted) ------------
+  function loadPins() {
+    try {
+      var raw = window.localStorage.getItem(LS_KEY);
+      if (raw) return new Set(JSON.parse(raw));
+    } catch (e) { /* private mode / quota -- fall through to default */ }
+    // default mock: developer pinned (synthetic-key SUFFIX stored: "developer")
+    return new Set(["developer"]);
+  }
+  function savePins(set) {
+    try { window.localStorage.setItem(LS_KEY, JSON.stringify(Array.from(set))); }
+    catch (e) { /* non-fatal in mock */ }
+  }
+  var pinnedSlugs = loadPins();
+  // record pin ORDER (earliest-pinned-first within the PINNED group)
+  var pinOrder = Array.from(pinnedSlugs);
+
+  // --- helpers (mirror AgentRoster.svelte) ----------------------------
+  function agentKey(a) {
+    var slug = a.profile_slug || a.attribution_plugin;
+    return (a.session_id || "sess") + "::" + slug;
+  }
+  function pinSuffix(a) { return a.profile_slug || a.attribution_plugin; }
+  function displayName(a) { return String(a.profile_slug || a.attribution_plugin || "unknown"); }
+  function toMs(ts) {
+    if (ts == null || ts === "") return NaN;
+    var n = Number(ts);
+    if (isFinite(n)) return n < 1e12 ? n * 1000 : n;
+    return NaN;
+  }
+  function relTime(ms) {
+    var d = Math.max(0, MODEL.nowMs - ms);
+    if (d < 1000) return "now";
+    var s = Math.floor(d / 1000);
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + "h";
+    return Math.floor(h / 24) + "d";
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c];
+    });
+  }
+
+  // --- enrich + 3-tier sort (PINNED -> ACTIVE -> IDLE) ----------------
+  function project() {
+    var winMs = Math.max(1, Math.min(600, MODEL.activityWindowSec || 10)) * 1000;
+    var rows = MODEL.agents.map(function (a) {
+      var last = toMs(a.last_seen);
+      var suffix = pinSuffix(a);
+      var pinned = pinnedSlugs.has(suffix);
+      var isActive = isFinite(last) && (MODEL.nowMs - last) < winMs;
+      return {
+        key: agentKey(a),
+        suffix: suffix,
+        name: displayName(a),
+        role: a.profile_slug,
+        sidechain: Boolean(a.is_sidechain),
+        skill: a.attribution_skill,
+        firstMs: toMs(a.first_seen),
+        lastMs: isFinite(last) ? last : -Infinity,
+        pinned: pinned,
+        // an active row that is ALSO pinned belongs to the PINNED tier only
+        isActive: isActive && !pinned,
+        pinRank: pinned ? pinOrder.indexOf(suffix) : Infinity
+      };
+    });
+    rows.sort(function (x, y) {
+      // tier 1: pinned first
+      if (x.pinned !== y.pinned) return x.pinned ? -1 : 1;
+      if (x.pinned && y.pinned) return x.pinRank - y.pinRank; // earliest-pinned first
+      // tier 2: active before idle
+      if (x.isActive !== y.isActive) return x.isActive ? -1 : 1;
+      // within tier: newest-seen first
+      return y.lastMs - x.lastMs;
+    });
+    return rows;
+  }
+
+  // --- render ---------------------------------------------------------
+  var roster = document.getElementById("roster");
+  var liveRegion = document.getElementById("liveRegion");
+  var pinnedNum = document.getElementById("pinnedNum");
+
+  function pinGlyphSvg() {
+    // a CSS-drawn round-pin: outline circle + stem. .pin-fill toggles fill.
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+      '<circle class="pin-fill" cx="12" cy="9" r="6" stroke="currentColor" stroke-width="1.6"/>' +
+      '<path d="M12 15 L12 21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+      '</svg>';
+  }
+
+  function groupDivider(kind, label, count, live) {
+    var dot = live
+      ? '<span class="group__dot group__dot--live" aria-hidden="true"></span>'
+      : (kind === "pinned"
+          ? '<span class="group__glyph" aria-hidden="true" style="color:var(--pin-fg)">' + pinGlyphSvgSmall() + '</span>'
+          : '<span class="group__dot" aria-hidden="true"></span>');
+    return '<div class="group group--' + kind + '" role="presentation">' +
+      dot +
+      '<span class="group__label">' + label + '</span>' +
+      '<span class="group__count">' + count + '</span>' +
+      '</div>';
+  }
+  function pinGlyphSvgSmall() {
+    return '<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">' +
+      '<circle cx="12" cy="9" r="6" fill="currentColor"/>' +
+      '<path d="M12 15 L12 21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+      '</svg>';
+  }
+
+  function rowHtml(r) {
+    var cls = "agent-row" + (r.pinned ? " agent-row--pinned" : (r.isActive ? " agent-row--active" : " agent-row--idle"));
+    var roleCls = "role-badge" + (WATCH_ROLES[r.role] ? " role-badge--watch" : "");
+    var stateText = r.pinned ? " (pinned)" : (r.isActive ? " (active)" : " (idle)");
+
+    var lead = '<span class="' + roleCls + '">' + escapeHtml(r.role || "unknown") +
+                 (r.sidechain ? " &middot; side" : "") + '</span>' +
+               '<span class="agent-row__name" title="' + escapeHtml(r.name) + '">' + escapeHtml(r.name) + '</span>';
+
+    if (r.pinned) {
+      lead += '<span class="pinned-chip">' + pinGlyphSvgSmall() + 'PINNED</span>';
+    } else if (r.isActive) {
+      lead += '<span class="live"><span class="live__dot" aria-hidden="true"></span>live</span>';
+    }
+
+    var btnLabel = r.pinned ? ("Unpin " + r.name + " from top") : ("Pin " + r.name + " to top");
+    var btn = '<button class="pin-btn" type="button" data-suffix="' + escapeHtml(r.suffix) + '" ' +
+              'aria-pressed="' + (r.pinned ? "true" : "false") + '" ' +
+              'aria-label="' + escapeHtml(btnLabel) + '" title="' + escapeHtml(btnLabel) + '">' +
+              pinGlyphSvg() + '</button>';
+
+    // event trail (oldest -> newest)
+    var chips = "";
+    if (isFinite(r.firstMs)) chips += '<span class="event-chip">seen ' + relTime(r.firstMs) + '</span>';
+    if (r.skill) chips += '<span class="event-chip">' + escapeHtml(r.skill) + '</span>';
+    if (isFinite(r.lastMs) && r.lastMs !== r.firstMs) {
+      chips += '<span class="event-chip event-chip--active">active ' + relTime(r.lastMs) + '</span>';
+    }
+
+    return '<div class="' + cls + '" role="listitem" aria-label="Sub-agent ' + escapeHtml(r.name) + stateText + '">' +
+             '<div class="agent-row__lead">' + lead + btn + '</div>' +
+             '<div class="agent-row__events" aria-label="Activity trail">' + chips + '</div>' +
+           '</div>';
+  }
+
+  function render(focusSuffix) {
+    var rows = project();
+    var pinnedRows = rows.filter(function (r) { return r.pinned; });
+    var activeRows = rows.filter(function (r) { return r.isActive; });
+    var idleRows = rows.filter(function (r) { return !r.pinned && !r.isActive; });
+
+    var html = "";
+    if (pinnedRows.length) {
+      html += groupDivider("pinned", "Pinned", pinnedRows.length, false);
+      pinnedRows.forEach(function (r) { html += rowHtml(r); });
+    }
+    if (activeRows.length) {
+      html += groupDivider("active", "Active in window", activeRows.length, true);
+      activeRows.forEach(function (r) { html += rowHtml(r); });
+    }
+    if (idleRows.length) {
+      html += groupDivider("idle", "Idle", idleRows.length, false);
+      idleRows.forEach(function (r) { html += rowHtml(r); });
+    }
+    roster.innerHTML = html;
+
+    // header pinned count
+    pinnedNum.textContent = String(pinnedRows.length);
+
+    // keep focus on the just-toggled button after the re-sort (do NOT steal to row 1)
+    if (focusSuffix) {
+      var btn = roster.querySelector('.pin-btn[data-suffix="' + cssEscape(focusSuffix) + '"]');
+      if (btn) btn.focus();
+    }
+  }
+  function cssEscape(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+
+  // --- toggle handler (optimistic + synchronous, no network) ----------
+  function togglePin(suffix, name) {
+    if (pinnedSlugs.has(suffix)) {
+      pinnedSlugs.delete(suffix);
+      pinOrder = pinOrder.filter(function (s) { return s !== suffix; });
+      announce("Unpinned " + name);
+    } else {
+      pinnedSlugs.add(suffix);
+      pinOrder.push(suffix);
+      announce("Pinned " + name);
+    }
+    savePins(pinnedSlugs);
+    render(suffix);
+  }
+  function announce(msg) { liveRegion.textContent = ""; setTimeout(function () { liveRegion.textContent = msg; }, 30); }
+
+  roster.addEventListener("click", function (e) {
+    var btn = e.target.closest(".pin-btn");
+    if (!btn) return;
+    var suffix = btn.getAttribute("data-suffix");
+    var row = btn.closest(".agent-row");
+    var nameEl = row && row.querySelector(".agent-row__name");
+    togglePin(suffix, nameEl ? nameEl.textContent : suffix);
+  });
+
+  // --- BETA gate toggle (client-side mock of Settings flag) -----------
+  var betaSwitch = document.getElementById("betaSwitch");
+  var betaText = document.getElementById("betaText");
+  betaSwitch.addEventListener("change", function () {
+    var on = betaSwitch.checked;
+    document.body.setAttribute("data-beta", on ? "on" : "off");
+    betaText.textContent = on ? "ON" : "OFF";
+    betaText.setAttribute("data-on", on ? "true" : "false");
+    announce(on ? "Sub-agent pinning enabled" : "Sub-agent pinning disabled (default)");
+  });
+
+  // --- theme picker (preview the REAL tokens) -------------------------
+  document.querySelectorAll(".theme-pick").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var t = b.getAttribute("data-theme-set");
+      document.documentElement.setAttribute("data-theme", t);
+      document.querySelectorAll(".theme-pick").forEach(function (o) {
+        o.setAttribute("aria-pressed", o === b ? "true" : "false");
+      });
+    });
+  });
+
+  // initial paint
+  render(null);
+</script>
+</body>
+</html>

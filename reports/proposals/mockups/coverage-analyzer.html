@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<!--
+  coverage-analyzer.html -- KingMode BETA mockup (NO code-yet gate, directive #2).
+  Self-contained: inline <style> + inline <script>, NO external assets/CDNs/fonts.
+  Feature: "coverage-analyzer" (#10) -- cassette-vs-live band-distribution drift widget.
+  Tokens previewed verbatim from dashboard/ui-next/src/styles/theme.css (obsidian).
+  ASCII-only: no smart quotes, no em-dashes (-- only), no box-drawing.
+  Domain-agnostic: NO governed-project vocabulary; "source" is generic.
+  ADR-18 MUST: paired label+color badges (color is NEVER the sole signal);
+  NEVER a fourth frame -- this is a header-invoked DRAWER, never auto-foregrounds.
+-->
+<html lang="en" data-theme="obsidian" data-motion="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coverage Analyzer -- BETA mockup</title>
+<style>
+  /* --- theme.css obsidian tokens, copied verbatim so this previews the REAL palette --- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;   /* AA 5.37:1 on #0c1118 */
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    /* fixed badge tokens (M4): theme-invariant paired label+color identities */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:  #fef3c7;  --badge-ar-border: #d97706;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg: #ffedd5; --badge-warn-border: #ea580c;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+
+    /* --sm-* bridge subset the component layer consumes */
+    --sm-warn-fg:    #ca8a04;
+    --sm-action-fg:  var(--badge-ar-fg);
+    --sm-focus:      #d97706;
+    --calm-surface-raised: var(--bg-card);
+
+    --radius: 10px;
+    --hairline: 1px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 15px;
+    line-height: 1.45;
+    /* faint scanline ambience -- calm telemetry, never loud */
+    background-image:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(245,158,11,0.012) 0px,
+        rgba(245,158,11,0.012) 1px,
+        transparent 1px,
+        transparent 3px);
+  }
+  .tabular { font-variant-numeric: tabular-nums; font-family: var(--ff-mono); }
+
+  /* ----------------------------------------------------------------------------
+     PAGE CHROME -- a stand-in for the calm three-frame monitor BEHIND the drawer.
+     It is intentionally muted so the drawer reads as the deliberate inspection
+     surface, never competing with the (greyed) escalation lanes.
+  ---------------------------------------------------------------------------- */
+  .stage { min-height: 100vh; display: flex; flex-direction: column; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.65rem 1.1rem;
+    border-bottom: var(--hairline) solid var(--border);
+    background: linear-gradient(to bottom, var(--bg-card), var(--bg));
+  }
+  .brand {
+    font-family: var(--ff-mono); font-size: 0.78rem; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--text-bright); font-weight: 700;
+  }
+  .brand .dot { color: var(--accent); }
+  .topbar__spacer { flex: 1 1 auto; }
+
+  /* header chip -- only present when the flag is ON; real <button>, focus ring */
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font: inherit; font-size: 0.74rem; letter-spacing: 0.03em;
+    padding: 0.34rem 0.7rem;
+    background: var(--accent-dim);
+    color: var(--text-bright);
+    border: var(--hairline) solid var(--border-hi);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .chip__dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .chip[hidden] { display: none; }
+  .chip-settings {
+    background: transparent; color: var(--text-dim);
+    border: var(--hairline) solid var(--border);
+  }
+  button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--sm-focus); outline-offset: 2px;
+  }
+
+  .ghost-lanes {
+    flex: 1 1 auto; display: grid; gap: 0.75rem; padding: 1.1rem;
+    grid-template-columns: repeat(3, 1fr);
+    opacity: 0.34; filter: saturate(0.5);
+    pointer-events: none; user-select: none;
+  }
+  .ghost-lane {
+    border: var(--hairline) solid var(--border); border-radius: var(--radius);
+    background: var(--bg-card); min-height: 240px; padding: 0.7rem 0.9rem;
+  }
+  .ghost-lane h3 {
+    margin: 0 0 0.6rem; font-size: 0.7rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--text-ui); font-weight: 700;
+  }
+  .ghost-row { height: 0.7rem; border-radius: 3px; background: var(--bg-row); margin: 0.4rem 0; }
+  .ghost-row.short { width: 55%; }
+
+  /* ----------------------------------------------------------------------------
+     DRAWER -- mirrors SettingsDrawer idiom: scrim + role=dialog + slide-in.
+  ---------------------------------------------------------------------------- */
+  .scrim {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(8, 10, 12, 0.55); backdrop-filter: blur(1px);
+  }
+  .scrim[hidden], .panel[hidden] { display: none; }
+
+  .panel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 81;
+    width: min(560px, 96vw);
+    display: flex; flex-direction: column;
+    background: var(--calm-surface-raised);
+    border-left: var(--hairline) solid var(--border-hi);
+    box-shadow: -18px 0 48px -24px rgba(0, 0, 0, 0.7);
+    color: var(--text);
+    transition: transform 0.22s ease, opacity 0.22s ease;
+  }
+  /* calm slide-in; suppressed under reduced-motion */
+  .panel.is-enter { transform: translateX(8px); opacity: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion='allow']) .panel { transition: none; }
+    html:not([data-motion='allow']) .bar__fill { transition: none; }
+  }
+  html[data-motion='reduce'] .panel,
+  html[data-motion='reduce'] .bar__fill { transition: none; }
+
+  .panel__head {
+    display: flex; align-items: flex-start; gap: 0.75rem;
+    padding: 1rem 1.15rem 0.85rem;
+    border-bottom: var(--hairline) solid var(--border);
+  }
+  .panel__title {
+    margin: 0; font-size: 1.02rem; letter-spacing: 0.01em; color: var(--text-bright);
+    font-weight: 700; line-height: 1.25;
+  }
+  .panel__sub {
+    margin: 0.2rem 0 0; font-size: 0.76rem; color: var(--text-dim);
+    font-family: var(--ff-mono); letter-spacing: 0.01em;
+  }
+  .panel__head .grow { flex: 1 1 auto; }
+  .panel__close {
+    font: inherit; line-height: 1; font-size: 1rem;
+    background: transparent; color: var(--text-dim);
+    border: var(--hairline) solid var(--border); border-radius: 8px;
+    width: 2rem; height: 2rem; cursor: pointer; flex: 0 0 auto;
+  }
+  .panel__close:hover { color: var(--text-bright); }
+
+  .panel__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 1rem 1.15rem 1.4rem; overscroll-behavior: contain; }
+
+  /* --- BETA / flag header strip --- */
+  .betastrip {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.55rem 0.7rem; margin-bottom: 1rem;
+    border: var(--hairline) solid var(--border); border-radius: 8px;
+    background: var(--bg-row-alt);
+  }
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.66rem; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 700;
+    padding: 0.22rem 0.55rem; border-radius: 6px;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+  }
+  .beta-note { font-size: 0.72rem; color: var(--text-dim); }
+  .betastrip .grow { flex: 1 1 auto; }
+
+  /* inline ON/OFF toggle (wired client-side so operator SEES the gate) */
+  .switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch__track {
+    position: relative; width: 38px; height: 20px; border-radius: 999px;
+    background: var(--bg-row); border: var(--hairline) solid var(--border);
+    transition: background 0.18s ease, border-color 0.18s ease;
+    flex: 0 0 auto;
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--text-dim); transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch input:checked + .switch__track { background: var(--accent-dim); border-color: var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform: translateX(18px); background: var(--accent); }
+  .switch input:focus-visible + .switch__track { outline: 2px solid var(--sm-focus); outline-offset: 2px; }
+  .switch__text {
+    font-family: var(--ff-mono); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--text-dim); min-width: 2.2em;
+  }
+  .switch__text[data-on="true"] { color: var(--accent); }
+
+  /* the whole widget content is suppressed when the flag is OFF (no-op) */
+  .off-state {
+    padding: 1.4rem 0.4rem; text-align: center; color: var(--text-dim);
+    font-size: 0.82rem; font-style: italic;
+  }
+
+  /* --- top one-line verdict --- */
+  .verdict {
+    display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+    padding: 0.6rem 0.75rem; margin-bottom: 0.95rem;
+    border: var(--hairline) solid var(--border); border-radius: 8px;
+    background: var(--bg-card);
+  }
+  .verdict__dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: 0 0 auto; }
+  .verdict__label {
+    font-family: var(--ff-mono); font-weight: 700; font-size: 0.72rem; letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .verdict__text { font-size: 0.83rem; color: var(--text); }
+  /* paired label+color: OK = quiet ink; WATCH = amber; DRIFT = red. Color NEVER alone. */
+  .verdict[data-sev="ok"]    .verdict__dot { background: var(--text-dim); }
+  .verdict[data-sev="ok"]    .verdict__label { color: var(--text-dim); }
+  .verdict[data-sev="warn"]  { border-color: var(--sm-warn-fg); }
+  .verdict[data-sev="warn"]  .verdict__dot { background: var(--sm-warn-fg); }
+  .verdict[data-sev="warn"]  .verdict__label { color: var(--sm-warn-fg); }
+  .verdict[data-sev="alert"] { border-color: var(--badge-blocked-border); }
+  .verdict[data-sev="alert"] .verdict__dot { background: var(--badge-blocked-fg); }
+  .verdict[data-sev="alert"] .verdict__label { color: var(--badge-blocked-fg); }
+
+  /* --- comparison chart --- */
+  .section-h {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem;
+    margin: 0.3rem 0 0.55rem;
+  }
+  .section-h h3 {
+    margin: 0; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-ui); font-weight: 700;
+  }
+  .section-h .meta { font-size: 0.7rem; color: var(--text-dim); }
+  .legend { display: flex; gap: 0.9rem; font-size: 0.68rem; color: var(--text-dim); margin-bottom: 0.7rem; }
+  .legend__item { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .legend__swatch { width: 1.3rem; height: 0.55rem; border-radius: 2px; flex: 0 0 auto; }
+  .legend__swatch.live { background: var(--accent); }
+  .legend__swatch.cassette { background: transparent; border: 1px solid var(--accent); }
+
+  .chart { display: flex; flex-direction: column; gap: 0.2rem; }
+  .band {
+    width: 100%; text-align: left; font: inherit;
+    background: transparent; border: var(--hairline) solid transparent;
+    border-radius: 8px; padding: 0.5rem 0.55rem; cursor: pointer;
+    display: block;
+  }
+  .band:hover { background: var(--bg-row-hover); }
+  .band.is-open { background: var(--bg-row-hover); border-color: var(--border); }
+  .band:focus-visible { outline: 2px solid var(--sm-focus); outline-offset: -1px; }
+
+  .band__head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; }
+  .band__name {
+    font-family: var(--ff-mono); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--text-bright); min-width: 4.6em;
+  }
+  .band__delta {
+    margin-left: auto; font-family: var(--ff-mono); font-size: 0.74rem; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  /* delta severity color is PAIRED with a text badge below; magnitude is TEXT not bar length */
+  .band__sev {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-family: var(--ff-mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em;
+    padding: 0.08rem 0.4rem; border-radius: 5px; text-transform: uppercase;
+  }
+  .band__sev .sevdot { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .band__sev[data-sev="notice"] { color: var(--text-dim); background: var(--bg-row-alt); }
+  .band__sev[data-sev="warn"]   { color: var(--sm-warn-fg); background: rgba(202,138,4,0.10); }
+  .band__sev[data-sev="alert"]  { color: var(--badge-blocked-fg); background: rgba(220,38,38,0.10); }
+  .band__delta[data-sev="notice"] { color: var(--text-dim); }
+  .band__delta[data-sev="warn"]   { color: var(--sm-warn-fg); }
+  .band__delta[data-sev="alert"]  { color: var(--badge-blocked-fg); }
+
+  /* paired bars: cassette (hairline outline = the thing being judged) ABOVE
+     live (ink-loud = ground truth). Visual asymmetry encodes "which is the reference".
+     Pure CSS flex widths; width-only transition (no layout thrash / reflow). */
+  .barwrap { display: flex; flex-direction: column; gap: 0.28rem; }
+  .barline { display: flex; align-items: center; gap: 0.5rem; }
+  .barline__tag {
+    font-family: var(--ff-mono); font-size: 0.58rem; letter-spacing: 0.06em;
+    color: var(--text-dim); min-width: 4.3em; text-transform: uppercase;
+  }
+  .bar { position: relative; flex: 1 1 auto; height: 0.85rem; background: var(--bg-row); border-radius: 3px; overflow: hidden; }
+  .bar__fill {
+    position: absolute; inset: 0 auto 0 0; height: 100%;
+    border-radius: 3px; transition: width 0.45s ease; /* WIDTH ONLY -- repaint discipline */
+  }
+  .bar__fill.live { background: var(--accent); border: 1px solid var(--accent); }
+  /* cassette bar = hairline-outlined, faint fill -- it is the candidate under judgment */
+  .bar__fill.cassette { background: var(--accent-dim); border: 1px solid var(--accent); }
+  .barline__pct {
+    font-family: var(--ff-mono); font-size: 0.66rem; font-variant-numeric: tabular-nums;
+    color: var(--text-dim); min-width: 3.3em; text-align: right;
+  }
+
+  /* expand panel for a band */
+  .band__detail {
+    margin-top: 0.55rem; padding-top: 0.55rem;
+    border-top: var(--hairline) dashed var(--border);
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem;
+    font-size: 0.74rem;
+  }
+  .band__detail dt { color: var(--text-dim); font-family: var(--ff-mono); font-size: 0.66rem; letter-spacing: 0.03em; }
+  .band__detail dd { margin: 0 0 0.35rem; color: var(--text); font-variant-numeric: tabular-nums; }
+  .band__detail .remediation {
+    grid-column: 1 / -1; margin: 0.25rem 0 0; padding: 0.45rem 0.55rem;
+    background: var(--bg-row-alt); border-radius: 6px; color: var(--text-dim); font-size: 0.72rem;
+    border-left: 2px solid var(--sm-warn-fg);
+  }
+  .band__detail .remediation.is-notice { border-left-color: var(--border); }
+  .band__detail[hidden] { display: none; }
+
+  /* --- warnings (CoverageWarnings) --- */
+  .warns { margin-top: 1.1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .warn {
+    display: flex; align-items: flex-start; gap: 0.55rem;
+    padding: 0.55rem 0.65rem; border-radius: 8px;
+    border: var(--hairline) solid var(--border);
+    background: var(--bg-card); font-size: 0.78rem; line-height: 1.4;
+  }
+  .warn__badge {
+    display: inline-flex; align-items: center; gap: 0.3rem; flex: 0 0 auto;
+    font-family: var(--ff-mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em;
+    padding: 0.16rem 0.45rem; border-radius: 5px; text-transform: uppercase; margin-top: 0.05rem;
+  }
+  .warn__badge .sevdot { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .warn[data-sev="warn"]  { border-color: var(--sm-warn-fg); }
+  .warn[data-sev="warn"]  .warn__badge { color: var(--sm-warn-fg); background: rgba(202,138,4,0.10); }
+  .warn[data-sev="alert"] { border-color: var(--badge-blocked-border); }
+  .warn[data-sev="alert"] .warn__badge { color: var(--badge-blocked-fg); background: rgba(220,38,38,0.10); }
+  .warn__text strong { color: var(--text-bright); font-weight: 700; }
+
+  /* --- controls row (compare fixture / window) --- */
+  .controls { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; margin-top: 1.1rem; }
+  .btn {
+    font: inherit; font-size: 0.74rem; padding: 0.4rem 0.7rem;
+    background: var(--bg-row-alt); color: var(--text-bright);
+    border: var(--hairline) solid var(--border); border-radius: 7px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--border-hi); }
+  .btn.is-active { color: var(--accent); border-color: var(--border-hi); background: var(--accent-dim); }
+  .controls__note { font-size: 0.7rem; color: var(--text-dim); margin-left: auto; }
+
+  /* persistent BETA footer chip inside the panel */
+  .panel__foot {
+    flex: 0 0 auto; padding: 0.55rem 1.15rem;
+    border-top: var(--hairline) solid var(--border);
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 0.68rem; color: var(--text-dim); background: var(--bg-row-alt);
+  }
+  .panel__foot .beta-pill { font-size: 0.6rem; padding: 0.16rem 0.45rem; border-width: 1px; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <!-- ghost monitor chrome (greyed three-frame contract, NOT touched by this widget) -->
+  <header class="topbar">
+    <span class="brand">STREAM<span class="dot">.</span>MANAGER <span style="color:var(--text-dim)">/ calm monitor</span></span>
+    <span class="topbar__spacer"></span>
+    <!-- header chip: only present when flag ON; real button; opens the drawer -->
+    <button id="openChip" class="chip" type="button" aria-haspopup="dialog" aria-controls="caPanel">
+      <span class="chip__dot" aria-hidden="true"></span>Coverage
+    </button>
+    <button class="chip chip-settings" type="button">Settings</button>
+  </header>
+
+  <div class="ghost-lanes" aria-hidden="true">
+    <div class="ghost-lane"><h3>Frame A -- Sessions</h3>
+      <div class="ghost-row"></div><div class="ghost-row short"></div><div class="ghost-row"></div><div class="ghost-row short"></div></div>
+    <div class="ghost-lane"><h3>Frame B -- Sub-Agents</h3>
+      <div class="ghost-row short"></div><div class="ghost-row"></div><div class="ghost-row short"></div></div>
+    <div class="ghost-lane"><h3>Frame C -- Background Jobs</h3>
+      <div class="ghost-row"></div><div class="ghost-row short"></div><div class="ghost-row"></div></div>
+  </div>
+</div>
+
+<!-- DRAWER (scrim + dialog). Hidden until the chip is clicked. -->
+<div id="caScrim" class="scrim" hidden></div>
+<div id="caPanel" class="panel" role="dialog" aria-modal="true" aria-labelledby="caTitle" tabindex="-1" hidden>
+  <header class="panel__head">
+    <div class="grow">
+      <h2 id="caTitle" class="panel__title">Coverage Analyzer</h2>
+      <p class="panel__sub">cassette-vs-live band distribution &middot; drift inspection</p>
+    </div>
+    <button id="caClose" class="panel__close" type="button" aria-label="Close coverage analyzer">x</button>
+  </header>
+
+  <div class="panel__body">
+    <!-- BETA strip + inline on/off toggle (wired) -->
+    <div class="betastrip">
+      <span class="beta-pill">BETA</span>
+      <span class="beta-note grow">default OFF -- toggled in Settings &gt; BETA features</span>
+      <label class="switch">
+        <input id="caFlag" type="checkbox" checked aria-label="coverage-analyzer beta flag (currently ON)">
+        <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        <span class="switch__text" id="caFlagText" data-on="true">ON</span>
+      </label>
+    </div>
+
+    <!-- when OFF the widget is a no-op (renders nothing but this calm line) -->
+    <div id="caOff" class="off-state" hidden>
+      Coverage Analyzer is OFF. Flip it ON above (or in Settings &gt; BETA features) to inspect cassette-vs-live drift.
+    </div>
+
+    <!-- LIVE content -->
+    <div id="caLive">
+      <!-- top one-line verdict (paired label+color; here: WATCH because worst band breaches threshold) -->
+      <div id="caVerdict" class="verdict" data-sev="warn">
+        <span class="verdict__dot" aria-hidden="true"></span>
+        <span class="verdict__label">WATCH</span>
+        <span class="verdict__text">L2/L3 drift -13.9% over the 10% threshold -- Tier-1 replay may under-test the escalation path.</span>
+      </div>
+
+      <!-- COMPARISON CHART -->
+      <div class="section-h">
+        <h3>Band distribution</h3>
+        <span class="meta tabular" id="caMeta">cassette 70 &middot; live 842 (window 1000)</span>
+      </div>
+      <div class="legend" aria-hidden="true">
+        <span class="legend__item"><span class="legend__swatch live"></span>live -- ground truth</span>
+        <span class="legend__item"><span class="legend__swatch cassette"></span>cassette -- under judgment</span>
+      </div>
+
+      <div class="chart" id="caChart" role="group" aria-label="Cassette versus live band distribution, four bands"></div>
+
+      <!-- CONTROLS: compare fixture / live mode -->
+      <div class="controls">
+        <button id="modeLive" class="btn is-active" type="button" aria-pressed="true">Live window</button>
+        <button id="modeFixture" class="btn" type="button" aria-pressed="false">Compare fixture...</button>
+        <span class="controls__note" id="caExcluded">17 SM-self rows excluded (polarity filter)</span>
+      </div>
+
+      <!-- WARNINGS (CoverageWarnings) -- one strip per band over threshold -->
+      <div class="section-h" style="margin-top:1.25rem">
+        <h3>Drift warnings</h3>
+        <span class="meta">threshold +/-10%</span>
+      </div>
+      <div class="warns" id="caWarns" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <footer class="panel__foot">
+    <span class="beta-pill">BETA</span>
+    <span>default OFF, toggled in Settings &gt; BETA features. Reads are post-hoc GET polls -- no SSE, no poller when OFF.</span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ----- MOCK DATA (mockDataSpec) -------------------------------------------
+  // GET /api/soak/coverage/cassette
+  var cassette = {
+    source: "cassette", fixture: "soak_cassette_latest.jsonl", total: 70,
+    bands: [
+      { key: "allow", label: "ALLOW", layer: 0, count: 50, pct: 71.4 },
+      { key: "l2_l3", label: "L2/L3", layer: 2, count: 5,  pct: 7.1 },
+      { key: "l4",    label: "L4",    layer: 4, count: 5,  pct: 7.1 },
+      { key: "learn", label: "LEARN", layer: 0, count: 10, pct: 14.3 }
+    ]
+  };
+  // GET /api/soak/coverage/live?window=1000
+  var live = {
+    source: "live", window: 1000, total: 842, polarity_filtered: true, excluded_self_rows: 17,
+    bands: [
+      { key: "allow", label: "ALLOW", layer: 0, count: 505, pct: 60.0 },
+      { key: "l2_l3", label: "L2/L3", layer: 2, count: 177, pct: 21.0 },
+      { key: "l4",    label: "L4",    layer: 4, count: 118, pct: 14.0 },
+      { key: "learn", label: "LEARN", layer: 0, count: 42,  pct: 5.0 }
+    ]
+  };
+  // GET /api/soak/coverage/fixture/{id} -- a hand-supplied live fixture to A/B against the cassette.
+  var fixture = {
+    source: "fixture", fixture_id: "fx-2026-06-09-rollup", total: 410, polarity_filtered: true, excluded_self_rows: 4,
+    bands: [
+      { key: "allow", label: "ALLOW", layer: 0, count: 246, pct: 60.0 },
+      { key: "l2_l3", label: "L2/L3", layer: 2, count: 90,  pct: 22.0 },
+      { key: "l4",    label: "L4",    layer: 4, count: 57,  pct: 13.9 },
+      { key: "learn", label: "LEARN", layer: 0, count: 17,  pct: 4.1 }
+    ]
+  };
+  var THRESHOLD = 10.0;
+
+  // Severity from a signed delta (cassette pct - reference pct). Paired label always.
+  // notice -> OK, warn -> WATCH, alert -> DRIFT. (alert reserved for very large gaps.)
+  function severityFor(deltaPct) {
+    var mag = Math.abs(deltaPct);
+    if (mag >= 22) return "alert";
+    if (mag >= THRESHOLD) return "warn";
+    return "notice";
+  }
+  function sevBadgeLabel(sev) {
+    return sev === "alert" ? "DRIFT" : (sev === "warn" ? "WATCH" : "OK");
+  }
+  function signed(n) { return (n > 0 ? "+" : "") + n.toFixed(1) + "%"; }
+  function bandByKey(set, key) {
+    for (var i = 0; i < set.bands.length; i++) if (set.bands[i].key === key) return set.bands[i];
+    return null;
+  }
+
+  // Build the derived drift block (CoverageWarnings input). cassette vs the
+  // active reference column (live OR fixture). delta = cassette - reference.
+  function buildDrift(reference) {
+    var rows = [];
+    for (var i = 0; i < cassette.bands.length; i++) {
+      var cb = cassette.bands[i];
+      var rb = bandByKey(reference, cb.key) || { pct: 0, count: 0 };
+      var delta = Math.round((cb.pct - rb.pct) * 10) / 10;
+      var sev = severityFor(delta);
+      rows.push({
+        key: cb.key, label: cb.label, layer: cb.layer,
+        cassettePct: cb.pct, cassetteCount: cb.count,
+        refPct: rb.pct, refCount: rb.count,
+        delta_pct: delta, severity: sev
+      });
+    }
+    return rows;
+  }
+
+  // Remediation note per band (re-record / compare-fixture hint).
+  function noteFor(row, refLabel) {
+    if (row.severity === "notice") {
+      return "Within +/-" + THRESHOLD + "%. " + row.label + " is representative against " + refLabel + ".";
+    }
+    var dir = row.delta_pct < 0 ? "under-represents" : "over-represents";
+    return "Cassette " + dir + " " + row.label + " by ~" + Math.abs(row.delta_pct).toFixed(0) +
+      "%. Tier-1 replay may " + (row.delta_pct < 0 ? "miss" : "over-weight") +
+      " this path. Re-record via cassette_record.py, or compare a live fixture.";
+  }
+
+  // ----- STATE --------------------------------------------------------------
+  var compareMode = "live";   // "live" | "fixture"
+  var openBand = null;
+
+  function reference() { return compareMode === "fixture" ? fixture : live; }
+  function refLabel() { return compareMode === "fixture" ? ("fixture " + fixture.fixture_id) : "live"; }
+
+  // ----- RENDER -------------------------------------------------------------
+  var chartEl  = document.getElementById("caChart");
+  var warnsEl  = document.getElementById("caWarns");
+  var verdictEl= document.getElementById("caVerdict");
+  var metaEl   = document.getElementById("caMeta");
+  var exclEl   = document.getElementById("caExcluded");
+
+  function el(tag, cls) { var n = document.createElement(tag); if (cls) n.className = cls; return n; }
+
+  function render() {
+    var ref = reference();
+    var drift = buildDrift(ref);
+
+    // meta + excluded line
+    if (compareMode === "fixture") {
+      metaEl.textContent = "cassette " + cassette.total + " -- fixture " + fixture.total + " (" + fixture.fixture_id + ")";
+      exclEl.textContent = fixture.excluded_self_rows + " SM-self rows excluded (polarity filter)";
+    } else {
+      metaEl.textContent = "cassette " + cassette.total + " -- live " + live.total + " (window " + live.window + ")";
+      exclEl.textContent = live.excluded_self_rows + " SM-self rows excluded (polarity filter)";
+    }
+
+    // ---- top verdict (worst band drives it) ----
+    var worst = drift.slice().sort(function (a, b) { return Math.abs(b.delta_pct) - Math.abs(a.delta_pct); })[0];
+    var vSev = worst ? worst.severity : "notice";
+    if (vSev === "notice") {
+      verdictEl.setAttribute("data-sev", "ok");
+      verdictEl.querySelector(".verdict__label").textContent = "OK";
+      verdictEl.querySelector(".verdict__text").textContent =
+        "Coverage aligned -- all bands within +/-" + THRESHOLD + "% of " + refLabel() + ". Soak green is trustworthy.";
+    } else {
+      verdictEl.setAttribute("data-sev", vSev === "alert" ? "alert" : "warn");
+      verdictEl.querySelector(".verdict__label").textContent = sevBadgeLabel(vSev);
+      verdictEl.querySelector(".verdict__text").textContent =
+        worst.label + " drift " + signed(worst.delta_pct) + " over the " + THRESHOLD +
+        "% threshold -- Tier-1 replay may under-test the " +
+        (worst.key === "l2_l3" ? "escalation path" : worst.label + " path") + ".";
+    }
+
+    // ---- chart: one expandable band button per row ----
+    chartEl.innerHTML = "";
+    var maxPct = 0;
+    drift.forEach(function (r) { maxPct = Math.max(maxPct, r.cassettePct, r.refPct); });
+    // scale so the loudest bar fills ~96% -- keeps width math repaint-only.
+    var scale = maxPct > 0 ? (96 / maxPct) : 0;
+
+    drift.forEach(function (r) {
+      var btn = el("button", "band");
+      btn.type = "button";
+      btn.setAttribute("data-key", r.key);
+      btn.setAttribute("aria-expanded", openBand === r.key ? "true" : "false");
+      if (openBand === r.key) btn.classList.add("is-open");
+      btn.setAttribute("aria-label",
+        r.label + " band. cassette " + r.cassettePct + " percent, " + refLabel() + " " + r.refPct +
+        " percent, delta " + signed(r.delta_pct) + ", " + sevBadgeLabel(r.severity) +
+        ". Activate to expand absolute counts and remediation.");
+
+      // head: name + severity badge + delta number
+      var head = el("div", "band__head");
+      var name = el("span", "band__name"); name.textContent = r.label;
+      var sevBadge = el("span", "band__sev"); sevBadge.setAttribute("data-sev", r.severity);
+      var sevDot = el("span", "sevdot"); sevDot.setAttribute("aria-hidden", "true");
+      sevBadge.appendChild(sevDot);
+      sevBadge.appendChild(document.createTextNode(sevBadgeLabel(r.severity)));
+      var delta = el("span", "band__delta"); delta.setAttribute("data-sev", r.severity);
+      delta.textContent = signed(r.delta_pct);
+      head.appendChild(name); head.appendChild(sevBadge); head.appendChild(delta);
+      btn.appendChild(head);
+
+      // paired bars: cassette (hairline, candidate) ABOVE live/fixture (ink-loud, reference)
+      var bw = el("div", "barwrap");
+      bw.appendChild(barRow("cassette", r.cassettePct, scale, "cassette"));
+      bw.appendChild(barRow(compareMode === "fixture" ? "fixture" : "live", r.refPct, scale, "live"));
+      btn.appendChild(bw);
+
+      // expand detail
+      var det = el("dl", "band__detail");
+      if (openBand !== r.key) det.hidden = true;
+      det.appendChild(dt("cassette count")); det.appendChild(dd(r.cassetteCount + " / " + cassette.total + " (" + r.cassettePct + "%)"));
+      det.appendChild(dt(refLabel() + " count")); det.appendChild(dd(r.refCount + " / " + ref.total + " (" + r.refPct + "%)"));
+      det.appendChild(dt("layer bin")); det.appendChild(dd("layer " + r.layer));
+      det.appendChild(dt("signed drift")); det.appendChild(dd(signed(r.delta_pct) + " (" + sevBadgeLabel(r.severity) + ")"));
+      var rem = el("p", "remediation" + (r.severity === "notice" ? " is-notice" : ""));
+      rem.textContent = noteFor(r, refLabel());
+      det.appendChild(rem);
+      btn.appendChild(det);
+
+      btn.addEventListener("click", function () {
+        openBand = (openBand === r.key) ? null : r.key;
+        render();
+        // keep focus on the toggled band for the keyboard path
+        var again = chartEl.querySelector('.band[data-key="' + r.key + '"]');
+        if (again) again.focus();
+      });
+
+      chartEl.appendChild(btn);
+    });
+
+    // ---- warnings: only bands over threshold ----
+    warnsEl.innerHTML = "";
+    var flagged = drift.filter(function (r) { return r.severity !== "notice"; });
+    if (flagged.length === 0) {
+      var calm = el("div", "warn");
+      calm.setAttribute("data-sev", "ok");
+      calm.innerHTML = '<span class="warn__badge" style="color:var(--text-dim);background:var(--bg-row-alt)">' +
+        '<span class="sevdot" aria-hidden="true"></span>OK</span>' +
+        '<span class="warn__text">No band drifts past the +/-' + THRESHOLD + '% threshold. Cassette is representative of ' +
+        escapeHtml(refLabel()) + '.</span>';
+      warnsEl.appendChild(calm);
+    } else {
+      flagged.forEach(function (r) {
+        var w = el("div", "warn");
+        w.setAttribute("data-sev", r.severity);
+        var badge = '<span class="warn__badge"><span class="sevdot" aria-hidden="true"></span>' +
+          sevBadgeLabel(r.severity) + ' ' + signed(r.delta_pct) + '</span>';
+        w.innerHTML = badge + '<span class="warn__text"><strong>' + r.label + '</strong> -- ' +
+          escapeHtml(noteFor(r, refLabel())) + '</span>';
+        warnsEl.appendChild(w);
+      });
+    }
+  }
+
+  function barRow(tag, pct, scale, kind) {
+    var row = el("div", "barline");
+    var t = el("span", "barline__tag"); t.textContent = tag;
+    var bar = el("div", "bar");
+    var fill = el("div", "bar__fill " + kind);
+    fill.style.width = Math.max(2, pct * scale) + "%"; // min 2% so a non-zero band is always visible
+    bar.appendChild(fill);
+    var p = el("span", "barline__pct"); p.textContent = pct.toFixed(1) + "%";
+    row.appendChild(t); row.appendChild(bar); row.appendChild(p);
+    return row;
+  }
+  function dt(s) { var n = el("dt"); n.textContent = s; return n; }
+  function dd(s) { var n = el("dd"); n.textContent = s; return n; }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c];
+    });
+  }
+
+  // ----- mode switch (Live window <-> Compare fixture) ----------------------
+  var modeLive = document.getElementById("modeLive");
+  var modeFixture = document.getElementById("modeFixture");
+  function setMode(m) {
+    compareMode = m; openBand = null;
+    modeLive.classList.toggle("is-active", m === "live");
+    modeFixture.classList.toggle("is-active", m === "fixture");
+    modeLive.setAttribute("aria-pressed", String(m === "live"));
+    modeFixture.setAttribute("aria-pressed", String(m === "fixture"));
+    render();
+  }
+  modeLive.addEventListener("click", function () { setMode("live"); });
+  modeFixture.addEventListener("click", function () { setMode("fixture"); });
+
+  // ----- BETA flag (on/off) -- whole widget is a no-op when OFF -------------
+  var flag = document.getElementById("caFlag");
+  var flagText = document.getElementById("caFlagText");
+  var liveWrap = document.getElementById("caLive");
+  var offWrap = document.getElementById("caOff");
+  function applyFlag() {
+    var on = flag.checked;
+    flagText.textContent = on ? "ON" : "OFF";
+    flagText.setAttribute("data-on", String(on));
+    flag.setAttribute("aria-label", "coverage-analyzer beta flag (currently " + (on ? "ON" : "OFF") + ")");
+    liveWrap.hidden = !on;
+    offWrap.hidden = on;
+    // when OFF the chip in the header would not even mount; here we keep it but mute it
+    chip.classList.toggle("chip-settings", !on);
+  }
+  flag.addEventListener("change", applyFlag);
+
+  // ----- drawer open/close (mirrors SettingsDrawer focus contract) ----------
+  var chip = document.getElementById("openChip");
+  var scrim = document.getElementById("caScrim");
+  var panel = document.getElementById("caPanel");
+  var closeBtn = document.getElementById("caClose");
+  var lastFocused = null;
+
+  function openDrawer() {
+    lastFocused = document.activeElement;
+    scrim.hidden = false; panel.hidden = false;
+    panel.classList.add("is-enter");
+    requestAnimationFrame(function () { panel.classList.remove("is-enter"); });
+    // focus moves to the panel heading (focus-trap entry)
+    panel.focus();
+    document.addEventListener("keydown", onKeydown, true);
+  }
+  function closeDrawer() {
+    scrim.hidden = true; panel.hidden = true;
+    document.removeEventListener("keydown", onKeydown, true);
+    // restore focus to the invoking chip
+    if (lastFocused && lastFocused.focus) lastFocused.focus(); else chip.focus();
+  }
+  function onKeydown(e) {
+    if (panel.hidden) return;
+    if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+    // minimal focus trap: keep Tab inside the panel
+    if (e.key === "Tab") {
+      var f = panel.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])');
+      f = Array.prototype.filter.call(f, function (n) { return !n.disabled && n.offsetParent !== null; });
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }
+  chip.addEventListener("click", openDrawer);
+  closeBtn.addEventListener("click", closeDrawer);
+  scrim.addEventListener("click", closeDrawer);
+
+  // ----- boot ---------------------------------------------------------------
+  applyFlag();
+  render();
+  openDrawer(); // open on load so the operator sees the widget immediately
+})();
+</script>
+</body>
+</html>

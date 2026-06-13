@@ -150,6 +150,18 @@ def load(repo_path: str | Path, ignore_intent: bool = False) -> ProjectContextSn
     return snap
 
 
+def is_destructive(content: str) -> bool:
+    """True iff ``content`` matches any static safety-priority pattern in
+    ``_DESTRUCTIVE`` -- the SAME list ``fast_precheck`` scans.
+
+    Single source of truth for "would the precheck flag this as a
+    safety-priority destructive class" so downstream safety gates (the
+    ADR-18 Amendment F graduation candidate gate via
+    ``governance.is_safety_priority_content``; invariant #2) cannot drift
+    from the precheck regexes. Static only -- no project-aware snapshot."""
+    return any(pat.search(content) for pat, _action, _reason in _DESTRUCTIVE)
+
+
 def fast_precheck(content: str, snap: ProjectContextSnapshot) -> FastPrecheckDecision | None:
     """Sub-millisecond static + project-aware safety check. No network."""
     for pat, action, reason in _DESTRUCTIVE:

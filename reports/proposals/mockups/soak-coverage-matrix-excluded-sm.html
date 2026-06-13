@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<!--
+  soak-coverage-matrix-excluded-sm.html -- KingMode MOCKUP for BETA feature #42
+  "Soak Coverage Matrix (Governed Sessions Only)".
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written.
+  This is a STATIC, self-contained preview (no Svelte, no build, no network).
+  Tokens, palette and the drawer idiom are lifted from the real ui-next spike:
+    - obsidian theme tokens from dashboard/ui-next/src/styles/theme.css
+    - drawer / chip / verdict / paired-badge pattern from
+      dashboard/ui-next/src/lib/components/beta/CoverageAnalyzer.svelte
+
+  ADR-18 floor previewed:
+    M1  three-frame floor untouched -- this is a footer-summoned right-column
+        slide-out DRAWER, never a fourth frame.
+    M2  informational-only: never auto-foregrounds, raises no escalation, never
+        steals focus. The footer chip is the only resting affordance.
+    M4  paired label+color EVERYWHERE -- every cell carries a glyph + the literal
+        word COVERED / UNCOVERED; the verdict carries the literal READY / GAP;
+        priority chips carry the literal rank P0 / P1. Color is never the sole
+        signal.
+    M16 domain-agnostic -- no monitored-project vocabulary. Path/subsystem names
+        are SM-internal governance taxonomy; governed-target identity is rendered
+        from data, never hard-coded.
+    M17 a11y: chip is a real button (aria-haspopup=dialog); drawer is
+        role=dialog aria-modal aria-labelledby; focus moves in on open + restored
+        on close; focus trap; Escape closes; each path row is a keyboard-operable
+        button that expands; verdict + load announced via aria-live=polite;
+        global 2px amber focus ring; reduced motion honoured.
+    M18 single post-hoc GET on drawer-open (a "Re-read" button re-fetches); no
+        poller, no SSE, no timer.
+
+  POLARITY (G2): Live-Session column + the visible "N SM-self rows excluded"
+  footer mirror the durable read filter (project_slug NOT IN {streamManager}
+  AND session_id != self). Self-exclusion is a FEATURE shown to the operator,
+  never a silent filter.
+
+  BETA GATING: default OFF; the inline toggle below previews the gated on/off
+  behaviour. OFF => chip + drawer render nothing (zero runtime cost).
+
+  ASCII-only (cp1252-safe): dash rendered as "--". No smart quotes, no em-dash,
+  no box-drawing.
+-->
+<html lang="en" data-theme="obsidian" data-motion="allow">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Soak Coverage Matrix [BETA] -- KingMode mockup (#42)</title>
+<style>
+  /* ======================================================================
+     THEME TOKENS -- obsidian, lifted verbatim from theme.css so this mockup
+     previews the REAL palette. (Only the obsidian theme is inlined here; the
+     real component inherits all three themes from theme.css.)
+  ====================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed badge tokens (M4, theme-invariant) */
+    --badge-ar-fg: #d97706;  --badge-ar-bg: #fef3c7;  --badge-ar-border: #d97706;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626; --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+    --badge-warn-fg: #ea580c; --badge-warn-bg: #ffedd5; --badge-warn-border: #ea580c;
+
+    /* global 2px amber focus ring */
+    --focus-ring-width: 2px;
+    --focus-ring-style: solid;
+    --focus-ring-color: #d97706;
+    --hairline: 1px;
+  }
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    --font-d:       var(--ff-mono);
+  }
+
+  /* ======================================================================
+     PAGE CHROME (mockup harness only -- NOT part of the shipped component).
+     A minimal stand-in for the dashboard footer so the chip has a home.
+  ====================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -10%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+
+  .stage {
+    flex: 1 1 auto;
+    padding: 2.4rem clamp(1rem, 5vw, 3.5rem) 1rem;
+    max-width: 1080px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  .stage__kicker {
+    font-family: var(--font-d);
+    font-size: 0.68rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.5rem;
+  }
+  .stage h1 {
+    margin: 0 0 0.4rem;
+    font-size: clamp(1.6rem, 3vw, 2.3rem);
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    color: var(--text-bright);
+    font-weight: 800;
+  }
+  .stage h1 .ampersand { color: var(--accent); font-weight: 400; }
+  .stage__lede {
+    max-width: 60ch;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: var(--text);
+  }
+
+  /* ---- BETA control strip (previews the gated on/off behaviour) ---------- */
+  .gate {
+    margin-top: 1.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    padding: 0.9rem 1.1rem;
+    border: var(--hairline) solid var(--border);
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--bg-card), var(--bg-row-alt));
+  }
+  .gate__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-d);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+  }
+  .gate__note {
+    flex: 1 1 16rem;
+    min-width: 12rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    line-height: 1.45;
+  }
+  .gate__note code {
+    font-family: var(--font-d);
+    color: var(--text);
+    background: var(--bg-row);
+    padding: 0.05rem 0.3rem;
+    border-radius: 4px;
+  }
+
+  /* on/off switch -- a real labelled checkbox button */
+  .switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .switch__track {
+    --w: 3.1rem;
+    width: var(--w);
+    height: 1.6rem;
+    border-radius: 999px;
+    background: var(--bg-row);
+    border: var(--hairline) solid var(--border);
+    position: relative;
+    transition: background 0.18s ease, border-color 0.18s ease;
+    flex: 0 0 auto;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 0.18rem;
+    left: 0.2rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch__state {
+    font-family: var(--font-d);
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    min-width: 2.4em;
+    color: var(--text-dim);
+  }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .switch input:checked + .switch__track {
+    background: var(--accent-dim);
+    border-color: var(--border-hi);
+  }
+  .switch input:checked + .switch__track .switch__knob {
+    transform: translateX(1.4rem);
+    background: var(--accent);
+  }
+  .switch input:focus-visible + .switch__track {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* ---- mock dashboard footer (where the chip lives, beside CoverageAnalyzer) -- */
+  .footer {
+    flex: 0 0 auto;
+    border-top: var(--hairline) solid var(--border);
+    background: var(--bg-card);
+    padding: 0.65rem clamp(1rem, 5vw, 3.5rem);
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+  }
+  .footer__label {
+    font-family: var(--font-d);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin-right: auto;
+  }
+  .footer__chips { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+  /* the resting chip (mirrors .ca-chip) -- one for the existing CoverageAnalyzer
+     (disabled stub, for context) and the live one for THIS feature. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: inherit;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    padding: 0.3rem 0.65rem;
+    background: var(--accent-dim);
+    color: var(--text-bright);
+    border: var(--hairline) solid var(--border-hi);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip[hidden] { display: none; }
+  .chip__dot {
+    width: 0.5rem; height: 0.5rem; border-radius: 50%;
+    background: var(--accent); flex: 0 0 auto;
+  }
+  .chip__beta {
+    font-family: var(--font-d);
+    font-size: 0.56rem; font-weight: 700; letter-spacing: 0.08em;
+    color: #92400e;
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 4px;
+    padding: 0 0.3rem;
+  }
+  .chip--ghost {
+    background: var(--bg-row-alt);
+    color: var(--text-dim);
+    border-color: var(--border);
+    cursor: default;
+    opacity: 0.7;
+  }
+  .chip--ghost .chip__dot { background: var(--text-ui); }
+
+  /* ======================================================================
+     SCRIM + DRAWER (mirrors .ca-scrim / .ca-panel)
+  ====================================================================== */
+  .scrim {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(8, 10, 12, 0.55);
+    backdrop-filter: blur(1px);
+  }
+  .scm-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 81;
+    width: min(620px, 96vw);
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border-left: var(--hairline) solid var(--border-hi);
+    box-shadow: -18px 0 48px -24px rgba(0, 0, 0, 0.8);
+    color: var(--text);
+    font-family: var(--ff-system);
+    overflow: hidden;
+    transform: translateX(0);
+  }
+  /* slide-in (suppressed under reduced motion -- see data-motion rule) */
+  [data-motion="allow"] .scm-panel { animation: scm-slide 0.26s ease both; }
+  @keyframes scm-slide { from { transform: translateX(18px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  .scm-head {
+    flex: 0 0 auto;
+    display: flex; align-items: flex-start; gap: 0.75rem;
+    padding: 1rem 1.15rem 0.85rem;
+    border-bottom: var(--hairline) solid var(--border);
+  }
+  .scm-head__grow { flex: 1 1 auto; min-width: 0; }
+  .scm-title {
+    margin: 0;
+    font-size: 1.02rem; letter-spacing: 0.01em;
+    color: var(--text-bright); font-weight: 800; line-height: 1.25;
+  }
+  .scm-sub {
+    margin: 0.2rem 0 0;
+    font-size: 0.74rem; color: var(--text-dim);
+    font-family: var(--font-d);
+  }
+  .scm-close {
+    flex: 0 0 auto; font: inherit; line-height: 1; font-size: 1rem;
+    background: transparent; color: var(--text-dim);
+    border: var(--hairline) solid var(--border);
+    border-radius: 8px; width: 2rem; height: 2rem; cursor: pointer;
+  }
+  .scm-close:hover { color: var(--text-bright); }
+
+  .scm-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    padding: 1rem 1.15rem 1.4rem;
+    overscroll-behavior: contain;
+  }
+
+  /* BETA strip inside the drawer */
+  .scm-betastrip {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.55rem 0.7rem; margin-bottom: 1rem;
+    border: var(--hairline) solid var(--border);
+    border-radius: 8px; background: var(--bg-row-alt);
+  }
+  .scm-pill {
+    display: inline-flex; align-items: center;
+    font-size: 0.64rem; letter-spacing: 0.05em; text-transform: uppercase;
+    font-weight: 700; padding: 0.2rem 0.5rem; border-radius: 6px;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+  }
+  .scm-pill__note { flex: 1 1 auto; font-size: 0.72rem; color: var(--text-dim); line-height: 1.4; }
+
+  /* data-source line (mock vs live) -- ALWAYS a literal label (M4) */
+  .scm-source {
+    margin: 0 0 0.9rem;
+    font-size: 0.7rem; font-family: var(--font-d); letter-spacing: 0.02em;
+    color: var(--text-dim);
+  }
+  .scm-source[data-mock="true"] { color: var(--badge-warn-fg); }
+
+  /* ---- TOP VERDICT badge (LOUD, paired label+color) ---------------------- */
+  .scm-verdict {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.75rem 0.85rem; margin-bottom: 1.1rem;
+    border: var(--hairline) solid var(--border);
+    border-radius: 10px; background: var(--bg-card);
+    border-left-width: 4px;
+  }
+  .scm-verdict__dot {
+    width: 0.72rem; height: 0.72rem; border-radius: 50%; flex: 0 0 auto;
+    background: var(--text-dim);
+  }
+  .scm-verdict__label {
+    font-family: var(--font-d); font-weight: 800;
+    font-size: 0.92rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .scm-verdict__count {
+    font-family: var(--font-d); font-size: 0.74rem; font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+  }
+  .scm-verdict__text {
+    flex: 1 1 14rem; font-size: 0.82rem; color: var(--text); line-height: 1.4;
+  }
+  .scm-verdict[data-variant="ready"] {
+    border-left-color: var(--badge-decided-border);
+  }
+  .scm-verdict[data-variant="ready"] .scm-verdict__dot { background: var(--badge-decided-fg); }
+  .scm-verdict[data-variant="ready"] .scm-verdict__label { color: var(--badge-decided-fg); }
+  .scm-verdict[data-variant="gap"] {
+    border-left-color: var(--badge-blocked-border);
+  }
+  .scm-verdict[data-variant="gap"] .scm-verdict__dot { background: var(--badge-blocked-fg); }
+  .scm-verdict[data-variant="gap"] .scm-verdict__label { color: var(--badge-blocked-fg); }
+
+  /* ---- section heads ----------------------------------------------------- */
+  .scm-section-h {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 0.6rem; margin: 1.3rem 0 0.6rem;
+  }
+  .scm-section-h:first-of-type { margin-top: 0.2rem; }
+  .scm-section-h h3 {
+    margin: 0; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-ui); font-weight: 700;
+  }
+  .scm-meta { font-size: 0.7rem; color: var(--text-dim); }
+  .tabular { font-variant-numeric: tabular-nums; font-family: var(--font-d); }
+
+  /* ======================================================================
+     THE MATRIX -- the hero. Asymmetric: a fixed left RAIL of path labels
+     against a 5-column tier band. Live-only rows get a left hairline accent
+     so the eye groups them WITHOUT relying on color.
+  ====================================================================== */
+  .scm-matrix { display: flex; flex-direction: column; gap: 0.18rem; }
+
+  /* column header row */
+  .scm-mhead {
+    display: grid;
+    grid-template-columns: 11.5rem repeat(5, 1fr);
+    gap: 0.18rem;
+    align-items: end;
+    padding: 0 0.2rem 0.35rem;
+  }
+  .scm-mhead__corner {
+    font-family: var(--font-d); font-size: 0.6rem; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-ui);
+    align-self: end;
+  }
+  .scm-thead {
+    font-family: var(--font-d); font-size: 0.6rem; font-weight: 700;
+    letter-spacing: 0.03em; text-align: center; color: var(--text-bright);
+    line-height: 1.15;
+    padding-bottom: 0.15rem;
+    border-bottom: 2px solid var(--border);
+  }
+  .scm-thead.is-live { border-bottom-color: var(--accent); color: var(--accent); }
+
+  /* a path ROW is a real button that expands an accordion detail */
+  .scm-row {
+    width: 100%; text-align: left; font: inherit; color: inherit;
+    background: transparent; border: var(--hairline) solid transparent;
+    border-radius: 8px; padding: 0.3rem 0.2rem; cursor: pointer; display: block;
+  }
+  .scm-row:hover { background: var(--bg-row-hover); }
+  .scm-row.is-open { background: var(--bg-row-hover); border-color: var(--border); }
+  .scm-row__grid {
+    display: grid;
+    grid-template-columns: 11.5rem repeat(5, 1fr);
+    gap: 0.18rem;
+    align-items: stretch;
+  }
+  .scm-row__label {
+    display: flex; flex-direction: column; justify-content: center; gap: 0.12rem;
+    padding: 0.15rem 0.45rem 0.15rem 0.55rem;
+    font-family: var(--font-d); font-size: 0.74rem; font-weight: 700;
+    color: var(--text-bright); letter-spacing: 0.01em;
+  }
+  /* the live-only left hairline accent (non-color grouping cue is the TAG text;
+     the accent merely reinforces) */
+  .scm-row--liveonly .scm-row__label {
+    border-left: 2px solid var(--accent);
+    padding-left: 0.45rem;
+  }
+  .scm-row__tag {
+    font-size: 0.56rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .scm-row__expand {
+    font-size: 0.56rem; color: var(--text-dim); letter-spacing: 0.04em;
+  }
+
+  /* a CELL: glyph + the literal word COVERED / UNCOVERED (M4) */
+  .scm-cell {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.12rem;
+    min-height: 2.5rem;
+    border-radius: 6px;
+    border: var(--hairline) solid var(--border);
+    background: var(--bg-row);
+    text-align: center;
+    padding: 0.25rem 0.15rem;
+  }
+  .scm-cell__glyph {
+    font-family: var(--font-d); font-size: 0.95rem; font-weight: 800; line-height: 1;
+  }
+  .scm-cell__word {
+    font-family: var(--font-d); font-size: 0.5rem; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .scm-cell[data-covered="true"] {
+    background: rgba(22, 163, 74, 0.12);
+    border-color: var(--badge-decided-border);
+  }
+  .scm-cell[data-covered="true"] .scm-cell__glyph,
+  .scm-cell[data-covered="true"] .scm-cell__word { color: var(--badge-decided-fg); }
+  .scm-cell[data-covered="false"] {
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.4);
+    border-style: dashed;
+  }
+  .scm-cell[data-covered="false"] .scm-cell__glyph,
+  .scm-cell[data-covered="false"] .scm-cell__word { color: var(--badge-blocked-fg); }
+
+  /* expanded accordion detail */
+  .scm-detail {
+    margin: 0.45rem 0.2rem 0.1rem;
+    padding: 0.6rem 0.7rem;
+    border-top: var(--hairline) dashed var(--border);
+    background: var(--bg-row-alt);
+    border-radius: 0 0 8px 8px;
+    font-size: 0.76rem; line-height: 1.45; color: var(--text);
+  }
+  .scm-detail dl {
+    margin: 0 0 0.5rem; display: grid; grid-template-columns: auto 1fr;
+    gap: 0.25rem 0.8rem;
+  }
+  .scm-detail dt {
+    font-family: var(--font-d); font-size: 0.64rem; letter-spacing: 0.03em;
+    color: var(--text-dim); white-space: nowrap;
+  }
+  .scm-detail dd { margin: 0; color: var(--text-bright); font-size: 0.74rem; }
+  .scm-detail dd code, .scm-detail dt code {
+    font-family: var(--font-d); color: var(--accent);
+  }
+  .scm-remediation {
+    margin: 0; padding: 0.45rem 0.6rem;
+    background: var(--bg-card); border-radius: 6px;
+    border-left: 2px solid var(--badge-warn-fg);
+    color: var(--text-dim); font-size: 0.74rem;
+  }
+  .scm-remediation.is-covered { border-left-color: var(--badge-decided-border); color: var(--text); }
+
+  /* ---- polarity-filter footer (self-exclusion as a visible feature) ------ */
+  .scm-polarity {
+    margin-top: 1.1rem;
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    padding: 0.5rem 0.65rem;
+    border: var(--hairline) solid var(--border);
+    border-radius: 8px; background: var(--bg-row-alt);
+    font-size: 0.72rem; color: var(--text-dim);
+  }
+  .scm-polarity__badge {
+    font-family: var(--font-d); font-size: 0.58rem; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 5px; padding: 0.12rem 0.4rem;
+  }
+  .scm-polarity code { font-family: var(--font-d); color: var(--text); }
+
+  /* ---- ranked uncovered-priority stack (the actionable takeaway) --------- */
+  .scm-priority { display: flex; flex-direction: column; gap: 0.5rem; }
+  .scm-prio {
+    display: flex; align-items: flex-start; gap: 0.6rem;
+    padding: 0.6rem 0.7rem; border-radius: 8px;
+    border: var(--hairline) solid var(--border); background: var(--bg-card);
+  }
+  .scm-prio__rank {
+    flex: 0 0 auto;
+    font-family: var(--font-d); font-size: 0.7rem; font-weight: 800;
+    letter-spacing: 0.04em; padding: 0.18rem 0.5rem; border-radius: 6px;
+    border: 2px solid;
+  }
+  .scm-prio[data-rank="P0"] .scm-prio__rank {
+    color: var(--badge-blocked-fg); background: rgba(220, 38, 38, 0.1);
+    border-color: var(--badge-blocked-border);
+  }
+  .scm-prio[data-rank="P1"] .scm-prio__rank {
+    color: var(--badge-warn-fg); background: var(--badge-warn-bg);
+    border-color: var(--badge-warn-border);
+  }
+  .scm-prio__body { flex: 1 1 auto; min-width: 0; }
+  .scm-prio__title {
+    font-family: var(--font-d); font-size: 0.78rem; font-weight: 700;
+    color: var(--text-bright); margin: 0 0 0.2rem;
+  }
+  .scm-prio__detail { font-size: 0.76rem; color: var(--text-dim); line-height: 1.4; margin: 0; }
+
+  .scm-priority--none {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.6rem 0.7rem; border-radius: 8px;
+    border: var(--hairline) solid var(--badge-decided-border);
+    background: rgba(22, 163, 74, 0.08);
+  }
+  .scm-priority--none .scm-prio__rank {
+    color: var(--badge-decided-fg); background: rgba(22, 163, 74, 0.12);
+    border: 2px solid var(--badge-decided-border);
+    font-family: var(--font-d); font-size: 0.7rem; font-weight: 800;
+    padding: 0.18rem 0.5rem; border-radius: 6px;
+  }
+  .scm-priority--none span { font-size: 0.78rem; color: var(--text); }
+
+  /* ---- controls (Re-read; no auto-poll) ---------------------------------- */
+  .scm-controls {
+    display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+    margin-top: 1.2rem;
+  }
+  .scm-btn {
+    font: inherit; font-size: 0.74rem; padding: 0.4rem 0.75rem;
+    background: var(--bg-row-alt); color: var(--text-bright);
+    border: var(--hairline) solid var(--border); border-radius: 7px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  .scm-btn:hover { border-color: var(--border-hi); }
+  .scm-controls__note { font-size: 0.7rem; color: var(--text-dim); margin-left: auto; }
+
+  /* live-region (visually subtle; carries verdict + load announcements) */
+  .scm-live {
+    margin-top: 0.6rem; font-size: 0.68rem; color: var(--text-dim);
+    font-family: var(--font-d);
+  }
+
+  /* ---- drawer footer ----------------------------------------------------- */
+  .scm-foot {
+    flex: 0 0 auto;
+    padding: 0.6rem 1.15rem;
+    border-top: var(--hairline) solid var(--border);
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    font-size: 0.68rem; color: var(--text-dim); background: var(--bg-row-alt);
+  }
+  .scm-foot .scm-pill { font-size: 0.56rem; padding: 0.14rem 0.4rem; border-width: 1px; }
+
+  /* ======================================================================
+     GLOBAL 2px AMBER FOCUS RING (M17) on every interactive element
+  ====================================================================== */
+  .chip:focus-visible,
+  .scm-close:focus-visible,
+  .scm-row:focus-visible,
+  .scm-btn:focus-visible,
+  .mode-btn:focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* ---- reduced motion (M17): suppress the slide-in via data-motion -------- */
+  [data-motion="reduce"] .scm-panel { animation: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .scm-panel { animation: none; }
+  }
+
+  /* mockup-only: a tiny preview-control bar so the operator can flip the GAP
+     vs READY fixture and the reduced-motion attribute while clicking through. */
+  .preview-controls {
+    display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
+    margin-top: 1.4rem; padding-top: 1rem;
+    border-top: var(--hairline) dashed var(--border);
+  }
+  .preview-controls__label {
+    font-family: var(--font-d); font-size: 0.62rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-ui); margin-right: 0.3rem;
+  }
+  .mode-btn {
+    font: inherit; font-size: 0.72rem; padding: 0.32rem 0.7rem;
+    background: var(--bg-row-alt); color: var(--text-dim);
+    border: var(--hairline) solid var(--border); border-radius: 7px; cursor: pointer;
+  }
+  .mode-btn[aria-pressed="true"] {
+    color: var(--accent); border-color: var(--border-hi); background: var(--accent-dim);
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+  <main class="stage">
+    <p class="stage__kicker">SM operator UI &middot; KingMode mockup &middot; BETA #42</p>
+    <h1>Soak Coverage Matrix <span class="ampersand">/</span> Governed Sessions Only</h1>
+    <p class="stage__lede">
+      Certify -- at a glance -- which governance subsystems each soak tier
+      actually exercised, so a green soak is never mistaken for full coverage of
+      the live-only polarity / Learn-Mode / JsonlTail paths. This is a static
+      preview of the drawer; click <strong>Coverage Matrix [BETA]</strong> in the
+      footer to open it.
+    </p>
+
+    <!-- BETA gate strip: previews the default-OFF + Settings toggle behaviour -->
+    <div class="gate">
+      <span class="gate__pill">&#9650; BETA</span>
+      <span class="gate__note">
+        Default <strong>OFF</strong> -- toggled in <code>Settings &gt; BETA features</code>.
+        Gated on <code>betaFlags['soak-coverage-matrix']</code>. OFF means the
+        footer chip + drawer render nothing and register no fetch / poller / SSE
+        (zero runtime cost). Flip it here to preview the gated behaviour:
+      </span>
+      <label class="switch">
+        <input id="gateToggle" type="checkbox" checked />
+        <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        <span class="switch__state" id="gateState">ON</span>
+        <span class="sr-only">Toggle the Soak Coverage Matrix beta flag</span>
+      </label>
+    </div>
+
+    <!-- mockup-only preview controls (NOT part of the shipped component) -->
+    <div class="preview-controls">
+      <span class="preview-controls__label">Preview fixture</span>
+      <button class="mode-btn" type="button" data-fixture="gap" aria-pressed="true">GAP -- 3 paths uncovered</button>
+      <button class="mode-btn" type="button" data-fixture="ready" aria-pressed="false">READY -- all covered</button>
+      <span class="preview-controls__label" style="margin-left:1rem;">Motion</span>
+      <button class="mode-btn" type="button" data-motion-set="allow" aria-pressed="true">allow</button>
+      <button class="mode-btn" type="button" data-motion-set="reduce" aria-pressed="false">reduce</button>
+    </div>
+  </main>
+
+  <!-- MOCK DASHBOARD FOOTER: the resting affordance lives here, beside the
+       existing CoverageAnalyzer chip (shown ghosted for context). -->
+  <footer class="footer">
+    <span class="footer__label">footer slot</span>
+    <div class="footer__chips">
+      <button class="chip chip--ghost" type="button" tabindex="-1" aria-disabled="true" title="existing feature -- shown for context">
+        <span class="chip__dot" aria-hidden="true"></span>
+        Coverage
+        <span class="chip__beta">BETA</span>
+      </button>
+      <!-- THIS feature's chip: a real button, aria-haspopup=dialog -->
+      <button id="scmChip" class="chip" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="scm-panel">
+        <span class="chip__dot" aria-hidden="true"></span>
+        Coverage Matrix
+        <span class="chip__beta">BETA</span>
+      </button>
+    </div>
+  </footer>
+
+  <!-- SCRIM + DRAWER: injected/shown via the script. Built statically so the
+       operator can read it; the script wires open/close/focus/expand. -->
+  <div id="scmScrim" class="scrim" hidden></div>
+
+  <div id="scm-panel" class="scm-panel" role="dialog" aria-modal="true"
+       aria-labelledby="scm-title" tabindex="-1" hidden>
+    <header class="scm-head">
+      <div class="scm-head__grow">
+        <h2 id="scm-title" class="scm-title">Soak Coverage Matrix</h2>
+        <p class="scm-sub">tier x subsystem coverage &middot; governed sessions only</p>
+      </div>
+      <button id="scmClose" class="scm-close" type="button" aria-label="Close soak coverage matrix">
+        <span aria-hidden="true">x</span>
+      </button>
+    </header>
+
+    <div class="scm-body">
+      <!-- BETA strip -->
+      <div class="scm-betastrip">
+        <span class="scm-pill">BETA</span>
+        <span class="scm-pill__note">
+          default OFF -- toggled in Settings &gt; BETA features. Read once on
+          open via a single post-hoc GET (no poller, no SSE).
+        </span>
+      </div>
+
+      <!-- data-source line: ALWAYS a literal label (mock vs live) -->
+      <p id="scmSource" class="scm-source" data-mock="true">
+        SAMPLE DATA -- no soak runs in gov.db yet; showing a representative shape.
+      </p>
+
+      <!-- TOP VERDICT (paired label+color; color is never the sole signal) -->
+      <div id="scmVerdict" class="scm-verdict" data-variant="gap">
+        <span class="scm-verdict__dot" aria-hidden="true"></span>
+        <span id="scmVerdictLabel" class="scm-verdict__label">GAP</span>
+        <span id="scmVerdictCount" class="scm-verdict__count">(4 of 6 paths covered)</span>
+        <span id="scmVerdictText" class="scm-verdict__text">
+          3 load-bearing live-only paths are uncovered -- a green soak does not
+          certify the live path. Run a live-session soak before clearing the gate.
+        </span>
+      </div>
+
+      <!-- THE MATRIX -->
+      <div class="scm-section-h">
+        <h3>Coverage matrix</h3>
+        <span class="scm-meta tabular" id="scmWindowMeta">window 1000 &middot; 7 days</span>
+      </div>
+
+      <div class="scm-matrix" role="group" aria-label="Soak coverage matrix: subsystems by tier">
+        <!-- column header row -->
+        <div class="scm-mhead" aria-hidden="true">
+          <span class="scm-mhead__corner">path \ tier</span>
+          <span class="scm-thead">Tier 1</span>
+          <span class="scm-thead">Tier 1.5</span>
+          <span class="scm-thead">Tier 2</span>
+          <span class="scm-thead">Tier 3</span>
+          <span class="scm-thead is-live">Live-Session</span>
+        </div>
+        <!-- rows are injected by the script from the fixture (GAP / READY) -->
+        <div id="scmRows"></div>
+      </div>
+
+      <!-- POLARITY-FILTER FOOTER: self-exclusion shown as a feature -->
+      <div class="scm-polarity">
+        <span class="scm-polarity__badge">Polarity filter</span>
+        <span>
+          <strong id="scmExcluded">412</strong> SM-self rows excluded
+          (<code>project_slug NOT IN {streamManager} AND session_id != self</code>).
+          The Live-Session column counts governed sessions only.
+        </span>
+      </div>
+
+      <!-- RANKED UNCOVERED-PRIORITY STACK (the actionable takeaway) -->
+      <div class="scm-section-h">
+        <h3>Highest-priority uncovered paths</h3>
+        <span class="scm-meta">ranked</span>
+      </div>
+      <div id="scmPriority" class="scm-priority"></div>
+
+      <!-- CONTROLS: Re-read only (no auto-poll) -->
+      <div class="scm-controls">
+        <button id="scmReread" class="scm-btn" type="button">
+          <span aria-hidden="true">&#8635;</span> Re-read
+        </button>
+        <span class="scm-controls__note">single post-hoc GET; no auto-poll, no SSE</span>
+      </div>
+      <p id="scmLive" class="scm-live" role="status" aria-live="polite"></p>
+    </div>
+
+    <footer class="scm-foot">
+      <span class="scm-pill">BETA</span>
+      <span>
+        Read-only. Default OFF, toggled in Settings &gt; BETA features. Never
+        auto-foregrounds; never a fourth frame. v1 constrained-additive: reuses
+        the existing soak_runs table, no new bus envelope, no FROZEN surface touched.
+      </span>
+    </footer>
+  </div>
+
+<script>
+  "use strict";
+
+  // ======================================================================
+  // DETERMINISTIC MOCK FIXTURES -- mirror SoakCoverageMatrix.data.js exactly.
+  // Two variants ship for #test: GAP (default) and an all-true READY fixture,
+  // so a Playwright --headed spec can assert both banners without live gov.db.
+  // ======================================================================
+  var TIERS = [
+    { key: "t1",   label: "Tier 1" },
+    { key: "t1_5", label: "Tier 1.5" },
+    { key: "t2",   label: "Tier 2" },
+    { key: "t3",   label: "Tier 3" },
+    { key: "live", label: "Live-Session" }
+  ];
+
+  var PATHS_BASE = [
+    { key: "cli_pool",   label: "cli_pool sends",         live_only: false, signal: "cli_pool_send_ms>0",
+      expects: "every tier dispatches via the CLI pool" },
+    { key: "cassette",   label: "cassette playback",      live_only: false, signal: "cassette playback count>0",
+      expects: "Tier 1 / Tier 1.5 (the cassette-replayed tiers)" },
+    { key: "engine",     label: "engine.evaluate",        live_only: false, signal: "engine.evaluate calls>0",
+      expects: "every tier runs the decision engine" },
+    { key: "jsonl_tail", label: "JsonlTailWorker tail",   live_only: true,  signal: "JsonlTailWorker events count>0",
+      expects: "Live-Session only -- the tail does not exist in the cassette path" },
+    { key: "polarity",   label: "polarity filter",        live_only: true,  signal: "polarity filter applied count>0",
+      expects: "Live-Session only -- the filter runs on the governed-session join" },
+    { key: "learn_mode", label: "Learn-Mode categorizer", live_only: true,  signal: "learn_mode_categorizer fired count>0",
+      expects: "Live-Session only -- categorizer fires on live dialogue" }
+  ];
+
+  var FIXTURE_GAP = {
+    generated_at: 1749600000.0, days: 7, window: 1000,
+    polarity_filtered: true, excluded_self_rows: 412, mock: true,
+    verdict: { variant: "gap", label: "GAP", covered: 4, total: 6,
+      text: "3 load-bearing live-only paths are uncovered -- a green soak does not certify the live path. Run a live-session soak before clearing the gate." },
+    cells: {
+      cli_pool:   { t1: true,  t1_5: true,  t2: true,  t3: true,  live: true  },
+      cassette:   { t1: true,  t1_5: true,  t2: false, t3: false, live: false },
+      engine:     { t1: true,  t1_5: true,  t2: true,  t3: true,  live: true  },
+      jsonl_tail: { t1: false, t1_5: false, t2: false, t3: false, live: true  },
+      polarity:   { t1: false, t1_5: false, t2: false, t3: false, live: false },
+      learn_mode: { t1: false, t1_5: false, t2: false, t3: false, live: false }
+    },
+    uncovered_priority: [
+      { rank: "P0", label: "polarity + learn-mode + tail",
+        detail: "all three live-only paths uncovered -- a green soak does not certify the live path",
+        paths: ["polarity", "learn_mode"] },
+      { rank: "P1", label: "cassette playback",
+        detail: "exercised only in Tier 1 / 1.5; Tier 2 / 3 / Live do not replay the cassette",
+        paths: ["cassette"] }
+    ]
+  };
+
+  var FIXTURE_READY = {
+    generated_at: 1749600000.0, days: 7, window: 1000,
+    polarity_filtered: true, excluded_self_rows: 538, mock: true,
+    verdict: { variant: "ready", label: "READY", covered: 6, total: 6,
+      text: "All load-bearing paths covered -- the live-only polarity / Learn-Mode / JsonlTail paths were exercised this cycle. A green soak is trustworthy at the gate." },
+    cells: {
+      cli_pool:   { t1: true, t1_5: true, t2: true, t3: true, live: true },
+      cassette:   { t1: true, t1_5: true, t2: true, t3: true, live: true },
+      engine:     { t1: true, t1_5: true, t2: true, t3: true, live: true },
+      jsonl_tail: { t1: true, t1_5: true, t2: true, t3: true, live: true },
+      polarity:   { t1: true, t1_5: true, t2: true, t3: true, live: true },
+      learn_mode: { t1: true, t1_5: true, t2: true, t3: true, live: true }
+    },
+    uncovered_priority: []
+  };
+
+  // remediation text per path (covered vs uncovered)
+  function remediationFor(path, anyUncovered) {
+    if (!anyUncovered) {
+      return "Covered. " + path.signal + " observed where expected; no action.";
+    }
+    if (path.live_only) {
+      return "Run a LIVE-SESSION soak against an active non-SM Claude session to exercise this live-only path -- it never runs in the cassette tiers.";
+    }
+    return "Extend the relevant tier so " + path.signal + " is emitted (expected in: " + path.expects + ").";
+  }
+
+  // ======================================================================
+  // RENDER
+  // ======================================================================
+  var elRows = document.getElementById("scmRows");
+  var elPriority = document.getElementById("scmPriority");
+  var elVerdict = document.getElementById("scmVerdict");
+  var elVerdictLabel = document.getElementById("scmVerdictLabel");
+  var elVerdictCount = document.getElementById("scmVerdictCount");
+  var elVerdictText = document.getElementById("scmVerdictText");
+  var elSource = document.getElementById("scmSource");
+  var elExcluded = document.getElementById("scmExcluded");
+  var elWindowMeta = document.getElementById("scmWindowMeta");
+  var elLive = document.getElementById("scmLive");
+
+  var openRowKey = null;
+  var currentFixture = FIXTURE_GAP;
+
+  function cellHtml(path, tier, covered) {
+    var word = covered ? "COVERED" : "UNCOVERED";
+    var glyph = covered ? "&#9632;" : "&#9633;"; // filled square / hollow square
+    // aria-label pairs the literal word with the boolean -- color never alone
+    var aria = path.label + " in " + tier.label + ": " + word;
+    return '<span class="scm-cell" data-covered="' + covered + '" role="img" aria-label="' + aria + '">' +
+             '<span class="scm-cell__glyph" aria-hidden="true">' + glyph + '</span>' +
+             '<span class="scm-cell__word">' + word + '</span>' +
+           '</span>';
+  }
+
+  function rowDetailHtml(path, cells) {
+    var anyUncovered = TIERS.some(function (t) { return !cells[t.key]; });
+    var coveredTiers = TIERS.filter(function (t) { return cells[t.key]; })
+                            .map(function (t) { return t.label; });
+    var uncoveredTiers = TIERS.filter(function (t) { return !cells[t.key]; })
+                              .map(function (t) { return t.label; });
+    var remClass = anyUncovered ? "scm-remediation" : "scm-remediation is-covered";
+    return '<div class="scm-detail">' +
+        '<dl>' +
+          '<dt>telemetry signal</dt><dd><code>' + path.signal + '</code></dd>' +
+          '<dt>live-only path</dt><dd>' + (path.live_only ? "yes -- only runs in the live non-SM path" : "no") + '</dd>' +
+          '<dt>covered in</dt><dd>' + (coveredTiers.length ? coveredTiers.join(", ") : "none") + '</dd>' +
+          '<dt>uncovered in</dt><dd>' + (uncoveredTiers.length ? uncoveredTiers.join(", ") : "none") + '</dd>' +
+          '<dt>expected coverage</dt><dd>' + path.expects + '</dd>' +
+        '</dl>' +
+        '<p class="' + remClass + '">' + remediationFor(path, anyUncovered) + '</p>' +
+      '</div>';
+  }
+
+  function render(fx) {
+    currentFixture = fx;
+
+    // source line (mock vs live)
+    elSource.setAttribute("data-mock", String(!!fx.mock));
+    elSource.textContent = fx.mock
+      ? "SAMPLE DATA -- no soak runs in gov.db yet; showing a representative shape."
+      : "LIVE -- aggregated from soak_runs telemetry + the polarity-filtered decisions join.";
+
+    // verdict (paired label+color)
+    elVerdict.setAttribute("data-variant", fx.verdict.variant);
+    elVerdictLabel.textContent = fx.verdict.label;
+    elVerdictCount.textContent = "(" + fx.verdict.covered + " of " + fx.verdict.total + " paths covered)";
+    elVerdictText.textContent = fx.verdict.text;
+
+    // meta
+    elExcluded.textContent = String(fx.excluded_self_rows);
+    elWindowMeta.textContent = "window " + fx.window + " -- " + fx.days + " days";
+
+    // matrix rows
+    var rowsHtml = "";
+    PATHS_BASE.forEach(function (path) {
+      var cells = fx.cells[path.key];
+      var isOpen = openRowKey === path.key;
+      var liveOnlyClass = path.live_only ? " scm-row--liveonly" : "";
+      var openClass = isOpen ? " is-open" : "";
+      var tag = path.live_only ? '<span class="scm-row__tag">live-only</span>' : "";
+
+      // build an aria-label summarising the whole row
+      var rowAria = path.label + " path. " +
+        TIERS.map(function (t) {
+          return t.label + " " + (cells[t.key] ? "covered" : "uncovered");
+        }).join(", ") + ". Activate to expand telemetry signal and remediation.";
+
+      var cellsHtml = TIERS.map(function (t) {
+        return cellHtml(path, t, !!cells[t.key]);
+      }).join("");
+
+      rowsHtml +=
+        '<button class="scm-row' + liveOnlyClass + openClass + '" type="button" ' +
+                'data-path="' + path.key + '" aria-expanded="' + isOpen + '" ' +
+                'aria-label="' + rowAria + '">' +
+          '<div class="scm-row__grid">' +
+            '<span class="scm-row__label">' +
+              path.label + tag +
+              '<span class="scm-row__expand" aria-hidden="true">' +
+                (isOpen ? "collapse -" : "expand +") + '</span>' +
+            '</span>' +
+            cellsHtml +
+          '</div>' +
+          (isOpen ? rowDetailHtml(path, cells) : "") +
+        '</button>';
+    });
+    elRows.innerHTML = rowsHtml;
+
+    // wire the row buttons (event delegation would also work; explicit is clearer)
+    Array.prototype.forEach.call(elRows.querySelectorAll(".scm-row"), function (btn) {
+      btn.addEventListener("click", function () {
+        var key = btn.getAttribute("data-path");
+        openRowKey = (openRowKey === key) ? null : key;
+        render(currentFixture);
+      });
+    });
+
+    // priority stack
+    if (!fx.uncovered_priority.length) {
+      elPriority.className = "scm-priority";
+      elPriority.innerHTML =
+        '<div class="scm-priority--none">' +
+          '<span class="scm-prio__rank">CLEAR</span>' +
+          '<span>No uncovered load-bearing paths. Every subsystem was exercised by at least one tier this cycle.</span>' +
+        '</div>';
+    } else {
+      elPriority.className = "scm-priority";
+      elPriority.innerHTML = fx.uncovered_priority.map(function (p) {
+        return '<div class="scm-prio" data-rank="' + p.rank + '">' +
+            '<span class="scm-prio__rank">' + p.rank + '</span>' +
+            '<div class="scm-prio__body">' +
+              '<p class="scm-prio__title">' + p.rank + ' -- ' + p.label + '</p>' +
+              '<p class="scm-prio__detail">' + p.detail + '</p>' +
+            '</div>' +
+          '</div>';
+      }).join("");
+    }
+
+    // announce verdict via live region (mirrors aria-live=polite on real component)
+    elLive.textContent = "Coverage read. Verdict: " + fx.verdict.label + ", " +
+      fx.verdict.covered + " of " + fx.verdict.total + " paths covered.";
+  }
+
+  // ======================================================================
+  // DRAWER OPEN / CLOSE + FOCUS CONTRACT (mirrors CoverageAnalyzer.svelte)
+  // ======================================================================
+  var chip = document.getElementById("scmChip");
+  var scrim = document.getElementById("scmScrim");
+  var panel = document.getElementById("scm-panel");
+  var closeBtn = document.getElementById("scmClose");
+  var rereadBtn = document.getElementById("scmReread");
+  var prevFocus = null;
+  var loaded = false;
+
+  function focusables() {
+    return Array.prototype.filter.call(
+      panel.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+      function (n) { return n.offsetParent !== null; }
+    );
+  }
+
+  function openDrawer() {
+    if (chip.hidden) return; // flag OFF => no affordance, no open
+    prevFocus = document.activeElement;
+    scrim.hidden = false;
+    panel.hidden = false;
+    chip.setAttribute("aria-expanded", "true");
+    // M18: single post-hoc GET on open (here: render the fixture once)
+    if (!loaded) { render(currentFixture); loaded = true; }
+    panel.focus();
+  }
+  function closeDrawer() {
+    scrim.hidden = true;
+    panel.hidden = true;
+    chip.setAttribute("aria-expanded", "false");
+    var target = (prevFocus && prevFocus.focus) ? prevFocus : chip;
+    if (target && target.focus) target.focus();
+    prevFocus = null;
+  }
+
+  chip.addEventListener("click", openDrawer);
+  closeBtn.addEventListener("click", closeDrawer);
+  scrim.addEventListener("click", closeDrawer);
+  rereadBtn.addEventListener("click", function () {
+    // re-fetch (here: re-render); announce via live region. No auto-poll.
+    openRowKey = null;
+    elLive.textContent = "Re-reading...";
+    render(currentFixture);
+  });
+
+  // Escape closes; Tab/Shift+Tab trap inside the drawer
+  document.addEventListener("keydown", function (e) {
+    if (panel.hidden) return;
+    if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+    if (e.key === "Tab") {
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  // ======================================================================
+  // BETA GATE TOGGLE (previews default-OFF behaviour)
+  // ======================================================================
+  var gateToggle = document.getElementById("gateToggle");
+  var gateState = document.getElementById("gateState");
+  function applyGate() {
+    var on = gateToggle.checked;
+    gateState.textContent = on ? "ON" : "OFF";
+    chip.hidden = !on;               // OFF => chip renders nothing
+    if (!on && !panel.hidden) closeDrawer(); // OFF while open => close it
+  }
+  gateToggle.addEventListener("change", applyGate);
+
+  // ======================================================================
+  // MOCKUP-ONLY PREVIEW CONTROLS: GAP/READY fixture + motion
+  // ======================================================================
+  Array.prototype.forEach.call(document.querySelectorAll("[data-fixture]"), function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll("[data-fixture]").forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
+      var fx = btn.getAttribute("data-fixture") === "ready" ? FIXTURE_READY : FIXTURE_GAP;
+      openRowKey = null;
+      render(fx);
+      if (panel.hidden) openDrawer();
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-motion-set]"), function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll("[data-motion-set]").forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
+      document.documentElement.setAttribute("data-motion", btn.getAttribute("data-motion-set"));
+    });
+  });
+
+  // initial paint of the static drawer content (so it reads even before open)
+  render(currentFixture);
+  applyGate();
+</script>
+</body>
+</html>

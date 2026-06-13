@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<!--
+  confidence-calibration-loop.html -- KingMode standalone mockup for BETA feature
+  #8 "Confidence-calibration loop -- make the confidence number mean something".
+
+  PURPOSE: let the operator click through the UI approach BEFORE any code is
+  written. Self-contained (inline <style> + <script>, NO external assets / CDNs /
+  web fonts -- system font stack only). It previews the REAL ui-next tokens by
+  re-declaring theme.css + calm.css values verbatim under [data-theme=obsidian],
+  so the look matches the live dashboard.
+
+  WHERE THIS LIVES IN THE REAL APP: a self-gated {#if $betaFlags['confidence-
+  calibration-loop']} <section class="sd-field"> INSIDE SettingsDrawer.svelte --
+  a settings/observability surface, NOT a Frame (ADR-18 M2 calm-at-rest: it never
+  auto-foregrounds). This mockup frames the section exactly as it renders inside
+  that drawer.
+
+  GOVERNANCE FLOOR honoured in the design:
+    M2  -- a still reliability field, no pulse/motion; never escalates.
+    M4  -- paired label+color EVERYWHERE: every decile carries the SIGN word
+           (OVER / UNDER / CALIBRATED) + the literal gap in points + a node SHAPE
+           (filled square = over, hollow = under, dot = calibrated); the band
+           tint is a 2nd reinforcing channel only. A fully desaturated render
+           still reads from text + shape.
+    M13 -- observation only. The opt-in advisory transform is DEFAULT OFF and is
+           scoped to ADVISORY DISPLAY only; it never touches the verdict or
+           decisions.confidence.
+    M16 -- domain-agnostic. No monitored-project vocabulary; the governed-target
+           identity is rendered FROM DATA (the scope line reads the slug).
+    M17 -- the diagram is a role=img with a headline aria-label; the decile RAIL
+           is the focusable control (roving tabindex, Up/Down, Enter opens tray,
+           Esc closes + restores focus); native buttons => global 2px focus ring.
+    G2  -- polarity: the corpus EXCLUDES the SM-own session (excluded_self count
+           shown); SM never calibrates against its own governance.
+
+  MOCK DATA mirrors GET /api/governance/calibration verbatim (mockDataSpec). The
+  "SAMPLE DATA" chip mirrors ConfidenceChip / ConfidenceHeatmapPane: this is the
+  deterministic fallback shown when the live endpoint is empty/unavailable.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- is two hyphens),
+  no box-drawing.
+-->
+<html lang="en" data-theme="obsidian" data-motion="reduce">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Confidence-calibration loop -- KingMode mockup (BETA)</title>
+<style>
+  /* ===========================================================================
+     TOKEN LAYER -- lifted verbatim from dashboard/ui-next/src/styles/theme.css
+     ([data-theme=obsidian]) + calm.css semantic aliases, so this mockup previews
+     the REAL tokens. The band ramp (--c-allow / --c-suggest / --c-intervene /
+     --c-block) is reused as the calibration BAND tint, exactly as the heat-map
+     pane reuses it. No new color token is invented.
+  =========================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* action / band ramp (shared default) */
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+  }
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    --font-h:       var(--ff-system);
+    --font-d:       var(--ff-mono);
+  }
+  /* fixed badge tokens (theme-invariant, M4) */
+  :root {
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+  }
+  /* calm.css semantic aliases (the component layer reads THESE) */
+  :root {
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-row:    var(--bg-row);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+    --calm-accent-wash:    var(--accent-dim);
+    --calm-accent-glow:    var(--accent-glow);
+
+    --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: var(--space-7) var(--space-6) var(--space-8);
+  }
+
+  /* ---- mockup frame chrome (NOT part of the real component) ----------------
+     A faint "drawer" wrapper so the operator sees the section in its real home:
+     a panel inside SettingsDrawer > BETA features. Labelled as scaffolding. */
+  .mockwrap { max-width: 880px; margin: 0 auto; }
+  .scaffold-note {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+    border: 1px dashed var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: 6px 10px;
+    margin-bottom: var(--space-6);
+    background: var(--calm-surface-alt);
+  }
+  .drawer {
+    border: 1px solid var(--calm-hairline);
+    border-radius: 6px;
+    background: var(--calm-surface-raised);
+    overflow: hidden;
+  }
+  .drawer__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-alt);
+  }
+  .drawer__head h1 {
+    margin: 0;
+    font-family: var(--font-h);
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--calm-ink-quiet);
+    font-weight: 600;
+  }
+  .drawer__crumb {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    color: var(--calm-ink-chrome);
+    letter-spacing: 0.04em;
+  }
+
+  /* ===========================================================================
+     THE SECTION -- this is the real component: ReliabilityDiagram inside an
+     {#if $betaFlags[...]} <section class="sd-field">.
+  =========================================================================== */
+  .rd {
+    padding: var(--space-6) var(--space-5) var(--space-5);
+    --rd-min-n: 30;
+  }
+  .rd__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-5);
+  }
+  .rd__titlewrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .rd__titlerow { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+  .rd__title {
+    margin: 0;
+    font-family: var(--font-h);
+    font-size: 18px;
+    letter-spacing: 0.04em;
+    color: var(--calm-ink-loud);
+    font-weight: 650;
+  }
+  .rd__beta {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--badge-obs-fg);
+    background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+  .rd__sub {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    color: var(--calm-ink-quiet);
+    letter-spacing: 0.02em;
+    margin: 0;
+  }
+  .rd__sub .rd__scope { color: var(--calm-ink); }
+
+  /* the inline gate toggle (client-side only -- shows the gated on/off behavior) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    color: var(--calm-ink-quiet);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .gate__state {
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .gate__state[data-on="true"]  { color: var(--c-allow); }
+  .gate__state[data-on="false"] { color: var(--calm-ink-chrome); }
+  .switch {
+    position: relative;
+    width: 42px;
+    height: 22px;
+    border-radius: 12px;
+    border: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-row);
+    cursor: pointer;
+    padding: 0;
+    flex: 0 0 auto;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .switch[aria-checked="true"] {
+    background: var(--calm-accent-wash);
+    border-color: var(--accent);
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--calm-ink-chrome);
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .switch[aria-checked="true"]::after {
+    transform: translateX(20px);
+    background: var(--accent);
+  }
+  .switch:focus-visible {
+    outline: 2px solid var(--calm-accent);
+    outline-offset: 2px;
+  }
+
+  /* OFF state note (what the operator sees when the flag is OFF) */
+  .rd__off {
+    font-family: var(--ff-mono);
+    font-size: 12px;
+    color: var(--calm-ink-quiet);
+    font-style: italic;
+    line-height: 1.6;
+    padding: var(--space-5) 0 var(--space-3);
+  }
+
+  /* ---- headline stat block (top-left, mono, OFF the chart's optical center) -- */
+  .rd__body { display: none; }
+  .rd[data-on="true"] .rd__body { display: block; }
+  .rd[data-on="true"] .rd__off { display: none; }
+
+  .rd__stats {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-6);
+    flex-wrap: wrap;
+    font-family: var(--ff-mono);
+    margin-bottom: var(--space-5);
+  }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat__v {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--calm-ink-loud);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .stat__k {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .stat__v.worst { color: var(--badge-ar-fg); }
+
+  /* the SAMPLE DATA chip (mirrors ConfidenceChip / heat-map pane) */
+  .samplechip {
+    font-family: var(--ff-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border);
+    background: rgba(217, 119, 6, 0.1);
+    border-radius: 3px;
+    padding: 2px 7px;
+    align-self: center;
+  }
+
+  /* ---- the bespoke split: chart field (left) + decile rail (right) --------- */
+  .rd__split {
+    display: grid;
+    grid-template-columns: minmax(280px, 320px) 1fr;
+    gap: var(--space-6);
+    align-items: start;
+  }
+  @media (max-width: 720px) {
+    .rd__split { grid-template-columns: 1fr; }
+  }
+
+  /* the square reliability FIELD. Axis labels hang OUTSIDE lower-left (asymmetric). */
+  .field {
+    position: relative;
+    width: 100%;
+    max-width: 320px;
+  }
+  .field__svgwrap {
+    position: relative;
+    padding: 6px 6px 26px 34px; /* room for axis labels outside the plot */
+  }
+  .field svg { display: block; width: 100%; height: auto; }
+  .axis-x, .axis-y {
+    position: absolute;
+    font-family: var(--ff-mono);
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    color: var(--calm-ink-chrome);
+    text-transform: uppercase;
+  }
+  .axis-x { bottom: 4px; left: 34px; right: 6px; text-align: center; }
+  .axis-y {
+    left: -2px; top: 6px; bottom: 26px;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* SVG element styling (CSS so it re-themes; SVG attrs would freeze the color) */
+  .diag {
+    stroke: var(--calm-hairline);
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+    fill: none;
+  }
+  .diag-label {
+    fill: var(--calm-ink-chrome);
+    font-family: var(--ff-mono);
+    font-size: 7px;
+    letter-spacing: 0.04em;
+  }
+  .gridline { stroke: var(--calm-hairline); stroke-width: 0.5; opacity: 0.5; }
+  .tick-text {
+    fill: var(--calm-ink-chrome);
+    font-family: var(--ff-mono);
+    font-size: 6.5px;
+  }
+  .curve {
+    fill: none;
+    stroke: var(--calm-accent);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
+  .dropline { stroke-width: 1; stroke-dasharray: 1.5 1.5; opacity: 0.75; }
+
+  /* node shapes carry the OVER / UNDER / CALIBRATED signal (M4 -- shape, not
+     color alone). filled square = OVER, hollow square = UNDER, dot = CALIBRATED.
+     The band tint fills the node, but the SHAPE + the rail text are the signal. */
+  .node {
+    cursor: pointer;
+    stroke-width: 1.25;
+  }
+  .node--over   { /* filled square */ }
+  .node--under  { fill: var(--calm-surface-raised) !important; } /* hollow */
+  .node--cal    { /* dot rendered as circle */ }
+  .node--lowsample {
+    fill: var(--calm-surface-alt) !important;
+    stroke: var(--calm-ink-chrome) !important;
+    stroke-dasharray: 2 1.5;
+  }
+  .node:focus-visible, .node.is-active {
+    outline: none;
+  }
+  .node-ring {
+    fill: none;
+    stroke: var(--calm-accent);
+    stroke-width: 1.5;
+    opacity: 0;
+  }
+  .node-ring.is-active { opacity: 1; }
+
+  /* band tint fills + strokes -- reuse the action ramp verbatim */
+  .band-LOW    { fill: var(--c-block);     stroke: var(--c-block); }
+  .band-WATCH  { fill: var(--c-intervene); stroke: var(--c-intervene); }
+  .band-OK     { fill: var(--c-suggest);   stroke: var(--c-suggest); }
+  .band-HIGH   { fill: var(--c-allow);     stroke: var(--c-allow); }
+  .drop-LOW    { stroke: var(--c-block); }
+  .drop-WATCH  { stroke: var(--c-intervene); }
+  .drop-OK     { stroke: var(--c-suggest); }
+  .drop-HIGH   { stroke: var(--c-allow); }
+
+  /* ---- the decile RAIL (the focusable control; survives SVG-off) ----------- */
+  .rail {
+    border: 1px solid var(--calm-hairline);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--calm-surface-row);
+  }
+  .rail__cap {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-alt);
+    display: flex; justify-content: space-between; gap: 10px;
+  }
+  .rrow {
+    display: grid;
+    grid-template-columns: 78px 1fr auto;
+    gap: var(--space-4);
+    align-items: center;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-top: 1px solid var(--calm-hairline);
+    border-left: 3px solid transparent;
+    background: transparent;
+    color: inherit;
+    font-family: var(--ff-mono);
+    font-size: 12px;
+    padding: 9px 12px;
+    cursor: pointer;
+  }
+  .rrow:first-of-type { border-top: 0; }
+  .rrow:hover { background: var(--calm-surface-hover); }
+  .rrow:focus-visible {
+    outline: 2px solid var(--calm-accent);
+    outline-offset: -2px;
+  }
+  .rrow.is-active {
+    background: var(--calm-surface-hover);
+    border-left-color: var(--calm-accent);
+  }
+  /* band tint is a faint LEFT edge wash, behind ink whose contrast is its own */
+  .rrow[data-band="LOW"]   { border-left-color: var(--c-block); }
+  .rrow[data-band="WATCH"] { border-left-color: var(--c-intervene); }
+  .rrow[data-band="OK"]    { border-left-color: var(--c-suggest); }
+  .rrow[data-band="HIGH"]  { border-left-color: var(--c-allow); }
+  .rrow.is-active[data-band] { border-left-color: var(--calm-accent); }
+
+  .rrow__decile {
+    color: var(--calm-ink-loud);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .rrow__nums { color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums; }
+  .rrow__nums b { color: var(--calm-ink); font-weight: 600; }
+
+  /* the paired SIGN badge: SHAPE glyph + literal SIGN word + literal gap points.
+     color is the 3rd reinforcing channel; the word + glyph carry the signal. */
+  .sign {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--calm-hairline);
+    border-radius: 3px;
+    padding: 2px 7px;
+    white-space: nowrap;
+    color: var(--calm-ink-loud);
+    background: var(--calm-surface-alt);
+  }
+  .sign__glyph {
+    width: 9px; height: 9px; flex: 0 0 auto;
+    display: inline-block;
+  }
+  /* glyph as a tiny shape echoing the node: filled square / hollow / dot */
+  .sign__glyph[data-shape="over"]  { background: currentColor; }
+  .sign__glyph[data-shape="under"] { background: transparent; border: 1.5px solid currentColor; }
+  .sign__glyph[data-shape="cal"]   { background: currentColor; border-radius: 50%; width: 8px; height: 8px; }
+  .sign__glyph[data-shape="low"]   { background: transparent; border: 1.5px dashed currentColor; }
+  .sign[data-sign="OVER"]       { color: var(--c-allow); border-color: var(--c-allow); }
+  .sign[data-sign="UNDER"]      { color: var(--c-intervene); border-color: var(--c-intervene); }
+  .sign[data-sign="CALIBRATED"] { color: var(--calm-ink); border-color: var(--calm-hairline); }
+  .sign[data-sign="LOWSAMPLE"]  { color: var(--calm-ink-chrome); border-color: var(--calm-ink-chrome); }
+  .sign__gap { color: inherit; }
+
+  /* ---- the calm inline tray (mirrors the heat-map mini-tray) --------------- */
+  .tray {
+    margin-top: var(--space-5);
+    border: 1px solid var(--calm-hairline-hi);
+    border-radius: 6px;
+    background: var(--calm-surface-row);
+    overflow: hidden;
+  }
+  .tray[hidden] { display: none; }
+  .tray__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--calm-hairline);
+    background: var(--calm-surface-alt);
+  }
+  .tray__title {
+    font-family: var(--ff-mono);
+    font-size: 12px;
+    color: var(--calm-ink-loud);
+  }
+  .tray__close {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--calm-hairline);
+    color: var(--calm-ink-chrome);
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 3px 9px;
+    cursor: pointer;
+    font-family: var(--ff-mono);
+    letter-spacing: 0.04em;
+  }
+  .tray__close:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: 2px; }
+  .tray__body {
+    padding: 12px 13px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px 22px;
+    font-family: var(--ff-mono);
+  }
+  .tfact { display: flex; flex-direction: column; gap: 3px; }
+  .tfact__k {
+    font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .tfact__v {
+    font-size: 13px; color: var(--calm-ink-loud); font-variant-numeric: tabular-nums;
+  }
+  .tray__words {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    color: var(--calm-ink);
+    line-height: 1.6;
+    border-top: 1px solid var(--calm-hairline);
+    padding-top: 10px;
+  }
+  .tray__words b { color: var(--calm-ink-loud); }
+
+  /* ---- the OPT-IN advisory transform control (DEFAULT OFF, advisory-only) --- */
+  .optin {
+    margin-top: var(--space-6);
+    border: 1px solid var(--calm-hairline);
+    border-radius: 6px;
+    background: var(--calm-surface-alt);
+    padding: var(--space-4) var(--space-5);
+  }
+  .optin__row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .optin__copy { min-width: 0; max-width: 560px; }
+  .optin__title {
+    font-family: var(--ff-mono);
+    font-size: 12px;
+    color: var(--calm-ink-loud);
+    letter-spacing: 0.02em;
+    margin: 0 0 4px;
+  }
+  .optin__desc {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    color: var(--calm-ink-quiet);
+    line-height: 1.6;
+    margin: 0;
+  }
+  .optin__desc b { color: var(--calm-ink); }
+  .optin__control { display: flex; align-items: center; gap: 9px; }
+  .optin__state {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .optin__state[data-on="true"]  { color: var(--accent); }
+  .optin__state[data-on="false"] { color: var(--calm-ink-chrome); }
+  .optin__scope {
+    margin-top: 10px;
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    color: var(--badge-ar-fg);
+    border-top: 1px dashed var(--calm-hairline);
+    padding-top: 8px;
+  }
+  .optin__scope[hidden] { display: none; }
+
+  .rd__foot {
+    margin-top: var(--space-6);
+    display: flex; gap: var(--space-6); flex-wrap: wrap; align-items: center;
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    color: var(--calm-ink-quiet);
+  }
+  .legend { display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .lk { display: inline-flex; align-items: center; gap: 7px; }
+  .lk__shape { width: 10px; height: 10px; flex: 0 0 auto; display: inline-block; }
+  .lk__shape[data-shape="over"]  { background: var(--c-allow); }
+  .lk__shape[data-shape="under"] { background: transparent; border: 1.5px solid var(--c-intervene); }
+  .lk__shape[data-shape="cal"]   { background: var(--calm-ink); border-radius: 50%; width: 9px; height: 9px; }
+  .lk__shape[data-shape="low"]   { background: transparent; border: 1.5px dashed var(--calm-ink-chrome); }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch, .switch::after { transition: none; }
+  }
+  html[data-motion="reduce"] .switch, html[data-motion="reduce"] .switch::after {
+    transition: none;
+  }
+</style>
+</head>
+<body>
+  <div class="mockwrap">
+    <div class="scaffold-note">
+      Mockup scaffolding -- this dashed wrapper stands in for SettingsDrawer &gt; BETA features.
+      The panel below is the real ReliabilityDiagram section as it renders inside that drawer.
+    </div>
+
+    <div class="drawer">
+      <div class="drawer__head">
+        <h1>Settings &gt; BETA features</h1>
+        <span class="drawer__crumb">observability -- not a Frame (M2: calm at rest)</span>
+      </div>
+
+      <!-- ===================================================================
+           THE COMPONENT: ReliabilityDiagram. role=img headline + decile rail.
+      ==================================================================== -->
+      <section class="rd" id="rd" data-on="true" aria-label="Confidence calibration (BETA)">
+        <div class="rd__head">
+          <div class="rd__titlewrap">
+            <div class="rd__titlerow">
+              <h2 class="rd__title">Confidence calibration</h2>
+              <span class="rd__beta">BETA -- default OFF, toggled in Settings</span>
+            </div>
+            <p class="rd__sub">
+              predicted confidence vs realized operator-agreement (1 - override rate) --
+              last 30 days, 10 deciles --
+              scope <span class="rd__scope" id="scopeName">all governed sessions</span> --
+              self excluded (G2): <span id="excludedSelf">3</span> sessions
+            </p>
+          </div>
+
+          <!-- inline gate toggle (client-side, demonstrates the gated behavior) -->
+          <div class="gate">
+            <span>Feature</span>
+            <span class="gate__state" id="gateState" data-on="true">ON</span>
+            <button
+              class="switch"
+              id="gateSwitch"
+              role="switch"
+              aria-checked="true"
+              aria-label="Toggle confidence calibration feature on or off (BETA, default OFF)"
+            ></button>
+          </div>
+        </div>
+
+        <!-- OFF state: the section renders this calm note, nothing else -->
+        <p class="rd__off">
+          Confidence calibration is OFF. Flip it ON to see whether the model's
+          confidence number matches the rate at which you actually agree with it.
+          Default OFF -- this is a BETA observability surface, never a Frame.
+        </p>
+
+        <!-- ON state: the body -->
+        <div class="rd__body">
+          <div class="rd__stats">
+            <div class="stat">
+              <span class="stat__v" id="statAgree">85%</span>
+              <span class="stat__k">overall agreement</span>
+            </div>
+            <div class="stat">
+              <span class="stat__v" id="statBrier">0.118</span>
+              <span class="stat__k">Brier score</span>
+            </div>
+            <div class="stat">
+              <span class="stat__v worst" id="statWorst">13 pts over</span>
+              <span class="stat__k">worst gap (0.9 band)</span>
+            </div>
+            <div class="stat">
+              <span class="stat__v" id="statN">1,840</span>
+              <span class="stat__k">decisions / 268 overrides</span>
+            </div>
+            <span class="samplechip" title="The live GET /api/governance/calibration endpoint was empty or unavailable, so a deterministic sample fixture is shown. Mirrors ConfidenceChip / ConfidenceHeatmapPane.">Sample data</span>
+          </div>
+
+          <div class="rd__split">
+            <!-- ===== the square reliability FIELD (role=img; headline aria) ===== -->
+            <div class="field">
+              <div class="field__svgwrap">
+                <span class="axis-y" aria-hidden="true">realized agreement -- up</span>
+                <span class="axis-x" aria-hidden="true">predicted confidence -- right</span>
+                <svg
+                  id="diagram"
+                  viewBox="0 0 100 100"
+                  role="img"
+                  aria-label="Calibration curve. Overall operator-agreement 85 percent, Brier score 0.118. The measured curve sits below the perfect-calibration diagonal in the high bands: worst gap is 13 points over-confident in the 0.9 to 1.0 band. The 0.6 band is calibrated. The low bands run under-confident."
+                >
+                  <!-- gridlines (decorative) -->
+                  <g aria-hidden="true">
+                    <line class="gridline" x1="0" y1="25" x2="100" y2="25" />
+                    <line class="gridline" x1="0" y1="50" x2="100" y2="50" />
+                    <line class="gridline" x1="0" y1="75" x2="100" y2="75" />
+                    <line class="gridline" x1="25" y1="0" x2="25" y2="100" />
+                    <line class="gridline" x1="50" y1="0" x2="50" y2="100" />
+                    <line class="gridline" x1="75" y1="0" x2="75" y2="100" />
+                    <!-- axis end ticks -->
+                    <text class="tick-text" x="1.5" y="99">0</text>
+                    <text class="tick-text" x="89" y="99">1.0</text>
+                    <text class="tick-text" x="1.5" y="6">1.0</text>
+                  </g>
+                  <!-- the 45deg predicted=actual diagonal (perfect calibration) -->
+                  <line class="diag" x1="0" y1="100" x2="100" y2="0" />
+                  <text class="diag-label" x="52" y="44" transform="rotate(-45 52 44)">perfect calibration</text>
+
+                  <!-- drop-lines + curve + nodes injected by script (data-driven) -->
+                  <g id="drops" aria-hidden="true"></g>
+                  <polyline id="curve" class="curve" points="" aria-hidden="true"></polyline>
+                  <g id="nodes"></g>
+                </svg>
+              </div>
+            </div>
+
+            <!-- ===== the decile RAIL (focusable; the whole story survives here) ===== -->
+            <div class="rail" role="group" aria-label="Calibration deciles -- use Up and Down arrows to move, Enter to open a bucket, Escape to close">
+              <div class="rail__cap">
+                <span>decile</span>
+                <span>predicted / actual / gap</span>
+              </div>
+              <div id="railRows"></div>
+            </div>
+          </div>
+
+          <!-- ===== the calm inline tray (one decile expanded) ===== -->
+          <div class="tray" id="tray" role="region" aria-label="Selected decile detail" hidden>
+            <div class="tray__head">
+              <span class="tray__title" id="trayTitle">0.9 -- 1.0 band</span>
+              <button class="tray__close" id="trayClose" aria-label="Close decile detail (Escape)">Close (Esc)</button>
+            </div>
+            <div class="tray__body">
+              <div class="tfact"><span class="tfact__k">decisions (n)</span><span class="tfact__v" id="tN">1,204</span></div>
+              <div class="tfact"><span class="tfact__k">overrides</span><span class="tfact__v" id="tOv">217</span></div>
+              <div class="tfact"><span class="tfact__k">predicted</span><span class="tfact__v" id="tPred">95%</span></div>
+              <div class="tfact"><span class="tfact__k">realized agreement</span><span class="tfact__v" id="tReal">82%</span></div>
+              <p class="tray__words" id="tWords"></p>
+            </div>
+          </div>
+
+          <!-- ===== OPT-IN advisory transform (DEFAULT OFF, advisory-only) ===== -->
+          <div class="optin">
+            <div class="optin__row">
+              <div class="optin__copy">
+                <p class="optin__title">Apply calibration to advisory presentation</p>
+                <p class="optin__desc">
+                  When ON, the calibrated value is shown alongside the raw confidence on
+                  ADVISORY surfaces only -- the ConfidenceChip dial and the floor read.
+                  <b>It never changes the verdict and never writes decisions.confidence.</b>
+                  Display-layer only.
+                </p>
+              </div>
+              <div class="optin__control">
+                <span class="optin__state" id="optinState" data-on="false">OFF</span>
+                <button
+                  class="switch"
+                  id="optinSwitch"
+                  role="switch"
+                  aria-checked="false"
+                  aria-label="Apply calibration to advisory presentation. Default OFF. Advisory display only -- never alters the verdict or decisions.confidence."
+                ></button>
+              </div>
+            </div>
+            <div class="optin__scope" id="optinScope" hidden>
+              ON -- advisory display only. Example: a raw 0.95 in the 0.9 band now shows
+              "0.95 raw -- 0.82 calibrated" on the chip dial. The verdict and the stored
+              decisions.confidence are untouched (M13 / ADR-18 FROZEN governance path).
+            </div>
+          </div>
+
+          <div class="rd__foot">
+            <span class="legend" aria-label="Node-shape legend (shape carries the sign; color reinforces)">
+              <span class="lk"><span class="lk__shape" data-shape="over" aria-hidden="true"></span>filled square = OVER-confident</span>
+              <span class="lk"><span class="lk__shape" data-shape="under" aria-hidden="true"></span>hollow square = UNDER-confident</span>
+              <span class="lk"><span class="lk__shape" data-shape="cal" aria-hidden="true"></span>dot = CALIBRATED</span>
+              <span class="lk"><span class="lk__shape" data-shape="low" aria-hidden="true"></span>dashed = low sample (n &lt; 30)</span>
+            </span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="scaffold-note" style="margin-top:22px;margin-bottom:0;">
+      Read-only design. New endpoint GET /api/governance/calibration mirrors /api/heatmap polarity
+      (project_slug NOT IN streamManager AND session_id != self). No new bus envelope, no new table,
+      nothing FROZEN touched. M2 / M4 / M13 / M16 / M17 honoured.
+    </div>
+  </div>
+
+<script>
+  // ==========================================================================
+  // MOCK PAYLOAD -- verbatim shape of GET /api/governance/calibration
+  // (mockDataSpec). usedMock=true => the "Sample data" chip shows. The decile
+  // set is sparse-but-representative (idx 0,4,5,6,8,9) exactly as the spec lists.
+  // ==========================================================================
+  var PAYLOAD = {
+    now_ms: 1749600000000,
+    bucket_count: 10,
+    days: 30,
+    excluded_self: 3,
+    total_decisions: 1840,
+    total_overrides: 268,
+    overall_agreement: 0.854,
+    brier: 0.118,
+    scope: "all governed sessions",
+    buckets: [
+      {idx:0, lo:0.0, hi:0.1, mid:0.05, n:12,   overrides:9,   predicted:0.05, realized:0.250, gap:0.200,  sign:"UNDER",      band:"LOW"},
+      {idx:4, lo:0.4, hi:0.5, mid:0.45, n:120,  overrides:54,  predicted:0.45, realized:0.550, gap:0.100,  sign:"UNDER",      band:"WATCH"},
+      {idx:5, lo:0.5, hi:0.6, mid:0.55, n:160,  overrides:70,  predicted:0.55, realized:0.563, gap:0.013,  sign:"CALIBRATED", band:"WATCH"},
+      {idx:6, lo:0.6, hi:0.7, mid:0.65, n:243,  overrides:86,  predicted:0.65, realized:0.646, gap:-0.004, sign:"CALIBRATED", band:"OK"},
+      {idx:8, lo:0.8, hi:0.9, mid:0.85, n:520,  overrides:104, predicted:0.85, realized:0.800, gap:-0.050, sign:"OVER",       band:"HIGH"},
+      {idx:9, lo:0.9, hi:1.0, mid:0.95, n:1204, overrides:217, predicted:0.95, realized:0.820, gap:-0.130, sign:"OVER",       band:"HIGH"}
+    ],
+    transform: [
+      {from:0.95, to:0.82}, {from:0.85, to:0.80}, {from:0.55, to:0.56}
+    ],
+    mock: true
+  };
+  var MIN_N = 30; // low-sample floor
+
+  // ---- helpers -------------------------------------------------------------
+  function pct(x) { return Math.round(x * 100) + "%"; }
+  function fmtN(n) { return n.toLocaleString("en-US"); }
+  function gapPoints(gap) { return Math.round(Math.abs(gap) * 100); }
+  function shapeFor(b) {
+    if (b.n < MIN_N) return "low";
+    if (b.sign === "OVER") return "over";
+    if (b.sign === "UNDER") return "under";
+    return "cal";
+  }
+  function transformFor(predicted) {
+    // nearest fitted transform anchor (advisory-only map)
+    var best = null, bestd = 1e9;
+    for (var i = 0; i < PAYLOAD.transform.length; i++) {
+      var d = Math.abs(PAYLOAD.transform[i].from - predicted);
+      if (d < bestd) { bestd = d; best = PAYLOAD.transform[i]; }
+    }
+    return best;
+  }
+
+  // SVG plot coordinates: X = predicted (0..1 -> 0..100), Y = realized
+  // (agreement 0..1 -> 100..0 so higher agreement is HIGHER on the field).
+  function px(predicted) { return predicted * 100; }
+  function py(realized)  { return 100 - realized * 100; }
+
+  var nodesG = document.getElementById("nodes");
+  var dropsG = document.getElementById("drops");
+  var curveEl = document.getElementById("curve");
+  var railRows = document.getElementById("railRows");
+  var SVGNS = "http://www.w3.org/2000/svg";
+
+  var activeIdx = null;
+
+  function buildDiagram() {
+    var pts = [];
+    var b, i;
+    // drop-lines: node -> diagonal (the literal miscalibration gap)
+    for (i = 0; i < PAYLOAD.buckets.length; i++) {
+      b = PAYLOAD.buckets[i];
+      var x = px(b.predicted), y = py(b.realized);
+      var yDiag = py(b.predicted); // the perfect point at same X
+      var drop = document.createElementNS(SVGNS, "line");
+      drop.setAttribute("x1", x); drop.setAttribute("y1", y);
+      drop.setAttribute("x2", x); drop.setAttribute("y2", yDiag);
+      drop.setAttribute("class", "dropline drop-" + b.band);
+      dropsG.appendChild(drop);
+      pts.push(x + "," + y);
+    }
+    curveEl.setAttribute("points", pts.join(" "));
+
+    // nodes: size by sqrt(n); shape by sign (M4)
+    var maxN = 0;
+    for (i = 0; i < PAYLOAD.buckets.length; i++) maxN = Math.max(maxN, PAYLOAD.buckets[i].n);
+    for (i = 0; i < PAYLOAD.buckets.length; i++) {
+      b = PAYLOAD.buckets[i];
+      var cx = px(b.predicted), cy = py(b.realized);
+      var sz = 2.2 + 3.8 * Math.sqrt(b.n / maxN); // half-extent
+      var shape = shapeFor(b);
+      var node;
+      if (shape === "cal") {
+        node = document.createElementNS(SVGNS, "circle");
+        node.setAttribute("cx", cx); node.setAttribute("cy", cy);
+        node.setAttribute("r", sz * 0.85);
+      } else {
+        node = document.createElementNS(SVGNS, "rect");
+        node.setAttribute("x", cx - sz); node.setAttribute("y", cy - sz);
+        node.setAttribute("width", sz * 2); node.setAttribute("height", sz * 2);
+      }
+      var cls = "node band-" + b.band + " node--" + shape;
+      if (shape === "low") cls += " node--lowsample";
+      else if (shape === "under") cls += " node--under";
+      node.setAttribute("class", cls);
+      node.setAttribute("tabindex", "-1");
+      node.setAttribute("data-idx", b.idx);
+      node.setAttribute("role", "presentation");
+      node.addEventListener("click", function (e) {
+        var ix = parseInt(e.currentTarget.getAttribute("data-idx"), 10);
+        selectDecile(ix, true);
+      });
+      // active ring overlay
+      var ring = document.createElementNS(SVGNS, "rect");
+      ring.setAttribute("x", cx - sz - 2); ring.setAttribute("y", cy - sz - 2);
+      ring.setAttribute("width", sz * 2 + 4); ring.setAttribute("height", sz * 2 + 4);
+      ring.setAttribute("rx", "1.5");
+      ring.setAttribute("class", "node-ring");
+      ring.setAttribute("data-ring", b.idx);
+      ring.setAttribute("aria-hidden", "true");
+      nodesG.appendChild(ring);
+      nodesG.appendChild(node);
+    }
+  }
+
+  function bandWordTint(band) {
+    return band; // data-band drives the CSS tint; word shown literally
+  }
+
+  function signWords(b) {
+    var g = gapPoints(b.gap);
+    if (b.n < MIN_N) {
+      return "n=" + b.n + " is below the " + MIN_N + "-decision floor, so this point is drawn dashed -- the gap reading is not yet reliable.";
+    }
+    if (b.sign === "OVER") {
+      return "The model is " + g + " points OVER-confident here: it predicts " + pct(b.predicted) + " but you actually agree only " + pct(b.realized) + " of the time. Mentally DISCOUNT a " + b.lo.toFixed(1) + "-" + b.hi.toFixed(1) + " confidence in this band.";
+    }
+    if (b.sign === "UNDER") {
+      return "The model is " + g + " points UNDER-confident here: it predicts " + pct(b.predicted) + " but you agree " + pct(b.realized) + " of the time -- it is more trustworthy in this band than the number suggests.";
+    }
+    return "CALIBRATED: predicted " + pct(b.predicted) + " matches your realized agreement " + pct(b.realized) + " (gap " + g + " points, within the +/-2.5 point tolerance). Trust the number at face value here.";
+  }
+
+  function buildRail() {
+    for (var i = 0; i < PAYLOAD.buckets.length; i++) {
+      var b = PAYLOAD.buckets[i];
+      var low = b.n < MIN_N;
+      var shape = shapeFor(b);
+      var signLabel = low ? "LOWSAMPLE" : b.sign;
+      var gp = gapPoints(b.gap);
+      var gapTxt = low ? "n=" + b.n
+        : (b.sign === "CALIBRATED" ? "+/-" + gp + " ok"
+          : (b.sign === "OVER" ? "+" + gp + " over" : "+" + gp + " under"));
+
+      var row = document.createElement("button");
+      row.type = "button";
+      row.className = "rrow";
+      row.setAttribute("data-band", b.band);
+      row.setAttribute("data-idx", b.idx);
+      row.setAttribute("tabindex", i === 0 ? "0" : "-1");
+      row.setAttribute("aria-label",
+        b.lo.toFixed(1) + " to " + b.hi.toFixed(1) + " band. " +
+        "n " + b.n + " decisions, " + b.overrides + " overrides. " +
+        "predicted " + pct(b.predicted) + ", realized agreement " + pct(b.realized) + ". " +
+        (low ? "low sample, below the floor." : b.sign + ", gap " + gp + " points. Activate to open detail.")
+      );
+
+      var decile = document.createElement("span");
+      decile.className = "rrow__decile";
+      decile.textContent = b.lo.toFixed(1) + "-" + b.hi.toFixed(1);
+
+      var nums = document.createElement("span");
+      nums.className = "rrow__nums";
+      nums.innerHTML = "n=" + fmtN(b.n) + " | pred <b>" + pct(b.predicted) + "</b> | actual <b>" + pct(b.realized) + "</b>";
+
+      var sign = document.createElement("span");
+      sign.className = "sign";
+      sign.setAttribute("data-sign", signLabel);
+      var glyph = document.createElement("span");
+      glyph.className = "sign__glyph";
+      glyph.setAttribute("data-shape", shape);
+      glyph.setAttribute("aria-hidden", "true");
+      var word = document.createElement("span");
+      word.textContent = low ? "LOW N" : b.sign;
+      var gapSpan = document.createElement("span");
+      gapSpan.className = "sign__gap";
+      gapSpan.textContent = gapTxt;
+      sign.appendChild(glyph);
+      sign.appendChild(word);
+      sign.appendChild(gapSpan);
+
+      row.appendChild(decile);
+      row.appendChild(nums);
+      row.appendChild(sign);
+
+      row.addEventListener("click", (function (idx) {
+        return function () { selectDecile(idx, true); };
+      })(b.idx));
+      railRows.appendChild(row);
+    }
+  }
+
+  function bucketByIdx(idx) {
+    for (var i = 0; i < PAYLOAD.buckets.length; i++)
+      if (PAYLOAD.buckets[i].idx === idx) return PAYLOAD.buckets[i];
+    return null;
+  }
+  function rowEls() { return railRows.querySelectorAll(".rrow"); }
+
+  function selectDecile(idx, focusRail) {
+    var b = bucketByIdx(idx);
+    if (!b) return;
+    activeIdx = idx;
+
+    // rail active state + roving tabindex
+    var rows = rowEls();
+    for (var i = 0; i < rows.length; i++) {
+      var on = parseInt(rows[i].getAttribute("data-idx"), 10) === idx;
+      rows[i].classList.toggle("is-active", on);
+      rows[i].setAttribute("tabindex", on ? "0" : "-1");
+      if (on && focusRail) rows[i].focus();
+    }
+    // node ring + active class
+    var nodes = nodesG.querySelectorAll(".node");
+    for (var j = 0; j < nodes.length; j++) {
+      nodes[j].classList.toggle("is-active",
+        parseInt(nodes[j].getAttribute("data-idx"), 10) === idx);
+    }
+    var rings = nodesG.querySelectorAll(".node-ring");
+    for (var k = 0; k < rings.length; k++) {
+      rings[k].classList.toggle("is-active",
+        parseInt(rings[k].getAttribute("data-ring"), 10) === idx);
+    }
+
+    // tray
+    var t = transformFor(b.predicted);
+    document.getElementById("trayTitle").textContent =
+      b.lo.toFixed(1) + " -- " + b.hi.toFixed(1) + " band";
+    document.getElementById("tN").textContent = fmtN(b.n);
+    document.getElementById("tOv").textContent = fmtN(b.overrides);
+    document.getElementById("tPred").textContent = pct(b.predicted);
+    document.getElementById("tReal").textContent = pct(b.realized);
+    var words = signWords(b);
+    if (t) words += " Fitted advisory transform for this band: " + b.predicted.toFixed(2) +
+      " maps to " + t.to.toFixed(2) + " (used only by the opt-in display toggle).";
+    document.getElementById("tWords").innerHTML =
+      "<b>" + (b.n < MIN_N ? "LOW SAMPLE" : b.sign) + "</b> -- " + words;
+    var tray = document.getElementById("tray");
+    tray.hidden = false;
+  }
+
+  function closeTray(restoreFocus) {
+    var tray = document.getElementById("tray");
+    tray.hidden = true;
+    var rows = rowEls();
+    var prev = activeIdx;
+    for (var i = 0; i < rows.length; i++) rows[i].classList.remove("is-active");
+    var nodes = nodesG.querySelectorAll(".node");
+    for (var j = 0; j < nodes.length; j++) nodes[j].classList.remove("is-active");
+    var rings = nodesG.querySelectorAll(".node-ring");
+    for (var k = 0; k < rings.length; k++) rings[k].classList.remove("is-active");
+    if (restoreFocus && prev != null) {
+      for (var m = 0; m < rows.length; m++) {
+        if (parseInt(rows[m].getAttribute("data-idx"), 10) === prev) { rows[m].focus(); break; }
+      }
+    }
+    activeIdx = null;
+  }
+
+  // ---- M17 keyboard path on the rail (roving tabindex; Up/Down/Enter/Esc) ---
+  function railKeydown(e) {
+    var rows = Array.prototype.slice.call(rowEls());
+    var idxInList = rows.indexOf(document.activeElement);
+    if (idxInList === -1 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      rows[0].focus(); e.preventDefault(); return;
+    }
+    if (e.key === "ArrowDown") {
+      var n = rows[Math.min(rows.length - 1, idxInList + 1)];
+      n.focus(); e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      var p = rows[Math.max(0, idxInList - 1)];
+      p.focus(); e.preventDefault();
+    } else if (e.key === "Home") {
+      rows[0].focus(); e.preventDefault();
+    } else if (e.key === "End") {
+      rows[rows.length - 1].focus(); e.preventDefault();
+    } else if (e.key === "Enter" || e.key === " ") {
+      if (idxInList > -1) {
+        selectDecile(parseInt(rows[idxInList].getAttribute("data-idx"), 10), false);
+        e.preventDefault();
+      }
+    } else if (e.key === "Escape") {
+      closeTray(true); e.preventDefault();
+    }
+  }
+
+  // ---- the inline GATE toggle (client-side; shows the gated on/off) ---------
+  function setGate(on) {
+    var rd = document.getElementById("rd");
+    rd.setAttribute("data-on", on ? "true" : "false");
+    var sw = document.getElementById("gateSwitch");
+    sw.setAttribute("aria-checked", on ? "true" : "false");
+    var st = document.getElementById("gateState");
+    st.setAttribute("data-on", on ? "true" : "false");
+    st.textContent = on ? "ON" : "OFF";
+    if (!on) closeTray(false);
+  }
+
+  // ---- the OPT-IN advisory transform toggle (default OFF, advisory-only) ----
+  function setOptin(on) {
+    var sw = document.getElementById("optinSwitch");
+    sw.setAttribute("aria-checked", on ? "true" : "false");
+    var st = document.getElementById("optinState");
+    st.setAttribute("data-on", on ? "true" : "false");
+    st.textContent = on ? "ON" : "OFF";
+    document.getElementById("optinScope").hidden = !on;
+  }
+
+  // ---- wire it up ----------------------------------------------------------
+  document.getElementById("scopeName").textContent = PAYLOAD.scope;
+  document.getElementById("excludedSelf").textContent = PAYLOAD.excluded_self;
+  document.getElementById("statAgree").textContent = pct(PAYLOAD.overall_agreement);
+  document.getElementById("statBrier").textContent = PAYLOAD.brier.toFixed(3);
+  document.getElementById("statN").textContent = fmtN(PAYLOAD.total_decisions);
+  // worst gap = max |gap| among non-low-sample over/under buckets
+  (function () {
+    var worst = null;
+    for (var i = 0; i < PAYLOAD.buckets.length; i++) {
+      var b = PAYLOAD.buckets[i];
+      if (b.n < MIN_N) continue;
+      if (!worst || Math.abs(b.gap) > Math.abs(worst.gap)) worst = b;
+    }
+    if (worst) {
+      var w = gapPoints(worst.gap);
+      var dir = worst.sign === "OVER" ? "over" : (worst.sign === "UNDER" ? "under" : "ok");
+      document.getElementById("statWorst").textContent = w + " pts " + dir;
+    }
+  })();
+
+  buildDiagram();
+  buildRail();
+
+  document.getElementById("gateSwitch").addEventListener("click", function () {
+    setGate(this.getAttribute("aria-checked") !== "true");
+  });
+  document.getElementById("optinSwitch").addEventListener("click", function () {
+    setOptin(this.getAttribute("aria-checked") !== "true");
+  });
+  document.getElementById("trayClose").addEventListener("click", function () {
+    closeTray(true);
+  });
+  railRows.addEventListener("keydown", railKeydown);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !document.getElementById("tray").hidden) {
+      // global Esc closes the tray too
+      var insideRail = railRows.contains(document.activeElement);
+      if (!insideRail) closeTray(false);
+    }
+  });
+</script>
+</body>
+</html>

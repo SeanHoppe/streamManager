@@ -21,6 +21,7 @@ Self-monitor refusal (two layers per
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
@@ -44,6 +45,22 @@ def _sm_slug_set() -> frozenset[str]:
     """Read SM self-slug set from env each call (cheap, test-friendly)."""
     raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", _DEFAULT_SM_SLUGS)
     return frozenset(s.strip() for s in raw.split(",") if s.strip())
+
+
+def ensure_project_slug_column(conn: sqlite3.Connection) -> None:
+    """Idempotently bring a legacy ``episodes`` table up to rl/schema.sql by
+    adding the nullable ``project_slug`` column.
+
+    A pre-column db (created before schema.sql added ``project_slug``)
+    raises "no such column: project_slug" on any corpus read whose WHERE
+    applies the SQL-side polarity-flip (CLAUDE.md L42). ``CREATE TABLE IF
+    NOT EXISTS`` never backfills columns, so this ALTER is the migration
+    path. Safe no-op when the column already exists or the table is absent
+    (OperationalError suppressed). Legacy rows get NULL slug -> retained by
+    the WHERE -> caught by the session backstop. Single source of truth
+    shared by ``corpus_augment`` and ``rl.ope`` reads."""
+    with contextlib.suppress(sqlite3.OperationalError):
+        conn.execute("ALTER TABLE episodes ADD COLUMN project_slug TEXT")
 
 
 class SelfMonitorRefusal(ValueError):

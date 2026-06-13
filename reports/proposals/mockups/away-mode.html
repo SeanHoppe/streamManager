@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<!--
+  away-mode.html -- KingMode mockup for BETA feature "away-mode"
+  (#4: Away / Calm Mode + Activity Summary Replay).
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written
+  (directive #2). This is a PREVIEW, not the build. It is self-contained
+  (inline style + script, no external assets / CDNs / fonts, system font stack)
+  and reuses the REAL dashboard/ui-next theme tokens (theme.css) so the operator
+  sees the actual obsidian / phosphor / paper palette and the frozen paired
+  label+color badges.
+
+  WHERE IT LIVES IN THE REAL UI (kingmodeDesign):
+    - A POSTURE PILL in the masthead header slot (sibling of the Learn-Mode /
+      HITL-mode pills, asymmetric right of the masthead). NEVER a 4th frame.
+    - A centered role=dialog aria-modal ACTIVITY SUMMARY overlay that reuses the
+      drawer lifecycle. The 3-frame layout (M1) is never rearranged.
+
+  ADR-18 floor honoured here:
+    - 3 frames remain present; the AWAY pill lives in the MASTHEAD slot,
+      NEVER in an escalation rail.
+    - Escalation-only foreground (M2): while AWAY, only the canonical allow-list
+      (desktop_pause / governance_negative_regression / static-rule BLOCK) breaks
+      through and auto-opens the summary; everything else buffers silently. The
+      classifier defers to the ONE table in lib/escalation.js -- never re-decided.
+    - Paired label+color badges everywhere (PRESENT / AWAY / OBSERVING / PAUSE /
+      STATIC RULE -- BLOCK / NEW). Color is NEVER the only signal (M4): every
+      badge carries a leading square swatch AND its uppercase text.
+    - Absolute HITL gate: the Pending line is OBSERVING only -- nothing is
+      auto-resolved.
+    - Domain-agnostic (M16): governed-target identity (sessionId / projectSlug /
+      agent profile slugs) renders FROM DATA only. Generic placeholders
+      (sess-7c2f / alpha-proj / planner / reviewer / builder). No
+      monitored-project vocabulary.
+    - a11y AAA: slate #475569 on #f1f5f9 and amber #d97706 on #fef3c7 are >=7:1;
+      2px amber focus ring at 2px offset; focus trap + Escape dismiss; aria-live
+      polite posture+buffered announcement; prefers-reduced-motion drops motion.
+
+  BETA GATING (footprint: ui-only -- frozenTouch false, no new envelope, no new
+  table, no new endpoint): this feature is default-OFF and toggled in
+  Settings > BETA features (group "Monitor & glance-readability"). The mockup
+  shows it ON with realistic mock data PLUS the gated annotation. The inline
+  on/off toggle below is wired client-side so the operator SEES the gated
+  behaviour: flipping OFF forces PRESENT, closes the overlay, and (in the real
+  component) tears down every subscription.
+
+  REAL FILES this previews (grounding):
+    - dashboard/ui-next/src/lib/components/beta/AwayMode.svelte
+    - dashboard/ui-next/src/lib/components/beta/AwayMode-data.js
+    - registry key 'away-mode' num 4 group 'monitor' defaultEnabled:false
+
+  ASCII-only: no smart quotes, no em-dashes (written as --), no box-drawing.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>away-mode -- KingMode mockup</title>
+<style>
+  /* ========================================================================
+     TOKEN LAYER -- lifted verbatim from dashboard/ui-next/src/styles/theme.css
+     so this mockup previews the REAL frozen token values. (theme.css is the
+     contract; this is a copy for the standalone preview, not a fork of it.)
+  ======================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* FIXED BADGE TOKENS (M4) -- theme-invariant paired label+color palette. */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:      #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border:     #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg:    #ffedd5;  --badge-warn-border:    #ea580c;
+  }
+
+  /* THEME: OBSIDIAN (default) */
+  [data-theme="obsidian"] {
+    --bg: #080a0c; --bg-card: #0c1118; --bg-row: #0e141e; --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --border: #192030; --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098; --text-dim: #948870; --text-ui: #8a8068; --text-bright: #e8e0cc;
+    --accent: #f59e0b; --accent-dim: rgba(245,158,11,0.09); --accent-glow: rgba(245,158,11,0.35);
+    --font-h: var(--ff-system); --font-d: var(--ff-mono);
+    --logo-ls: 0.12em;
+  }
+  /* THEME: PHOSPHOR */
+  [data-theme="phosphor"] {
+    --bg: #010602; --bg-card: #010d03; --bg-row: #021005; --bg-row-alt: #010d03;
+    --bg-row-hover: #031508;
+    --border: #082510; --border-hi: rgba(57,255,20,0.3);
+    --text: #5aaa60; --text-dim: #429056; --text-ui: #4ea060; --text-bright: #9de89e;
+    --accent: #39ff14; --accent-dim: rgba(57,255,20,0.07); --accent-glow: rgba(57,255,20,0.3);
+    --font-h: var(--ff-mono); --font-d: var(--ff-mono);
+    --logo-ls: 0.2em;
+  }
+  /* THEME: PAPER (light) */
+  [data-theme="paper"] {
+    --bg: #ede8df; --bg-card: #f8f4ee; --bg-row: #fefefc; --bg-row-alt: #f5f1ea;
+    --bg-row-hover: #f0eae0;
+    --border: #ccc4b4; --border-hi: rgba(192,57,43,0.35);
+    --text: #2a2018; --text-dim: #6a5040; --text-ui: #5a4030; --text-bright: #140c04;
+    --accent: #c0392b; --accent-dim: rgba(192,57,43,0.07); --accent-glow: rgba(192,57,43,0.2);
+    --font-h: serif; --font-d: var(--ff-mono);
+    --logo-ls: 0.04em;
+  }
+
+  /* ========================================================================
+     RESET + PAGE SHELL
+  ======================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-h, var(--ff-system));
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 0 22px 64px; }
+
+  /* ------------------------------------------------------------------------
+     MOCKUP META STRIP -- title + BETA-gated pill + inline on/off toggle.
+     This strip is mockup chrome (explains what you are looking at). The toggle
+     mirrors how Settings > BETA features would gate the real feature: when OFF
+     the posture control simply is not mounted.
+  ------------------------------------------------------------------------ */
+  .meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: 16px 0 14px; border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+  }
+  .meta__title {
+    font-size: 15px; font-weight: 680; color: var(--text-bright);
+    letter-spacing: 0.01em; margin: 0;
+  }
+  .meta__title span { color: var(--text-dim); font-weight: 320; }
+  .meta__spacer { flex: 1 1 auto; }
+
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-d, var(--ff-mono));
+    font-size: 11px; letter-spacing: 0.06em;
+    padding: 5px 11px; border-radius: 999px;
+    background: var(--badge-ar-bg); color: var(--badge-ar-fg);
+    border: 1px solid var(--badge-ar-border);
+    font-weight: 700; white-space: nowrap;
+  }
+  .beta-pill b { font-weight: 700; }
+  .beta-pill span { font-weight: 400; opacity: 0.9; }
+
+  /* inline on/off toggle (client-side; demonstrates the gated default-OFF). */
+  .gate {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--font-d, var(--ff-mono));
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .switch {
+    position: relative; width: 46px; height: 24px; flex: 0 0 auto;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: var(--bg-row); cursor: pointer; padding: 0;
+    transition: background 180ms ease, border-color 180ms ease;
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--text-ui);
+    transition: left 180ms ease, background 180ms ease;
+  }
+  .switch[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--border-hi); }
+  .switch[aria-pressed="true"] .switch__knob { left: 24px; background: var(--accent); }
+  .gate__state { min-width: 26px; font-weight: 700; }
+  .gate__state[data-on="true"] { color: var(--accent); }
+
+  /* ========================================================================
+     MASTHEAD (calm) -- mirrors HeaderBar.svelte: hairline base rule, dim
+     chrome, no glow. The AWAY / PRESENT pill sits in the header SLOT beside the
+     theme switch, as a sibling of the Learn-Mode / HITL-mode pills. Escalation
+     is NEVER rendered here (ADR-18 M2 / M4).
+  ======================================================================== */
+  .hb {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center; gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    min-height: 3rem;
+  }
+  .hb__brand { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; }
+  .hb__mark {
+    width: 26px; height: 26px; flex: 0 0 auto;
+    border: 2px solid var(--accent); border-radius: 2px; position: relative; opacity: 0.92;
+  }
+  .hb__mark::after {
+    content: ''; position: absolute; right: -2px; bottom: -2px;
+    width: 40%; height: 40%; background: var(--accent); border-radius: 1px;
+  }
+  .hb__word { font-size: 18px; line-height: 1; letter-spacing: var(--logo-ls); white-space: nowrap; }
+  .hb__word b { font-weight: 680; color: var(--text-bright); }
+  .hb__word i { font-weight: 320; font-style: normal; color: var(--text-ui); }
+  .hb__cwd {
+    grid-column: 2; min-width: 0; display: inline-flex; align-items: baseline; gap: 8px; overflow: hidden;
+  }
+  .hb__cwd-tag {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .hb__cwd-path {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 13px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* sibling pills (Learn-Mode / HITL-mode) -- shown muted so the operator sees
+     the AWAY pill landing AS A SIBLING, not as a new frame. */
+  .siblings { grid-column: 3; display: inline-flex; align-items: center; gap: 8px; }
+  .sib-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-d, var(--ff-mono));
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    padding: 5px 11px; border-radius: 999px;
+    background: var(--bg-card); border: 1px solid var(--border); color: var(--text-ui);
+  }
+  .sib-pill .sib-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--badge-obs-fg); background: transparent;
+  }
+
+  /* AWAY / PRESENT PILL (header slot) -- the one new resting control.
+     PRESENT = text + hairline slate dot. AWAY = slate-filled chip + filled dot
+     + muted "N buffered" counter. Paired label+color (M4): the WORD is always
+     present; the dot/fill is a secondary cue, never the only signal. */
+  .posture__pill {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--font-d, var(--ff-mono));
+    font-size: 12px; font-weight: 700; letter-spacing: 0.1em;
+    padding: 6px 13px; border-radius: 999px; cursor: pointer;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text-bright);
+    transition: border-color 180ms ease, background 180ms ease;
+  }
+  .posture__pill:hover { border-color: var(--border-hi); }
+  .posture__dot {
+    width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+  }
+  /* PRESENT: hairline slate dot (ring, not filled). */
+  .posture__pill[data-posture="present"] .posture__dot {
+    background: transparent; border: 1.5px solid var(--badge-obs-fg);
+  }
+  /* AWAY: slate-filled chip look + filled dot. The pill darkens to read calm. */
+  .posture__pill[data-posture="away"] {
+    background: var(--badge-obs-bg); color: var(--badge-obs-fg);
+    border-color: var(--badge-obs-border);
+  }
+  .posture__pill[data-posture="away"] .posture__dot {
+    background: var(--badge-obs-fg); border: 1.5px solid var(--badge-obs-fg);
+  }
+  .posture__buffered {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    padding-left: 9px; margin-left: 2px; border-left: 1px solid currentColor;
+    opacity: 0.85;
+  }
+  .hb__theme { grid-column: 4; display: inline-flex; align-items: center; gap: 8px; }
+  .hb__theme-label {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui); white-space: nowrap;
+  }
+  .hb__theme-select {
+    appearance: none; -webkit-appearance: none;
+    background: var(--bg-card); color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: var(--font-h, var(--ff-system)); font-size: 13px;
+    padding: 4px 24px 4px 8px; cursor: pointer; transition: border-color 180ms ease;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-ui) 50%),
+                      linear-gradient(135deg, var(--text-ui) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  }
+  .hb__theme-select:hover { border-color: var(--border-hi); }
+
+  /* ========================================================================
+     BODY: a calm 3-frame skeleton, deliberately abstracted (this mockup is
+     ABOUT the posture toggle + summary overlay, so the frames are shown just
+     enough to prove "the monitor visibly calms" when AWAY engages).
+  ======================================================================== */
+  .intro {
+    display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px;
+    margin-top: 22px;
+  }
+  @media (max-width: 820px) { .intro { grid-template-columns: 1fr; } }
+  .blurb { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+  .blurb h2 {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-ui); margin: 0 0 8px; font-family: var(--font-d, var(--ff-mono));
+  }
+  .blurb p { margin: 0 0 10px; }
+  .blurb code {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 12px; color: var(--text-bright);
+    background: var(--bg-card); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border);
+  }
+
+  .frames {
+    margin-top: 26px; display: grid; gap: 14px;
+    grid-template-columns: 1.5fr 1fr 1fr;
+  }
+  @media (max-width: 820px) { .frames { grid-template-columns: 1fr; } }
+  .frame {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden; min-height: 220px;
+    transition: opacity 220ms ease, filter 220ms ease;
+  }
+  .frame__head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  .frame__title {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .frame__body { padding: 8px 0; }
+  .row {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+    padding: 9px 14px; border-bottom: 1px solid var(--border);
+  }
+  .row:last-child { border-bottom: 0; }
+  .row__msg { font-size: 13px; color: var(--text); min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row__meta { font-family: var(--font-d, var(--ff-mono)); font-size: 11px; color: var(--text-dim); }
+
+  /* CALM STATE: when AWAY, the live frames quiet down -- dimmed, de-motioned,
+     HITL rows demote to OBSERVING slate. "Calm" must feel INTENTIONAL. */
+  body[data-away="true"] .frame { opacity: 0.55; filter: saturate(0.6); }
+  body[data-away="true"] .frame--feed::after {
+    content: 'BUFFERING -- events held quietly while AWAY';
+    display: block; text-align: center; font-family: var(--font-d, var(--ff-mono));
+    font-size: 11px; letter-spacing: 0.08em; color: var(--text-ui);
+    padding: 12px 14px; border-top: 1px dashed var(--border);
+  }
+
+  /* PAIRED LABEL+COLOR BADGES (M4). Each badge is text + background + border
+     + a leading square swatch (::before). Color is never the only signal. */
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; white-space: nowrap;
+  }
+  .badge::before {
+    content: ''; width: 7px; height: 7px; border-radius: 2px; background: currentColor; opacity: 0.9;
+  }
+  .badge--observing { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .badge--ar       { color: var(--badge-ar-fg);  background: var(--badge-ar-bg);  border: 2px solid var(--badge-ar-border); }
+  .badge--blocked  { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); }
+  .badge--pause    { color: var(--badge-ar-fg);  background: var(--badge-ar-bg);  border: 2px solid var(--badge-ar-border); }
+  .badge--decided  { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .badge--warn     { color: var(--badge-warn-fg); background: var(--badge-warn-bg); border: 1px solid var(--badge-warn-border); }
+
+  /* ========================================================================
+     ACTIVITY SUMMARY OVERLAY -- centered role=dialog aria-modal (z-index 60).
+     Reuses the drawer lifecycle; NEVER a 4th frame. Quiet briefing, not a
+     notification dump.
+  ======================================================================== */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(2, 4, 8, 0.72);
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 7vh 20px 40px; z-index: 60;
+    overflow-y: auto;
+  }
+  .scrim[data-open="true"] { display: flex; }
+  .dialog {
+    width: 100%; max-width: 620px;
+    background: var(--bg-card); border: 1px solid var(--border-hi);
+    border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,0.55);
+    overflow: hidden;
+  }
+  .dialog__head {
+    padding: 18px 22px 14px; border-bottom: 1px solid var(--border);
+  }
+  .dialog__eyebrow {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-ui);
+    margin: 0 0 6px;
+  }
+  .dialog__title {
+    margin: 0; font-size: 20px; font-weight: 680; color: var(--text-bright); letter-spacing: 0.01em;
+  }
+  .dialog__window {
+    margin-top: 8px; font-family: var(--font-d, var(--ff-mono)); font-size: 13px;
+    color: var(--text-dim);
+  }
+  .dialog__window b { color: var(--text); font-weight: 700; }
+  .dialog__scope {
+    margin-top: 6px; font-family: var(--font-d, var(--ff-mono)); font-size: 11px;
+    color: var(--text-ui); letter-spacing: 0.04em;
+  }
+  .dialog__body { padding: 6px 22px 18px; }
+
+  .section { margin-top: 18px; }
+  .section__label {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+    margin: 0 0 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .section__count {
+    font-size: 10px; color: var(--text-dim); border: 1px solid var(--border);
+    border-radius: 999px; padding: 1px 7px;
+  }
+
+  /* ESCALATION TIMELINE: amber items first, slate-red BLOCK below, hairline
+     vertical connector. The connector + dots are decorative (aria-hidden). */
+  .timeline { position: relative; margin: 0; padding: 0; list-style: none; }
+  .tl-item {
+    position: relative; display: grid; grid-template-columns: auto 1fr;
+    gap: 12px; padding: 10px 0 10px 4px;
+  }
+  .tl-item:not(:last-child)::before {
+    content: ''; position: absolute; left: 7px; top: 26px; bottom: -2px;
+    width: 1px; background: var(--border);
+  }
+  .tl-dot {
+    width: 15px; height: 15px; border-radius: 50%; flex: 0 0 auto; margin-top: 2px;
+    border: 3px solid var(--badge-ar-fg); background: var(--bg-card);
+  }
+  .tl-item[data-kind="slate"] .tl-dot { border-color: var(--badge-blocked-fg); }
+  .tl-main { min-width: 0; }
+  .tl-line1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tl-ts {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 12px; color: var(--text-dim);
+  }
+  .tl-reason { margin-top: 4px; font-size: 13px; color: var(--text); }
+
+  /* NEW AGENTS roster: slate chips, FROM DATA (profile_slug + first_seen). */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--bg-row-alt); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 12px; font-size: 13px; color: var(--text);
+  }
+  .chip__slug { font-weight: 600; color: var(--text-bright); }
+  .chip__seen { font-family: var(--font-d, var(--ff-mono)); font-size: 11px; color: var(--text-dim); }
+  .chip__new {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 9px; letter-spacing: 0.08em;
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border); border-radius: 3px; padding: 1px 5px;
+  }
+
+  .pending {
+    margin-top: 8px; display: flex; align-items: center; gap: 12px;
+    font-size: 14px; color: var(--text);
+  }
+  .pending b { color: var(--text-bright); }
+
+  .empty {
+    text-align: center; color: var(--text-dim); font-size: 14px;
+    padding: 18px 0 6px; font-style: italic;
+  }
+
+  /* FOOTER ACTIONS: Catch Up (primary accent), Review Pending (bordered),
+     Dismiss (ghost, right-aligned). */
+  .dialog__foot {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 16px 22px; border-top: 1px solid var(--border); background: var(--bg-row-alt);
+  }
+  .btn {
+    appearance: none; font-family: var(--font-h, var(--ff-system));
+    font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 9px 18px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text-bright);
+    transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
+  }
+  .btn:hover { border-color: var(--border-hi); }
+  .btn--primary {
+    background: var(--accent); color: #1a1206; border-color: var(--accent);
+  }
+  .btn--primary:hover { filter: brightness(1.06); border-color: var(--accent); }
+  .btn--ghost { margin-left: auto; color: var(--text-dim); }
+  .dialog__hint {
+    font-family: var(--font-d, var(--ff-mono)); font-size: 11px; color: var(--text-ui);
+    letter-spacing: 0.04em;
+  }
+
+  /* A11Y: 2px amber focus ring + 2px offset on every interactive element. */
+  .switch:focus-visible, .posture__pill:focus-visible, .hb__theme-select:focus-visible,
+  .btn:focus-visible, .hb__brand:focus-visible {
+    outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 6px;
+  }
+
+  /* Visually hidden live region for screen readers. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* FOOTNOTE -- BETA-gated annotation (footprint: ui-only, additive). */
+  .gate-note {
+    margin-top: 34px; display: flex; gap: 12px; align-items: flex-start;
+    padding: 14px 16px; border-radius: 8px;
+    background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border);
+  }
+  .gate-note__icon {
+    flex: 0 0 auto; font-family: var(--font-d, var(--ff-mono)); font-weight: 800;
+    font-size: 12px; color: var(--badge-obs-fg);
+    border: 2px solid var(--badge-obs-border); border-radius: 4px; padding: 2px 7px;
+    letter-spacing: 0.06em;
+  }
+  .gate-note__text { font-size: 13px; color: #334155; line-height: 1.55; }
+  .gate-note__text b { color: #1e293b; }
+  .gate-note__text code {
+    font-family: var(--ff-mono); font-size: 12px; color: #1e293b;
+    background: rgba(255,255,255,0.5); padding: 1px 4px; border-radius: 3px;
+  }
+
+  /* Reduced motion: drop every transition. (Real component also honours
+     html[data-motion='reduce'].) */
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion='allow']) * { transition: none !important; }
+  }
+</style>
+</head>
+<body data-away="false">
+  <div class="page">
+
+    <!-- ============ MOCKUP META STRIP: title + BETA-gated pill + toggle ====== -->
+    <div class="meta">
+      <h1 class="meta__title">Away / Calm Mode <span>+ Activity Summary Replay</span></h1>
+      <div class="meta__spacer"></div>
+      <span class="beta-pill">
+        <b>BETA</b><span>-- default OFF, toggled in Settings &gt; BETA features</span>
+      </span>
+      <div class="gate">
+        <span>Feature</span>
+        <button id="featureGate" class="switch" type="button" aria-pressed="true"
+                aria-label="Enable away-mode beta feature">
+          <span class="switch__knob"></span>
+        </button>
+        <span class="gate__state" id="gateState" data-on="true">ON</span>
+      </div>
+    </div>
+
+    <!-- ============ MASTHEAD (calm) -- AWAY/PRESENT pill lives HERE =========== -->
+    <header class="hb" role="banner" id="masthead">
+      <a class="hb__brand" href="#" aria-label="StreamManager -- operator console">
+        <span class="hb__mark" aria-hidden="true"></span>
+        <span class="hb__word"><b>Stream</b><i>Manager</i></span>
+      </a>
+
+      <div class="hb__cwd" aria-live="polite">
+        <span class="hb__cwd-tag">CWD</span>
+        <span class="hb__cwd-path" title="selected session working directory (FROM DATA)">~/work/alpha-proj</span>
+      </div>
+
+      <!-- HEADER PILL SLOT: the AWAY pill sits as a SIBLING of the Learn-Mode /
+           HITL-mode pills (shown muted), asymmetric on the right of the masthead. -->
+      <div class="siblings" id="postureSlot">
+        <span class="sib-pill" aria-hidden="true"><span class="sib-dot"></span>LEARN</span>
+        <span class="sib-pill" aria-hidden="true"><span class="sib-dot"></span>HITL</span>
+        <!-- POSTURE PILL: native button, Enter/Space toggles. Default = PRESENT. -->
+        <button id="posturePill" class="posture__pill" type="button"
+                data-testid="away-mode-pill"
+                data-posture="present" aria-pressed="false"
+                aria-label="Posture: PRESENT. Activate to go AWAY and calm the monitor.">
+          <span class="posture__dot" aria-hidden="true"></span>
+          <span class="posture__text" id="postureText">PRESENT</span>
+          <span class="posture__buffered" id="postureBuffered"
+                data-testid="away-mode-buffered" hidden></span>
+        </button>
+      </div>
+
+      <div class="hb__theme">
+        <label class="hb__theme-label" for="themeSelect">Theme</label>
+        <select id="themeSelect" class="hb__theme-select" aria-label="Color theme">
+          <option value="obsidian">Obsidian</option>
+          <option value="phosphor">Phosphor</option>
+          <option value="paper">Paper</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- aria-live region: announces posture + buffered count to AT (polite). -->
+    <p class="sr-only" id="liveStatus" data-testid="away-mode-live" aria-live="polite"></p>
+
+    <!-- ============ EXPLAINER ================================================= -->
+    <div class="intro">
+      <div class="blurb">
+        <h2>What this is</h2>
+        <p>The operator is about to leave the keyboard for 15--60 min. Flip the
+          <code>AWAY</code> pill in the masthead and the monitor goes quiet:
+          events buffer silently in the already-self-excluded stores, HITL rows
+          stay OBSERVING (nothing auto-resolved), no pulsing. A <b>real</b> M2
+          escalation still breaks through instantly and auto-opens the summary.</p>
+        <p>On return, ONE Activity Summary overlay replays the gap instead of a
+          scrolled-off feed: escalation timeline, new-agent roster, queued-HITL
+          count, and the away window in minutes. One click on <b>Catch Up</b>
+          clears the buffer + resumes live; <b>Review Pending</b> jumps to the
+          HITL dock; <code>Esc</code> dismisses.</p>
+      </div>
+      <div class="blurb">
+        <h2>Try it</h2>
+        <p>1. Click the <code>PRESENT</code> pill -- it flips to <code>AWAY</code>,
+          the frames calm, and the buffered counter climbs.</p>
+        <p>2. Click the <code>AWAY</code> pill again to return -- because a real
+          escalation buffered, the Activity Summary <b>auto-shows</b>.</p>
+        <p>3. In the overlay: <b>Catch Up</b> clears the buffer + resumes live;
+          <b>Review Pending</b> focuses the HITL dock; <code>Esc</code> dismisses;
+          <code>Tab</code> cycles the 3 footer buttons (focus is trapped, then
+          restored to the pill).</p>
+      </div>
+    </div>
+
+    <!-- ============ 3-FRAME SKELETON (abstracted) -- proves "monitor calms" === -->
+    <div class="frames" aria-label="Operator frames (abstracted preview)">
+      <!-- FRAME A: decision feed (buffers while AWAY) -->
+      <section class="frame frame--feed" aria-label="Frame A -- decision feed">
+        <div class="frame__head">
+          <span class="frame__title">A / Decision feed</span>
+          <span class="badge badge--decided">DECIDED</span>
+        </div>
+        <div class="frame__body">
+          <div class="row">
+            <span class="badge badge--observing">OBSERVING</span>
+            <span class="row__msg">apply-patch on config loader</span>
+            <span class="row__meta">14:01</span>
+          </div>
+          <div class="row">
+            <span class="badge badge--decided">DECIDED</span>
+            <span class="row__msg">read scope manifest</span>
+            <span class="row__meta">14:00</span>
+          </div>
+          <div class="row">
+            <span class="badge badge--observing">OBSERVING</span>
+            <span class="row__msg">list working tree changes</span>
+            <span class="row__meta">13:59</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- FRAME B: agent roster (new agents listed in the summary on return) -->
+      <section class="frame" aria-label="Frame B -- agent roster">
+        <div class="frame__head">
+          <span class="frame__title">B / Agent roster</span>
+        </div>
+        <div class="frame__body">
+          <div class="row"><span class="badge badge--decided">ACTIVE</span><span class="row__msg">planner</span><span class="row__meta">3h</span></div>
+          <div class="row"><span class="badge badge--decided">ACTIVE</span><span class="row__msg">reviewer</span><span class="row__meta">new</span></div>
+          <div class="row"><span class="badge badge--decided">ACTIVE</span><span class="row__msg">builder</span><span class="row__meta">new</span></div>
+        </div>
+      </section>
+
+      <!-- FRAME C: HITL dock (Review Pending focuses this) -->
+      <section class="frame" id="hitlDock" aria-label="Frame C -- HITL dock" tabindex="-1">
+        <div class="frame__head">
+          <span class="frame__title">C / HITL dock</span>
+          <span class="badge badge--observing">OBSERVING</span>
+        </div>
+        <div class="frame__body">
+          <div class="row"><span class="badge badge--observing">OBSERVING</span><span class="row__msg">pending: write outside scope</span><span class="row__meta">queued</span></div>
+          <div class="row"><span class="badge badge--observing">OBSERVING</span><span class="row__msg">pending: network egress</span><span class="row__meta">queued</span></div>
+          <div class="row"><span class="badge badge--observing">OBSERVING</span><span class="row__msg">pending: env var read</span><span class="row__meta">queued</span></div>
+          <div class="row"><span class="badge badge--observing">OBSERVING</span><span class="row__msg">pending: shell rm path</span><span class="row__meta">queued</span></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ FOOTPRINT FOOTNOTE (ui-only, BETA-gated, additive) ======== -->
+    <div class="gate-note" role="note">
+      <span class="gate-note__icon">UI</span>
+      <span class="gate-note__text">
+        <b>Footprint: ui-only -- additive, no FROZEN touch.</b>
+        Two new files only:
+        <code>lib/components/beta/AwayMode.svelte</code> (pill + overlay +
+        buffering + focus trap + teardown) and
+        <code>lib/components/beta/AwayMode-data.js</code> (pure domain-agnostic
+        helpers that defer M2 classification to the ONE
+        <code>lib/escalation.js</code> table). No new bus envelope, no new table,
+        no new endpoint. Default-OFF and gated behind the Settings BETA registry
+        (key <code>away-mode</code>, group "Monitor &amp; glance-readability"):
+        the component subscribes to NOTHING until
+        <code>$betaFlags['away-mode']</code> is true, and flipping it OFF forces
+        PRESENT, closes the overlay, and tears down every subscription.
+      </span>
+    </div>
+
+  </div>
+
+  <!-- ============ ACTIVITY SUMMARY OVERLAY (role=dialog, aria-modal) ========= -->
+  <div class="scrim" id="scrim" data-open="false">
+    <div class="dialog" role="dialog" aria-modal="true"
+         data-testid="away-mode-summary"
+         aria-labelledby="dlgTitle" aria-describedby="dlgWindow" id="dialog">
+      <div class="dialog__head">
+        <p class="dialog__eyebrow">Activity summary -- while you were away</p>
+        <h2 class="dialog__title" id="dlgTitle">Quiet briefing</h2>
+        <p class="dialog__window" id="dlgWindow">
+          AWAY <b>14:02:11</b> -&gt; <b>14:44:53</b> (42 min) &middot;
+          <span id="dlgBuffered">38</span> events observed
+        </p>
+        <p class="dialog__scope">session sess-7c2f &middot; project alpha-proj (FROM DATA)</p>
+      </div>
+
+      <div class="dialog__body" id="dlgBody">
+        <!-- ESCALATION TIMELINE (amber PAUSE first, slate-red BLOCK below) -->
+        <div class="section" id="secTimeline">
+          <p class="section__label">
+            Escalation timeline
+            <span class="section__count">while away</span>
+          </p>
+          <ul class="timeline">
+            <li class="tl-item" data-kind="amber">
+              <span class="tl-dot" aria-hidden="true"></span>
+              <div class="tl-main">
+                <div class="tl-line1">
+                  <span class="tl-ts">14:08:11</span>
+                  <span class="badge badge--pause">PAUSE</span>
+                </div>
+                <p class="tl-reason">Desktop orchestration paused -- operator attention required (desktop_pause)</p>
+              </div>
+            </li>
+            <li class="tl-item" data-kind="slate">
+              <span class="tl-dot" aria-hidden="true"></span>
+              <div class="tl-main">
+                <div class="tl-line1">
+                  <span class="tl-ts">14:31:11</span>
+                  <span class="badge badge--blocked">STATIC RULE -- BLOCK</span>
+                </div>
+                <p class="tl-reason">Static rule fired -- hard governance trigger (static-rule)</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <!-- NEW AGENTS roster (slate chips, FROM DATA -- first_seen while away) -->
+        <div class="section">
+          <p class="section__label">
+            New agents
+            <span class="section__count">first seen while away</span>
+          </p>
+          <div class="chips">
+            <span class="chip">
+              <span class="chip__slug">reviewer</span>
+              <span class="chip__seen">14:15:11</span>
+              <span class="chip__new">NEW</span>
+            </span>
+            <span class="chip">
+              <span class="chip__slug">builder</span>
+              <span class="chip__seen">14:23:11</span>
+              <span class="chip__new">NEW</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- PENDING line (OBSERVING only -- HITL gate stays absolute) -->
+        <div class="section">
+          <p class="section__label">Pending</p>
+          <div class="pending" data-testid="away-mode-pending">
+            <span class="badge badge--observing">OBSERVING</span>
+            <span><b>4</b> HITL rows queued -- nothing auto-resolved (gate stays absolute)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- FOOTER ACTIONS: Catch Up (primary) / Review Pending (bordered) / Dismiss (ghost) -->
+      <div class="dialog__foot">
+        <button class="btn btn--primary" id="btnCatchUp" data-testid="away-mode-catchup" type="button">Catch Up</button>
+        <button class="btn" id="btnReview" data-testid="away-mode-review" type="button">Review Pending</button>
+        <button class="btn btn--ghost" id="btnDismiss" type="button" aria-label="Dismiss summary (Esc)">Dismiss</button>
+        <span class="dialog__hint">Esc dismiss -- Tab cycles</span>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- MOCK DATA (mockDataSpec; rendered when live gov.db is unavailable) ----
+  // Domain-agnostic, ASCII-only. mockSummary(nowMs) is the fallback the real
+  // AwayMode-data.js exposes; the overlay above is pre-rendered from the same
+  // buildSummary() render shape. Offsets match the brief: away window = 42 min,
+  // PAUSE at start+6min, BLOCK at start+29min, reviewer first_seen at start+13min,
+  // builder at start+21min. Live-data rule: when the stores are non-empty the
+  // REAL summary always wins; the mock only fires when BOTH the away window AND
+  // the live stores are empty (usedMock=true surfaced for tests).
+  var NOW    = Date.now();
+  var MIN    = 60 * 1000;
+  var aStart = NOW - 42 * MIN;
+  var aEnd   = NOW;
+  var MOCK = {
+    awayMode: {
+      key: "away-mode", enabled: true,
+      sessionId: "sess-7c2f", projectSlug: "alpha-proj",
+      awayStart: aStart, awayEnd: aEnd,
+      hitlQueuedCount: 4,
+      bufferedEventCount: 38,
+      usedMock: true
+    },
+    // buildSummary() timeline render shape: {ts,tsLabel,label,reason,kind}.
+    timeline: [
+      { ts: aStart + 6 * MIN, label: "PAUSE",
+        reason: "Desktop orchestration paused -- operator attention required",
+        kind: "amber", trigger: "desktop_pause" },
+      { ts: aStart + 29 * MIN, label: "STATIC RULE -- BLOCK",
+        reason: "Static rule fired -- hard governance trigger",
+        kind: "slate", trigger: "static-rule" }
+    ],
+    // agentsAfter minus agentsBefore by profile_slug (planner was pre-away).
+    newAgents: [
+      { profile_slug: "reviewer", first_seen: aStart + 13 * MIN },
+      { profile_slug: "builder",  first_seen: aStart + 21 * MIN }
+    ]
+  };
+
+  // hasEscalation: at least one allow-listed M2 escalation buffered during the
+  // away window -> drives the break-through AUTO-show on return. The real
+  // component reads this from lib/escalation.js describe(), never re-decides.
+  function hasEscalation() { return MOCK.timeline.length > 0; }
+
+  // ---- ELEMENT HANDLES -------------------------------------------------------
+  var body         = document.body;
+  var gateBtn      = document.getElementById("featureGate");
+  var gateState    = document.getElementById("gateState");
+  var postureSlot  = document.getElementById("postureSlot");
+  var posturePill  = document.getElementById("posturePill");
+  var postureText  = document.getElementById("postureText");
+  var postureBuf   = document.getElementById("postureBuffered");
+  var liveStatus   = document.getElementById("liveStatus");
+  var themeSelect  = document.getElementById("themeSelect");
+  var scrim        = document.getElementById("scrim");
+  var dialog       = document.getElementById("dialog");
+  var hitlDock     = document.getElementById("hitlDock");
+  var btnCatchUp   = document.getElementById("btnCatchUp");
+  var btnReview    = document.getElementById("btnReview");
+  var btnDismiss   = document.getElementById("btnDismiss");
+  var dlgBuffered  = document.getElementById("dlgBuffered");
+
+  // ---- STATE -----------------------------------------------------------------
+  var posture = "present";   // "present" | "away"
+  var buffered = 0;          // climbs while AWAY (simulated)
+  var bufferTimer = null;
+  var lastFocusBeforeDialog = null;
+
+  // ---- THEME SWITCH (mirrors HeaderBar / ThemeToggle) ------------------------
+  themeSelect.addEventListener("change", function (e) {
+    document.documentElement.setAttribute("data-theme", e.currentTarget.value);
+  });
+
+  // ---- FEATURE GATE (default-OFF semantics; shown ON here) -------------------
+  // Flipping the gate OFF unmounts the posture control entirely (forces PRESENT,
+  // closes the overlay) -- exactly how a default-OFF beta flag behaves: the
+  // component subscribes to nothing and the pill simply is not mounted.
+  function applyGate(on) {
+    gateBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    gateState.textContent = on ? "ON" : "OFF";
+    gateState.setAttribute("data-on", on ? "true" : "false");
+    postureSlot.style.visibility = on ? "visible" : "hidden";
+    if (!on) {
+      if (posture === "away") setPosture("present", { silent: true });
+      closeDialog(true);
+    }
+  }
+  gateBtn.addEventListener("click", function () {
+    applyGate(gateBtn.getAttribute("aria-pressed") !== "true");
+  });
+
+  // ---- BUFFERED COUNTER (simulated event accrual while AWAY) -----------------
+  function startBuffering() {
+    stopBuffering();
+    bufferTimer = setInterval(function () {
+      buffered += 1;
+      renderBuffered();
+    }, 700);
+  }
+  function stopBuffering() {
+    if (bufferTimer) { clearInterval(bufferTimer); bufferTimer = null; }
+  }
+  function renderBuffered() {
+    if (posture === "away") {
+      postureBuf.hidden = false;
+      postureBuf.textContent = buffered + " buffered";
+      liveStatus.textContent = "Away. " + buffered + " events buffered quietly.";
+    } else {
+      postureBuf.hidden = true;
+    }
+  }
+
+  // ---- POSTURE TOGGLE --------------------------------------------------------
+  function setPosture(next, opts) {
+    opts = opts || {};
+    posture = next;
+    posturePill.setAttribute("data-posture", next);
+    posturePill.setAttribute("aria-pressed", next === "away" ? "true" : "false");
+    postureText.textContent = next === "away" ? "AWAY" : "PRESENT";
+    body.setAttribute("data-away", next === "away" ? "true" : "false");
+
+    if (next === "away") {
+      posturePill.setAttribute("aria-label",
+        "Posture: AWAY. Monitor is calm; real escalations still break through. Activate to return.");
+      buffered = 0;
+      renderBuffered();
+      startBuffering();
+      if (!opts.silent) liveStatus.textContent = "Away. Monitor calmed; buffering events quietly.";
+    } else {
+      posturePill.setAttribute("aria-label",
+        "Posture: PRESENT. Activate to go AWAY and calm the monitor.");
+      stopBuffering();
+      postureBuf.hidden = true;
+      if (!opts.silent) liveStatus.textContent = "Present. Live monitor resumed.";
+    }
+  }
+
+  posturePill.addEventListener("click", function () {
+    if (posture === "present") {
+      setPosture("away");
+    } else {
+      // Returning from AWAY. Snapshot the buffered count into the summary, then
+      // AUTO-show the overlay IFF an allow-listed escalation buffered.
+      var observed = buffered || MOCK.awayMode.bufferedEventCount;
+      setPosture("present");
+      if (hasEscalation()) {
+        openDialog(observed);                 // break-through auto-trigger
+      } else {
+        liveStatus.textContent = "Present. Nothing needed you. " + observed + " events observed.";
+      }
+    }
+  });
+
+  // ---- ACTIVITY SUMMARY OVERLAY ---------------------------------------------
+  function focusables() {
+    return Array.prototype.slice.call(
+      dialog.querySelectorAll('button, [href], select, [tabindex]:not([tabindex="-1"])')
+    ).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  }
+
+  function openDialog(observedCount) {
+    lastFocusBeforeDialog = document.activeElement;
+    if (typeof observedCount === "number") dlgBuffered.textContent = String(observedCount);
+    scrim.setAttribute("data-open", "true");
+    // Move focus into the dialog (primary action), trap it there.
+    setTimeout(function () { btnCatchUp.focus(); }, 0);
+    document.addEventListener("keydown", onDialogKey, true);
+  }
+
+  function closeDialog(silent) {
+    if (scrim.getAttribute("data-open") !== "true") return;
+    scrim.setAttribute("data-open", "false");
+    document.removeEventListener("keydown", onDialogKey, true);
+    // Restore focus to the pill on close (a11y).
+    if (!silent && lastFocusBeforeDialog && lastFocusBeforeDialog.focus) {
+      lastFocusBeforeDialog.focus();
+    }
+  }
+
+  function onDialogKey(e) {
+    if (e.key === "Escape") {              // Escape dismisses
+      e.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (e.key === "Tab") {                 // focus trap (Tab cycles the 3 buttons)
+      var list = focusables();
+      if (list.length === 0) return;
+      var first = list[0], last = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    }
+  }
+
+  // Catch Up: clears the AWAY buffer + resumes live.
+  btnCatchUp.addEventListener("click", function () {
+    buffered = 0;
+    renderBuffered();
+    closeDialog();
+    liveStatus.textContent = "Caught up. Buffer cleared; live monitor resumed.";
+  });
+
+  // Review Pending: dispatches the additive 'sm:focus-hitl' intent + focuses the
+  // HITL dock (a calm no-op if nothing listens -- no new bus envelope).
+  btnReview.addEventListener("click", function () {
+    try { window.dispatchEvent(new CustomEvent("sm:focus-hitl")); } catch (_e) {}
+    closeDialog(true);
+    hitlDock.scrollIntoView({ behavior: "smooth", block: "center" });
+    hitlDock.focus();
+    liveStatus.textContent = "Jumped to HITL dock -- 4 rows pending.";
+  });
+
+  btnDismiss.addEventListener("click", function () { closeDialog(); });
+
+  // Click on the scrim backdrop (outside the dialog) also dismisses.
+  scrim.addEventListener("mousedown", function (e) {
+    if (e.target === scrim) closeDialog();
+  });
+
+  // ---- INIT ------------------------------------------------------------------
+  applyGate(true);            // mockup shows the feature ON
+  setPosture("present", { silent: true });
+})();
+</script>
+</body>
+</html>

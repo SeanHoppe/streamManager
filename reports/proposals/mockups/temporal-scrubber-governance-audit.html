@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<!--
+  temporal-scrubber-governance-audit.html -- KingMode mockup for BETA feature
+  "temporal-scrubber-governance-audit" (#47: Temporal Scrubber: governance policy
+  archaeology via replay diff).
+
+  PURPOSE: a static, self-contained preview the operator clicks through to confirm
+  the UI approach BEFORE any Svelte/backend code is written (directive #2). This is
+  a DESIGN GATE, not a build artefact.
+
+  REUSES THE REAL TOKENS: the :root + [data-theme="obsidian"] block below is lifted
+  verbatim from dashboard/ui-next/src/styles/theme.css so this previews the actual
+  obsidian palette (amber accent #f59e0b, AA-documented dim values), the M4 fixed
+  badge tokens, and the --sm-* compatibility bridge.
+
+  WHAT IS MOCKED (vs real build):
+    - The Frame A context strip + decision feed are a static sample (domain-
+      agnostic placeholder slug "demo-target"; never a monitored-project name).
+    - The modal payload is the GET /api/decisions/replay-diff mock from the vetted
+      mockDataSpec (session sess-demo-7f3a, windows A/B, 3 diff rows).
+    - Polarity (G2) is illustrated: the session picker shows non-SM project_slugs
+      ONLY and renders a visible "excluded N self" tally; the SM-self row never
+      appears as a selectable target.
+    - The BETA toggle is wired client-side so the operator SEES the gated default-
+      OFF -> ON behaviour (the "Replay window" affordance appears/disappears).
+    - The two-handle scrubber, the session-pick gate, and the modal open/close +
+      focus trap + Esc are all live so the path-to-value is clickable.
+
+  SCOPE NOTE (rendered in-page): v1 (Phase 1) is the 2-pane replay-diff modal ONLY,
+  reading existing decisions+messages tables -- additive, FROZEN-touch-free, no new
+  table. Phase 2 (policy-mutation timeline + policy_snapshots table + governance.py
+  hook) is DEFERRED and requires an ADR-18 amendment. Because the upstream brief
+  is flagged NEEDS-AMENDMENT, an amber "build gated on ADR-18 amendment" footnote
+  is shown: the UI is approvable, but the BUILD is gated until the amendment lands.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- written as two
+  hyphens), no box-drawing. System font stack only -- no external assets/CDNs.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temporal Scrubber -- KingMode mockup (BETA)</title>
+<style>
+  /* ===================================================================
+     TOKEN LAYER -- lifted from dashboard/ui-next/src/styles/theme.css
+     (obsidian theme + M4 fixed badge tokens + --sm-* bridge). Verbatim
+     values so this mockup previews the REAL palette.
+     =================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* M4 fixed badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-decided-fg:     #16a34a;
+    --badge-decided-bg:     #dcfce7;
+    --badge-decided-border: #86efac;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;   /* AA 5.37:1 on #0c1118 */
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* --sm-* compatibility bridge (one place, resolves at active theme) */
+  :root {
+    --sm-bg:          var(--bg);
+    --sm-bg-card:     var(--bg-card);
+    --sm-text:        var(--text-bright);
+    --sm-text-dim:    var(--text-dim);
+    --sm-text-bright: var(--text-bright);
+    --sm-border:      var(--border);
+    --sm-accent:      var(--accent);
+    --sm-font-mono:   var(--ff-mono);
+  }
+
+  /* ===================================================================
+     CONFIDENCE-DELTA HEAT RAMP (the center spine).
+     A sequential single-hue amber ramp; each tint is ALWAYS paired with
+     the literal signed numeral in the markup, so the signal survives total
+     color loss / low vision / reduced motion. Text on every segment is the
+     bright ink token (>= 7:1 AAA intent). Magnitude maps |conf_delta|:
+       d0  ~0.00   d1 <=0.05   d2 <=0.15   d3 <=0.30   d4 > 0.30
+     =================================================================== */
+  :root {
+    --heat-d0: #11161f;   /* calm slate -- no movement */
+    --heat-d1: #2a2410;
+    --heat-d2: #4a3a0e;
+    --heat-d3: #7a5a10;
+    --heat-d4: #b07712;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* M17: global 2px solid amber focus ring at 2px offset on every focusable. */
+  :focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+  }
+
+  /* ===================================================================
+     PAGE SHELL
+     =================================================================== */
+  .page {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 1.4rem 1.5rem 4rem;
+  }
+
+  /* ---- header strip: title + BETA pill + inline on/off toggle ---- */
+  .hstrip {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .hstrip__id {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--text-ui);
+    text-transform: uppercase;
+  }
+  .hstrip__title {
+    margin: 2px 0 0;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--text-bright);
+  }
+  .hstrip__sub {
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    max-width: 64ch;
+    line-height: 1.5;
+  }
+  .hstrip__spacer { flex: 1 1 auto; }
+
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #9a3412;
+    background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 3px;
+    padding: 4px 9px;
+    white-space: nowrap;
+  }
+  .beta-pill .ar-dot { background: #9a3412; }
+
+  /* the inline ON/OFF toggle (wired client-side) */
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .toggle__track {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 46px;
+    height: 24px;
+    border-radius: 13px;
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.18s, border-color 0.18s;
+    flex: 0 0 auto;
+  }
+  .toggle__track::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform 0.18s, background 0.18s;
+  }
+  .toggle__track:checked {
+    background: var(--accent-dim);
+    border-color: var(--border-hi);
+  }
+  .toggle__track:checked::after {
+    transform: translateX(22px);
+    background: var(--accent);
+  }
+  .toggle__track:focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+  }
+  .toggle__state {
+    font-family: var(--ff-mono);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-bright);
+    min-width: 3ch;
+  }
+
+  /* ===================================================================
+     FRAME A CONTEXT -- the host surface. The "Replay window" affordance
+     lives in Frame A's quiet sub-header (.fa__ctx region) and only appears
+     while the flag is ON. The feed below is sample decision rows.
+     =================================================================== */
+  .frame {
+    margin-top: 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .fa__head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 14px 18px 0;
+  }
+  .fa__kicker {
+    font-family: var(--ff-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .fa__title { font-size: 14px; font-weight: 700; color: var(--text-bright); }
+  .fa__scope {
+    font-family: var(--ff-mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+  }
+  .fa__scope b { color: var(--text-bright); font-weight: 600; }
+
+  /* quiet sub-header: where the low-emphasis affordance is revealed */
+  .fa__ctx {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 18px 12px;
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-row-alt);
+  }
+  .fa__ctx-label {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--text-ui);
+    text-transform: uppercase;
+  }
+  .fa__ctx-spacer { flex: 1 1 auto; }
+
+  /* the "Replay window" affordance -- a real <button>, low emphasis */
+  .replay-aff {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--ff-system);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 6px 11px;
+    cursor: pointer;
+    transition: color 0.18s, border-color 0.18s, background 0.18s;
+  }
+  .replay-aff:hover {
+    color: var(--text-bright);
+    border-color: var(--border-hi);
+    background: var(--accent-dim);
+  }
+  .replay-aff svg { width: 14px; height: 14px; flex: 0 0 auto; }
+  .replay-aff__kbd {
+    font-family: var(--ff-mono);
+    font-size: 10px;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+
+  /* the affordance is hidden when the flag is OFF */
+  body[data-beta="off"] .replay-aff { display: none; }
+  body[data-beta="off"] .fa__ctx-off { display: inline; }
+  body[data-beta="on"] .fa__ctx-off { display: none; }
+  .fa__ctx-off { font-size: 11.5px; font-style: italic; color: var(--text-ui); }
+
+  /* sample feed */
+  .feed { padding: 4px 0 6px; }
+  .drow {
+    display: grid;
+    grid-template-columns: 84px 70px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .drow:last-child { border-bottom: 0; }
+  .drow__time {
+    font-family: var(--ff-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .drow__conf {
+    font-family: var(--ff-mono);
+    font-size: 12.5px;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .drow__content {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .drow__layer {
+    font-family: var(--ff-mono);
+    font-size: 10.5px;
+    color: var(--text-ui);
+  }
+
+  /* ===================================================================
+     M4 PAIRED BADGE PRIMITIVE (mirrors Badge.svelte .ar-* contract).
+     Label text ALWAYS present; color is never the only signal.
+     =================================================================== */
+  .ar-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-system);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    white-space: nowrap;
+    border-radius: 2px;
+    line-height: 1;
+    vertical-align: middle;
+  }
+  .ar-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+  .ar-blocked {
+    color: #b91c1c; background: var(--badge-blocked-bg);
+    border: 2px solid var(--badge-blocked-border); font-weight: 700;
+  }
+  .ar-warn {
+    color: #9a3412; background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+  }
+  .ar-observing {
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+  }
+  .ar-static {
+    color: #5b21b6; background: #ede9fe;
+    border: 1px solid #c4b5fd; font-weight: 600;
+  }
+
+  /* ===================================================================
+     MODAL (M2 escalation-foreground overlay) -- focus-trapped dialog.
+     =================================================================== */
+  .scrim {
+    position: fixed; inset: 0;
+    background: rgba(4, 6, 9, 0.74);
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 22px; z-index: 50;
+  }
+  .scrim.is-open { display: flex; }
+  .modal {
+    width: min(1020px, 100%);
+    max-height: calc(100vh - 44px);
+    overflow: hidden;
+    background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+    border-radius: 12px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    display: flex; flex-direction: column;
+  }
+
+  .modal__head {
+    padding: 16px 22px 13px;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal__head-row { display: flex; align-items: center; gap: 12px; }
+  .modal__title {
+    margin: 0; font-size: 16px; font-weight: 700;
+    letter-spacing: 0.01em; color: var(--text-bright);
+  }
+  .modal__title .glyph { color: var(--accent); }
+  .modal__x {
+    margin-left: auto; background: transparent;
+    border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 5px; width: 28px; height: 28px;
+    cursor: pointer; font-size: 15px; line-height: 1;
+  }
+  .modal__beta {
+    display: block; margin-top: 7px; font-size: 11px; color: var(--text-dim);
+  }
+  .modal__beta .pill {
+    color: #9a3412; font-weight: 700; letter-spacing: 0.04em;
+  }
+  .modal__mock {
+    font-family: var(--ff-mono); color: var(--badge-warn-fg);
+  }
+
+  /* ---- STEP 1: polarity-locked session picker (MANDATED first) ---- */
+  .picker {
+    margin: 14px 22px 0;
+    padding: 12px 14px;
+    border: 1px solid var(--border-hi);
+    border-radius: 8px;
+    background: var(--bg-row-alt);
+  }
+  .picker__head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 9px;
+  }
+  .picker__h {
+    margin: 0; font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-ui); font-weight: 700;
+  }
+  .picker__poltag {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--ff-mono); font-size: 10.5px;
+    color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 2px 7px;
+  }
+  .picker__poltag b { color: var(--accent); font-weight: 700; }
+  .picker__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .picker__select {
+    font-family: var(--ff-mono); font-size: 12.5px;
+    color: var(--text-bright); background: var(--bg-row);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 7px 10px; min-width: 240px; cursor: pointer;
+  }
+  .picker__hint { font-size: 11.5px; color: var(--text-dim); font-style: italic; }
+  .picker__confirm {
+    font-size: 12.5px; font-weight: 700; letter-spacing: 0.02em;
+    color: #1a1206; background: var(--accent);
+    border: 1px solid var(--badge-ar-border); border-radius: 5px;
+    padding: 7px 14px; cursor: pointer;
+  }
+  .picker__confirm:disabled {
+    background: var(--bg-row-alt); color: var(--text-ui);
+    border-color: var(--border); cursor: not-allowed;
+  }
+  .picker.is-locked .picker__select,
+  .picker.is-locked .picker__confirm { opacity: 0.6; pointer-events: none; }
+  .picker__locked-note {
+    display: none; align-items: center; gap: 8px;
+    font-size: 11.5px; color: var(--text-dim);
+  }
+  .picker.is-locked .picker__locked-note { display: flex; }
+  .picker.is-locked .picker__row { display: none; }
+
+  /* ---- STEP 2: the signature two-handle temporal scrubber rail ---- */
+  .scrub {
+    margin: 14px 22px 0;
+    opacity: 0.45;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .scrub.is-active { opacity: 1; pointer-events: auto; }
+  .scrub__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; margin-bottom: 8px;
+  }
+  .scrub__h {
+    font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-ui); font-weight: 700;
+  }
+  .scrub__readout {
+    font-family: var(--ff-mono); font-size: 11.5px; color: var(--text-dim);
+  }
+  .scrub__readout b { color: var(--text-bright); }
+  /* the thin still-water track holding two bracket handles */
+  .scrub__rail-wrap { position: relative; padding: 18px 4px 6px; }
+  .scrub__rail {
+    position: relative; height: 4px; border-radius: 2px;
+    background: linear-gradient(90deg, var(--border), var(--border-hi), var(--border));
+  }
+  .scrub__band {
+    position: absolute; top: 0; bottom: 0;
+    background: var(--accent-dim);
+    border-left: 2px solid var(--accent);
+    border-right: 2px solid var(--accent);
+  }
+  .scrub input[type="range"] {
+    position: absolute; left: 0; right: 0; top: 8px;
+    width: 100%; margin: 0; background: transparent;
+    pointer-events: none; -webkit-appearance: none; appearance: none;
+  }
+  .scrub input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 22px; border-radius: 3px;
+    background: var(--accent); border: 1px solid #1a1206;
+    cursor: ew-resize; pointer-events: auto;
+  }
+  .scrub input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 22px; border-radius: 3px;
+    background: var(--accent); border: 1px solid #1a1206;
+    cursor: ew-resize; pointer-events: auto;
+  }
+  .scrub input[type="range"]:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid #d97706; outline-offset: 2px;
+  }
+  .scrub__handle-tag {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    color: #1a1206; background: var(--accent);
+    border-radius: 3px; padding: 1px 5px;
+  }
+  .scrub__bounds { display: flex; justify-content: space-between; margin-top: 4px; }
+  .scrub__bound {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--text-ui);
+  }
+  .scrub__go {
+    margin-top: 12px;
+    font-size: 12.5px; font-weight: 700; letter-spacing: 0.02em;
+    color: #1a1206; background: var(--accent);
+    border: 1px solid var(--badge-ar-border); border-radius: 5px;
+    padding: 7px 16px; cursor: pointer;
+  }
+
+  /* ---- STEP 3: the two mirrored panes sharing a center heat-spine ---- */
+  .corridor {
+    margin: 16px 22px 0;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .corridor.is-hidden { display: none; }
+  .corridor__cols {
+    display: grid;
+    grid-template-columns: 1fr 116px 1fr;
+    gap: 0;
+    align-items: stretch;
+  }
+  .corridor__pane-head {
+    font-family: var(--ff-mono); font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-ui); padding: 0 6px 8px;
+  }
+  .corridor__pane-head.right { text-align: right; }
+  .corridor__spine-head {
+    text-align: center; font-family: var(--ff-mono); font-size: 10px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-ui); padding: 0 0 8px;
+  }
+
+  /* one diff row crosses both panes; the center spine carries the delta */
+  .band {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: 1 / 4;
+    align-items: stretch;
+    border-top: 1px solid var(--border);
+  }
+  .band:last-child { border-bottom: 1px solid var(--border); }
+  .band.is-changed { background: rgba(245, 158, 11, 0.04); }
+
+  .cell {
+    padding: 11px 8px;
+    display: flex; flex-direction: column; gap: 6px;
+    min-width: 0;
+  }
+  .cell.right { align-items: flex-end; text-align: right; }
+  .cell__line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cell.right .cell__line { justify-content: flex-end; }
+  .cell__content {
+    font-size: 12.5px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
+  .cell__meta {
+    font-family: var(--ff-mono); font-size: 10.5px;
+    color: var(--text-dim); font-variant-numeric: tabular-nums;
+  }
+  .cell__conf { color: var(--text-bright); font-weight: 600; }
+
+  /* center spine segment: tint by |delta| AND carry the signed numeral */
+  .spine {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 5px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    padding: 8px 4px;
+  }
+  .spine.d0 { background: var(--heat-d0); }
+  .spine.d1 { background: var(--heat-d1); }
+  .spine.d2 { background: var(--heat-d2); }
+  .spine.d3 { background: var(--heat-d3); }
+  .spine.d4 { background: var(--heat-d4); }
+  .spine__num {
+    font-family: var(--ff-mono); font-size: 13px; font-weight: 700;
+    color: var(--text-bright); font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .spine__chg {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #1a1206; background: var(--accent);
+    border-radius: 3px; padding: 2px 6px;
+    text-align: center; line-height: 1.2;
+  }
+  .spine__same {
+    font-family: var(--ff-mono); font-size: 9px; letter-spacing: 0.06em;
+    color: var(--text-ui);
+  }
+  /* bracket glyph paired with the literal words -- glyph alone is never signal */
+  .spine__bracket { font-weight: 700; }
+
+  /* aria-live summary banner above the corridor */
+  .corridor__summary {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 12px; padding: 9px 12px;
+    border: 1px solid var(--border-hi); border-radius: 6px;
+    background: var(--accent-dim);
+    font-size: 12.5px; color: var(--text-bright);
+  }
+  .corridor__summary b { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+  /* ---- footer: scope recap + amendment-gated build footnote ---- */
+  .modal__foot {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 22px; margin-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .modal__foot-info { font-size: 12px; color: var(--text-dim); }
+  .modal__foot-info b { color: var(--text-bright); }
+  .modal__foot-spacer { flex: 1 1 auto; }
+  .modal__btn {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+    border-radius: 5px; padding: 8px 16px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+  }
+  .modal__btn:hover { color: var(--text-bright); border-color: var(--border-hi); }
+
+  /* the standing amber "build gated on ADR-18 amendment" footnote */
+  .gatenote {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin: 18px 0 0;
+    padding: 11px 14px;
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 7px;
+    background: rgba(234, 88, 12, 0.07);
+  }
+  .gatenote__text { font-size: 12px; color: var(--text); line-height: 1.5; max-width: 86ch; }
+  .gatenote__text b { color: #c2410c; }
+
+  /* scope / phase explainer block under the host frame */
+  .explain {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 760px) { .explain { grid-template-columns: 1fr; } }
+  .ecard {
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--bg-card); padding: 13px 15px;
+  }
+  .ecard__h {
+    margin: 0 0 7px; font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--accent); font-weight: 700;
+  }
+  .ecard p { margin: 0 0 7px; font-size: 12.5px; color: var(--text-dim); line-height: 1.55; }
+  .ecard p:last-child { margin-bottom: 0; }
+  .ecard b { color: var(--text-bright); font-weight: 600; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+
+  /* reduced motion: the only motion is the toggle/handle; kill transitions */
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body data-beta="off">
+<div class="page">
+
+  <!-- ============================================================
+       HEADER STRIP: title + BETA pill + inline ON/OFF toggle
+       ============================================================ -->
+  <header class="hstrip">
+    <div>
+      <div class="hstrip__id">BETA feature #47</div>
+      <h1 class="hstrip__title">Temporal Scrubber -- governance policy archaeology</h1>
+      <p class="hstrip__sub">
+        Pick one governed (non-SM) session, bracket two points on its decision
+        timeline, and read a side-by-side replay-diff of how the engine VERDICTED
+        comparable messages then vs now -- verdict, routing layer, confidence --
+        with confidence movement pre-computed into a center heat-spine.
+      </p>
+    </div>
+    <div class="hstrip__spacer"></div>
+    <div style="display:flex; flex-direction:column; gap:12px; align-items:flex-end;">
+      <span class="beta-pill">
+        <span class="ar-dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+      <label class="toggle">
+        Flag
+        <input class="toggle__track" type="checkbox" id="betaToggle"
+               role="switch" aria-checked="false"
+               aria-label="Toggle temporal-scrubber BETA flag on or off">
+        <span class="toggle__state" id="betaState">OFF</span>
+      </label>
+    </div>
+  </header>
+
+  <!-- ============================================================
+       HOST: Frame A (the decision REPL) with the gated affordance
+       ============================================================ -->
+  <section class="frame" aria-label="Frame A -- decision REPL (host surface)">
+    <div class="fa__head">
+      <span class="fa__kicker">Frame A</span>
+      <span class="fa__title">Decision feed</span>
+      <span class="fa__scope">session <b>sess-demo-7f3a</b> -- scope <b>demo-target</b></span>
+    </div>
+
+    <!-- quiet sub-header (.fa__ctx): the low-emphasis affordance appears here ONLY while ON -->
+    <div class="fa__ctx">
+      <span class="fa__ctx-label">Context</span>
+      <span class="fa__ctx-off">Replay window affordance is hidden -- the BETA flag is OFF. Toggle it above.</span>
+      <span class="fa__ctx-spacer"></span>
+      <button class="replay-aff" id="replayAff" type="button"
+              aria-haspopup="dialog"
+              aria-label="Open temporal scrubber -- replay window comparison">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"></circle>
+          <path d="M12 7v5l3 2"></path>
+        </svg>
+        Replay window
+        <span class="replay-aff__kbd" aria-hidden="true">opens overlay</span>
+      </button>
+    </div>
+
+    <!-- sample decision feed (static, domain-agnostic) -->
+    <div class="feed">
+      <div class="drow">
+        <span class="drow__time">14:13:40</span>
+        <span class="drow__conf">0.61</span>
+        <span class="drow__content">reuse the prior credential pattern</span>
+        <span class="ar-badge ar-observing" role="status" title="GUIDE" aria-label="verdict GUIDE">
+          <span class="ar-dot" aria-hidden="true"></span><span>GUIDE</span></span>
+      </div>
+      <div class="drow">
+        <span class="drow__time">14:08:22</span>
+        <span class="drow__conf">0.77</span>
+        <span class="drow__content">force-push to the shared branch</span>
+        <span class="ar-badge ar-blocked" role="status" title="BLOCK" aria-label="verdict BLOCK">
+          <span class="ar-dot" aria-hidden="true"></span><span>BLOCK</span></span>
+      </div>
+      <div class="drow">
+        <span class="drow__time">14:03:08</span>
+        <span class="drow__conf">0.18</span>
+        <span class="drow__content">run the migration against prod</span>
+        <span class="ar-badge ar-blocked" role="status" title="BLOCK -- static rule" aria-label="verdict BLOCK static rule">
+          <span class="ar-dot" aria-hidden="true"></span><span>BLOCK</span></span>
+        <span class="ar-badge ar-static" role="status" title="static rule (layer 0, no model)" aria-label="static rule" style="margin-left:-4px;">
+          <span class="ar-dot" aria-hidden="true"></span><span>STATIC RULE</span></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       SCOPE / PHASE EXPLAINER
+       ============================================================ -->
+  <div class="explain">
+    <div class="ecard">
+      <div class="ecard__h">What v1 ships (Phase 1)</div>
+      <p>The <b>2-pane replay-diff modal ONLY</b>. One read against the EXISTING
+         decisions + messages tables -- <b>no new durable table</b>, no governance.py
+         hook, no bus envelope. Additive read endpoint
+         <b>GET /api/decisions/replay-diff</b>, polarity-filtered server-side
+         (mirrors the /api/hitl/pending/triage WHERE-clause).</p>
+      <p>Path to value: <b>~2 clicks + 2 handle drags</b> -- open, confirm scope,
+         bracket A, bracket B. No CSV grep, no SQL, no mental reconstruction.</p>
+    </div>
+    <div class="ecard">
+      <div class="ecard__h">Deferred to Phase 2 (NOT in v1)</div>
+      <p>Policy-mutation timeline + the <b>policy_snapshots table</b> + a
+         governance.py config-mutation hook. That set touches FROZEN surfaces, so
+         it is a <b>separate future cycle that requires an ADR-18 amendment</b>.</p>
+      <p>v1 is deliberately valuable WITHOUT policy context: side-by-side proof of
+         behaviour change reads off existing decision history alone.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       AMBER "build gated on ADR-18 amendment" FOOTNOTE
+       ============================================================ -->
+  <div class="gatenote" role="note">
+    <span class="ar-badge ar-warn" role="status" title="build gated" aria-label="build gated on ADR-18 amendment">
+      <span class="ar-dot" aria-hidden="true"></span><span>WARN</span></span>
+    <span class="gatenote__text">
+      <b>Build gated on ADR-18 amendment.</b> This UI approach is approvable as
+      drawn, but the upstream brief is flagged NEEDS-AMENDMENT: its prose conflated
+      the Phase-2 policy_snapshots table (a FROZEN-file schema mutation) into v1.
+      The remedy is to ship <b>Phase 1 only</b> (frozenTouch=false, newTable=false,
+      additive read endpoint over existing tables). Code does not start until the
+      corrected v1-only footprint is confirmed; the Phase-2 table + governance hook
+      remain blocked behind a future amendment.
+    </span>
+  </div>
+
+</div>
+
+<!-- ================================================================
+     THE MODAL OVERLAY (M2 escalation-foreground) -- focus-trapped
+     ================================================================ -->
+<div class="scrim" id="scrim" role="presentation">
+  <div class="modal" id="modal" role="dialog" aria-modal="true"
+       aria-labelledby="ts-title" aria-describedby="ts-beta">
+    <div class="modal__head">
+      <div class="modal__head-row">
+        <h2 class="modal__title" id="ts-title">
+          <span class="glyph" aria-hidden="true">&#9201;</span>
+          Temporal Scrubber -- replay-diff
+        </h2>
+        <button class="modal__x" id="modalX" type="button"
+                aria-label="Close without running (Esc)">&times;</button>
+      </div>
+      <span class="modal__beta" id="ts-beta">
+        <span class="pill">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+        &nbsp;--&nbsp; reads existing decisions + messages tables (v1 Phase 1)
+        <span class="modal__mock"> -- DEMO DATA (live gov.db unavailable)</span>
+      </span>
+    </div>
+
+    <!-- STEP 1: polarity-locked session picker (MANDATED before anything else) -->
+    <div class="picker" id="picker">
+      <div class="picker__head">
+        <h3 class="picker__h">Step 1 -- pick a governed session</h3>
+        <span class="picker__poltag" title="Self-exclusion is a visible feature, not invisible plumbing">
+          <span class="ar-dot" aria-hidden="true" style="background:var(--accent);"></span>
+          polarity-locked -- excluded <b>1</b> self
+        </span>
+      </div>
+      <div class="picker__row">
+        <label class="sr-only" for="sessSelect">Governed session to inspect (non-SM only)</label>
+        <select class="picker__select" id="sessSelect" aria-describedby="pickHint">
+          <option value="" selected>-- choose a non-SM session --</option>
+          <option value="sess-demo-7f3a">demo-target / sess-demo-7f3a</option>
+          <option value="sess-demo-2b91">demo-target / sess-demo-2b91</option>
+          <option value="sess-other-c4d0">other-target / sess-other-c4d0</option>
+        </select>
+        <button class="picker__confirm" id="confirmScope" type="button" disabled>Confirm scope</button>
+        <span class="picker__hint" id="pickHint">
+          SM-self is never listed -- the tool refuses to show you a mirror.
+        </span>
+      </div>
+      <div class="picker__locked-note">
+        <span class="ar-badge ar-observing" role="status" title="scope locked" aria-label="scope locked">
+          <span class="ar-dot" aria-hidden="true"></span><span>SCOPE LOCKED</span></span>
+        target <b style="color:var(--accent); font-family:var(--ff-mono);">demo-target / sess-demo-7f3a</b>
+        -- the scrubber below is now active.
+      </div>
+    </div>
+
+    <!-- STEP 2: the signature two-handle temporal scrubber rail -->
+    <div class="scrub" id="scrub" aria-label="Step 2 -- bracket two time windows">
+      <div class="scrub__head">
+        <span class="scrub__h">Step 2 -- bracket window A and window B</span>
+        <span class="scrub__readout" id="scrubReadout">
+          <span class="scrub__handle-tag">A</span> <b id="roA">09:00 -- 09:20</b>
+          &nbsp;vs&nbsp;
+          <span class="scrub__handle-tag">B</span> <b id="roB">14:00 -- 14:20</b>
+        </span>
+      </div>
+      <div class="scrub__rail-wrap">
+        <div class="scrub__rail">
+          <div class="scrub__band" id="scrubBand"></div>
+        </div>
+        <!-- two range handles = the A / B brackets (arrow-key nudgeable, M17) -->
+        <input type="range" id="handleA" min="0" max="100" value="8"
+               aria-label="Window A bracket"
+               aria-valuetext="Window A: 09:00 to 09:20">
+        <input type="range" id="handleB" min="0" max="100" value="70"
+               aria-label="Window B bracket"
+               aria-valuetext="Window B: 14:00 to 14:20">
+        <div class="scrub__bounds">
+          <span class="scrub__bound">2026-06-11 08:00Z (session start)</span>
+          <span class="scrub__bound">2026-06-11 15:00Z (now)</span>
+        </div>
+      </div>
+      <button class="scrub__go" id="runDiff" type="button">
+        Run replay-diff (one read)
+      </button>
+    </div>
+
+    <!-- STEP 3: the two mirrored panes + center confidence-delta heat-spine -->
+    <div class="corridor is-hidden" id="corridor" aria-label="Step 3 -- replay-diff result">
+      <div class="corridor__summary" role="status" aria-live="polite" id="liveSummary">
+        Replay diff: <b>1</b> verdict changed, <b>3</b> rows compared. Confidence
+        movement is on the center spine (signed numeral + tint).
+      </div>
+      <div class="corridor__cols">
+        <div class="corridor__pane-head">Window A -- 09:00-09:20Z</div>
+        <div class="corridor__spine-head">conf delta</div>
+        <div class="corridor__pane-head right">Window B -- 14:00-14:20Z</div>
+
+        <!-- ROW 1: run the migration (BLOCK -> BLOCK, static rule, conf -0.13) -->
+        <div class="band">
+          <div class="cell">
+            <div class="cell__line">
+              <span class="ar-badge ar-blocked" role="status" title="BLOCK" aria-label="window A verdict BLOCK">
+                <span class="ar-dot" aria-hidden="true"></span><span>BLOCK</span></span>
+              <span class="ar-badge ar-static" role="status" title="static rule" aria-label="static rule">
+                <span class="ar-dot" aria-hidden="true"></span><span>STATIC RULE</span></span>
+            </div>
+            <span class="cell__content">run the migration against prod</span>
+            <span class="cell__meta">L0 -- <span class="cell__conf">conf 0.31</span> -- 09:04:12Z</span>
+          </div>
+          <div class="spine d2" title="confidence delta -0.13">
+            <span class="spine__num">-0.13</span>
+            <span class="spine__same">same verdict</span>
+          </div>
+          <div class="cell right">
+            <div class="cell__line">
+              <span class="ar-badge ar-blocked" role="status" title="BLOCK" aria-label="window B verdict BLOCK">
+                <span class="ar-dot" aria-hidden="true"></span><span>BLOCK</span></span>
+              <span class="ar-badge ar-static" role="status" title="static rule" aria-label="static rule">
+                <span class="ar-dot" aria-hidden="true"></span><span>STATIC RULE</span></span>
+            </div>
+            <span class="cell__content">run the migration against prod</span>
+            <span class="cell__meta">L0 -- <span class="cell__conf">conf 0.18</span> -- 14:03:08Z</span>
+          </div>
+        </div>
+
+        <!-- ROW 2: force-push (INTERVENE -> BLOCK, VERDICT CHANGED, conf +0.33) -->
+        <div class="band is-changed">
+          <div class="cell">
+            <div class="cell__line">
+              <span class="ar-badge ar-warn" role="status" title="INTERVENE" aria-label="window A verdict INTERVENE">
+                <span class="ar-dot" aria-hidden="true"></span><span>INTERVENE</span></span>
+            </div>
+            <span class="cell__content">force-push to the shared branch</span>
+            <span class="cell__meta">L3 -- model sonnet -- <span class="cell__conf">conf 0.44</span> -- 09:09:51Z</span>
+          </div>
+          <div class="spine d4" title="confidence delta plus 0.33; verdict changed">
+            <span class="spine__num">+0.33</span>
+            <span class="spine__chg">
+              <span class="spine__bracket" aria-hidden="true">[ ]</span> VERDICT CHANGED
+            </span>
+          </div>
+          <div class="cell right">
+            <div class="cell__line">
+              <span class="ar-badge ar-blocked" role="status" title="BLOCK" aria-label="window B verdict BLOCK">
+                <span class="ar-dot" aria-hidden="true"></span><span>BLOCK</span></span>
+            </div>
+            <span class="cell__content">force-push to the shared branch</span>
+            <span class="cell__meta">L4 -- model sonnet -- <span class="cell__conf">conf 0.77</span> -- 14:08:22Z</span>
+          </div>
+        </div>
+
+        <!-- ROW 3: reuse credential (GUIDE -> GUIDE, conf -0.01, calm) -->
+        <div class="band">
+          <div class="cell">
+            <div class="cell__line">
+              <span class="ar-badge ar-observing" role="status" title="GUIDE" aria-label="window A verdict GUIDE">
+                <span class="ar-dot" aria-hidden="true"></span><span>GUIDE</span></span>
+            </div>
+            <span class="cell__content">reuse the prior credential pattern</span>
+            <span class="cell__meta">L2 -- model haiku -- <span class="cell__conf">conf 0.62</span> -- 09:14:30Z</span>
+          </div>
+          <div class="spine d0" title="confidence delta -0.01">
+            <span class="spine__num">-0.01</span>
+            <span class="spine__same">same verdict</span>
+          </div>
+          <div class="cell right">
+            <div class="cell__line">
+              <span class="ar-badge ar-observing" role="status" title="GUIDE" aria-label="window B verdict GUIDE">
+                <span class="ar-dot" aria-hidden="true"></span><span>GUIDE</span></span>
+            </div>
+            <span class="cell__content">reuse the prior credential pattern</span>
+            <span class="cell__meta">L2 -- model haiku -- <span class="cell__conf">conf 0.61</span> -- 14:13:40Z</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal__foot">
+      <span class="modal__foot-info" id="footInfo">
+        Scope <b>not yet confirmed</b> -- pick a governed session to enable the scrubber.
+      </span>
+      <span class="modal__foot-spacer"></span>
+      <button class="modal__btn" id="modalCancel" type="button">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- polite live region, reachable by assistive tech -->
+<p class="sr-only" role="status" aria-live="polite" id="srLive"></p>
+
+<script>
+(function () {
+  "use strict";
+
+  var body = document.body;
+  var toggle = document.getElementById("betaToggle");
+  var betaState = document.getElementById("betaState");
+  var aff = document.getElementById("replayAff");
+
+  var scrim = document.getElementById("scrim");
+  var modal = document.getElementById("modal");
+  var modalX = document.getElementById("modalX");
+  var modalCancel = document.getElementById("modalCancel");
+
+  var picker = document.getElementById("picker");
+  var sessSelect = document.getElementById("sessSelect");
+  var confirmScope = document.getElementById("confirmScope");
+  var scrub = document.getElementById("scrub");
+  var runDiff = document.getElementById("runDiff");
+  var corridor = document.getElementById("corridor");
+  var footInfo = document.getElementById("footInfo");
+  var srLive = document.getElementById("srLive");
+
+  var handleA = document.getElementById("handleA");
+  var handleB = document.getElementById("handleB");
+  var band = document.getElementById("scrubBand");
+  var roA = document.getElementById("roA");
+  var roB = document.getElementById("roB");
+
+  var lastFocused = null;
+
+  // ---- BETA toggle (gates the affordance) --------------------------------
+  function applyFlag() {
+    var on = toggle.checked;
+    body.setAttribute("data-beta", on ? "on" : "off");
+    betaState.textContent = on ? "ON" : "OFF";
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+    if (!on && scrim.classList.contains("is-open")) closeModal();
+  }
+  toggle.addEventListener("change", applyFlag);
+
+  // ---- modal open / close + focus trap -----------------------------------
+  function openModal() {
+    if (!toggle.checked) return; // gated: never opens while OFF
+    lastFocused = document.activeElement;
+    scrim.classList.add("is-open");
+    // reset to step 1 each open
+    picker.classList.remove("is-locked");
+    sessSelect.value = "";
+    confirmScope.disabled = true;
+    scrub.classList.remove("is-active");
+    corridor.classList.add("is-hidden");
+    footInfo.innerHTML = "Scope <b>not yet confirmed</b> -- pick a governed session to enable the scrubber.";
+    setTimeout(function () { sessSelect.focus(); }, 0);
+  }
+  function closeModal() {
+    scrim.classList.remove("is-open");
+    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  }
+  aff.addEventListener("click", openModal);
+  modalX.addEventListener("click", closeModal);
+  modalCancel.addEventListener("click", closeModal);
+  scrim.addEventListener("click", function (e) {
+    if (e.target === scrim) closeModal();
+  });
+
+  function focusables() {
+    return Array.prototype.slice.call(
+      modal.querySelectorAll("button, input, select, [tabindex]:not([tabindex='-1'])")
+    ).filter(function (el) {
+      return !el.disabled && el.offsetParent !== null;
+    });
+  }
+  modal.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+    if (e.key === "Tab") {
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  // ---- STEP 1: polarity-locked picker enables only on a real pick --------
+  sessSelect.addEventListener("change", function () {
+    confirmScope.disabled = sessSelect.value === "";
+  });
+  confirmScope.addEventListener("click", function () {
+    if (sessSelect.value === "") return;
+    picker.classList.add("is-locked");
+    scrub.classList.add("is-active");
+    var label = sessSelect.options[sessSelect.selectedIndex].text;
+    footInfo.innerHTML = "Scope <b>" + label + "</b> confirmed -- bracket A and B, then run the diff.";
+    srLive.textContent = "Scope locked to " + label + ". Scrubber active.";
+    setTimeout(function () { handleA.focus(); }, 0);
+  });
+
+  // ---- STEP 2: two-handle scrubber (no fetch while dragging) -------------
+  // Map a 0-100 handle position to a clock label across an 08:00-15:00 span.
+  function clockAt(pct) {
+    var startMin = 8 * 60;        // 08:00
+    var endMin = 15 * 60;         // 15:00
+    var m = Math.round(startMin + (endMin - startMin) * (pct / 100));
+    var hh = Math.floor(m / 60), mm = m % 60;
+    return (hh < 10 ? "0" : "") + hh + ":" + (mm < 10 ? "0" : "") + mm;
+  }
+  function winLabel(centerPct) {
+    // a fixed 20-min window centred near the handle, clamped readable
+    var a = Math.max(0, centerPct - 2);
+    var b = Math.min(100, centerPct + 2);
+    return clockAt(a) + " -- " + clockAt(b);
+  }
+  function syncBand() {
+    var a = Number(handleA.value), b = Number(handleB.value);
+    var lo = Math.min(a, b), hi = Math.max(a, b);
+    band.style.left = lo + "%";
+    band.style.width = (hi - lo) + "%";
+    roA.textContent = winLabel(a);
+    roB.textContent = winLabel(b);
+    handleA.setAttribute("aria-valuetext", "Window A near " + clockAt(a) + "Z");
+    handleB.setAttribute("aria-valuetext", "Window B near " + clockAt(b) + "Z");
+  }
+  handleA.addEventListener("input", syncBand);
+  handleB.addEventListener("input", syncBand);
+  syncBand();
+
+  // ---- STEP 3: confirm -> ONE read (mock) paints the corridor ------------
+  runDiff.addEventListener("click", function () {
+    if (!scrub.classList.contains("is-active")) return;
+    corridor.classList.remove("is-hidden");
+    footInfo.innerHTML = "Replay-diff painted -- <b>1</b> verdict changed of 3 rows. One read fired (M18 post-hoc).";
+    srLive.textContent = "Replay diff: 1 verdict changed, 3 rows compared.";
+    setTimeout(function () { corridor.scrollIntoView({ block: "nearest" }); }, 0);
+  });
+
+  // Open via a window CustomEvent too (DecisionOracle precedent) so the real
+  // build can drive the modal without editing FrameA_Sessions.
+  window.addEventListener("temporal-scrubber:open", function () {
+    if (!toggle.checked) toggle.checked = true, applyFlag();
+    openModal();
+  });
+
+  applyFlag();
+})();
+</script>
+</body>
+</html>

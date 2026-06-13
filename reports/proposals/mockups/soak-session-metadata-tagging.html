@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<!--
+  KingMode MOCKUP -- BETA feature "soak-session-metadata-tagging" (#43)
+  Soak Session Metadata Tagging -- audit-hygiene soak/operator split.
+
+  PURPOSE: a self-contained, approve-before-build mockup (directive #2). The
+  operator clicks through the REAL interaction (BETA on/off, "Hide soak"
+  toggle, click a SOAK lane chip -> right-anchored cohort drawer with focus
+  trap + Escape) so the UI approach is confirmed BEFORE any code lands.
+
+  GROUNDED IN: dashboard/ui-next/src/styles/theme.css (obsidian token values +
+  the ar-timeout violet badge palette, darkened to #5b21b6 for AAA on #ede9fe),
+  SessionRail.svelte / SessionLane.svelte (the calm slate rail + asymmetric
+  left-edge lane idiom), StaleCleanup.svelte (the BETA no-op-when-OFF +
+  right-anchored drawer + mock-fallback contract).
+
+  ADR-18 floor honoured: 3 frames untouched (this is a per-lane tint+chip +
+  one header toggle + a read-only drawer, NOT a 4th frame); soak is CALM
+  metadata, never an escalation (violet, never amber; NO pulse/animation);
+  every state is a PAIRED label+color badge (the word SOAK is load-bearing,
+  violet only co-signals; untagged lanes show NO chip so there is no
+  color-without-text anywhere); the drawer is READ-ONLY (it warns, never
+  mutates -- absolute HITL gate + FROZEN governance preserved).
+
+  POLARITY (G2): SM-self is never a lane and never in tags[]; the rail footer
+  states it is excluded. Untagged = operator (real signal); only positively
+  soak-tagged lanes are tinted.
+
+  This feature is NEEDS-AMENDMENT (schema-strategy clarification: soak_type /
+  started_by / tool_version must be COMPUTED by the read endpoint from
+  existing soak_runs columns + soak-launch metadata, NOT persisted as new
+  columns). The amber footnote at the bottom states the UI is approvable but
+  the BUILD is gated on the ADR-18 amendment.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (written "--"), no
+  box-drawing. Inline <style> + inline <script>; system font stack; no CDN.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Soak Session Metadata Tagging -- BETA mockup (#43)</title>
+<style>
+  /* ----- token layer: lifted from theme.css obsidian + fixed badge tokens ----- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+
+    /* ACTION REQUIRED amber (the escalation identity -- soak must NEVER use it) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+
+    /* OBSERVING slate */
+    --badge-obs-fg:     #475569;
+
+    /* TIMEOUT / audit violet family (theme.css badge-timeout). The default
+       chip fg #7c3aed only clears AA on the #ede9fe wash; for AAA (>=7:1) the
+       SOAK chip ink + audit banner ink are darkened to #5b21b6 (measured
+       ~7.4:1 on #ede9fe). The hairline edge keeps #7c3aed (decorative, paired
+       with text, so the AA-only edge is permitted). */
+    --soak-fg:      #5b21b6;   /* AAA chip + banner ink on the wash */
+    --soak-edge:    #7c3aed;   /* the badge-timeout violet -- left-edge channel */
+    --soak-bg:      #ede9fe;   /* badge-timeout-bg wash */
+    --soak-border:  #c4b5fd;   /* badge-timeout-border */
+
+    --radius-soft:  4px;
+    --radius-sharp: 2px;
+    --hairline:     1px;
+
+    --space-2: 4px; --space-3: 6px; --space-4: 10px; --space-5: 14px;
+    --space-6: 22px; --space-7: 36px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 620px at 78% -8%, rgba(124, 58, 237, 0.05), transparent 60%),
+      radial-gradient(900px 520px at 12% 108%, rgba(245, 158, 11, 0.035), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  .skip-link {
+    position: absolute; left: -9999px; top: 0; z-index: 200;
+    background: var(--bg-card); color: var(--text-bright);
+    padding: 8px 14px; border: 1px solid var(--soak-edge); border-radius: var(--radius-sharp);
+    font-family: var(--ff-mono); font-size: 12px;
+  }
+  .skip-link:focus { left: 12px; top: 12px; }
+
+  /* ===================== HEADER STRIP ===================== */
+  .strip {
+    display: flex; align-items: center; gap: var(--space-5);
+    flex-wrap: wrap;
+    padding: 18px clamp(16px, 4vw, 48px);
+    border-bottom: var(--hairline) solid var(--border);
+    background: linear-gradient(180deg, rgba(124,58,237,0.05), transparent);
+  }
+  .strip__mark {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.34em;
+    text-transform: uppercase; color: var(--text-ui);
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    border-left: 2px solid var(--soak-edge); padding: 2px 0 2px 8px;
+    align-self: stretch;
+  }
+  .strip__titles { min-width: 0; flex: 1 1 360px; }
+  .strip__kicker {
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.26em;
+    text-transform: uppercase; color: var(--soak-edge); margin: 0 0 4px;
+  }
+  .strip__title {
+    margin: 0; font-size: clamp(22px, 3.2vw, 31px); font-weight: 300;
+    letter-spacing: -0.01em; color: var(--text-bright); line-height: 1.08;
+  }
+  .strip__title b { font-weight: 640; }
+  .strip__sub {
+    margin: 8px 0 0; max-width: 78ch; font-size: 13.5px; color: var(--text-dim);
+  }
+
+  /* BETA pill + inline on/off toggle */
+  .beta {
+    display: flex; flex-direction: column; gap: 9px; align-items: flex-end;
+    flex: 0 0 auto;
+  }
+  .beta__pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--soak-fg); background: var(--soak-bg);
+    border: 1px solid var(--soak-border);
+    padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  }
+  .beta__pill::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--soak-edge);
+  }
+  .beta__gate {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--text-ui);
+    letter-spacing: 0.04em; text-align: right;
+  }
+
+  .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; }
+  .switch__txt {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .switch__txt b { color: var(--text-bright); }
+  .switch__track {
+    position: relative; width: 42px; height: 22px; border-radius: 999px;
+    background: var(--bg-row); border: 1px solid var(--border);
+    transition: background 180ms ease, border-color 180ms ease;
+  }
+  .switch__track::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--text-ui); transition: transform 180ms ease, background 180ms ease;
+  }
+  .switch[aria-pressed="true"] .switch__track {
+    background: rgba(124,58,237,0.22); border-color: var(--soak-edge);
+  }
+  .switch[aria-pressed="true"] .switch__track::after {
+    transform: translateX(20px); background: var(--soak-edge);
+  }
+  .switch:focus-visible { outline: 2px solid var(--soak-edge); outline-offset: 3px; border-radius: 6px; }
+
+  /* ===================== LAYOUT: rail + feed ===================== */
+  main {
+    display: grid;
+    grid-template-columns: minmax(320px, 380px) 1fr;
+    gap: clamp(16px, 2.6vw, 34px);
+    align-items: start;
+    padding: clamp(18px, 3.2vw, 40px) clamp(16px, 4vw, 48px) 16px;
+  }
+  @media (max-width: 880px) { main { grid-template-columns: 1fr; } }
+
+  .colcap {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.2em;
+    text-transform: uppercase; color: var(--text-ui); margin: 0 0 10px 2px;
+  }
+
+  /* ----- the rail (SessionRail idiom) ----- */
+  .rail {
+    display: flex; flex-direction: column; min-height: 0;
+    background: var(--bg-card);
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-soft); overflow: hidden;
+  }
+  .rail__head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap;
+    padding: var(--space-4) var(--space-5);
+    border-bottom: var(--hairline) solid var(--border);
+    background: var(--bg);
+  }
+  .rail__title-wrap { display: inline-flex; align-items: baseline; gap: var(--space-4); }
+  .rail__title {
+    margin: 0; font-size: 14px; font-weight: 560; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-bright); white-space: nowrap;
+  }
+  .rail__tally {
+    display: inline-flex; align-items: baseline; gap: 5px;
+    padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--badge-ar-border); background: var(--badge-ar-bg);
+  }
+  .rail__tally-tag {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--badge-ar-fg);
+  }
+  .rail__tally-num {
+    font-family: var(--ff-mono); font-variant-numeric: tabular-nums;
+    font-size: 13px; font-weight: 720; line-height: 1; color: var(--badge-ar-fg);
+  }
+
+  /* "Hide soak" toggle pill: a REAL switch with literal text state + aria-pressed,
+     sitting beside the ACTIVE tally. Only renders when the BETA flag is ON. */
+  .hidesoak {
+    display: inline-flex; align-items: center; gap: 7px;
+    appearance: none; cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--soak-border);
+    border-radius: 999px; padding: 3px 9px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--soak-fg);
+    transition: background 180ms ease, border-color 180ms ease;
+  }
+  .hidesoak[aria-pressed="true"] { background: var(--soak-bg); border-color: var(--soak-edge); }
+  .hidesoak__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--soak-edge); }
+  .hidesoak[aria-pressed="false"] .hidesoak__dot { background: var(--text-ui); }
+  .hidesoak:focus-visible { outline: 2px solid var(--soak-edge); outline-offset: 2px; }
+
+  .rail__lanes {
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding: var(--space-4); min-height: 220px;
+  }
+
+  /* ----- a single lane (SessionLane idiom): asymmetric LEFT-edge only ----- */
+  .lane {
+    position: relative; display: grid;
+    grid-template-columns: 1fr auto; align-items: center;
+    background: var(--bg-card);
+    border: var(--hairline) solid var(--border);
+    border-left-width: 2px; border-left-color: transparent;
+    border-radius: var(--radius-soft);
+    transition: border-color 180ms ease, background 180ms ease;
+  }
+  .lane--operator.is-actions { border-left-color: var(--badge-ar-border); }
+
+  /* SOAK lane: the SECOND visual channel is a violet hairline LEFT-edge (the
+     ar-timeout family -- DISTINCT from amber so soak never reads as escalation)
+     plus a paired chip. The tint is asymmetric (edge only, no full-card fill)
+     so the rail's calm rhythm is preserved -- soak reads as a margin annotation,
+     not an alarm. */
+  .lane--soak {
+    border-left-color: var(--soak-edge);
+    background:
+      linear-gradient(90deg, rgba(124,58,237,0.06), transparent 38%),
+      var(--bg-card);
+  }
+  .lane__main {
+    display: flex; align-items: center; gap: var(--space-3);
+    min-width: 0; padding: 8px var(--space-4); text-align: left;
+  }
+  .lane__pip {
+    flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-dim); opacity: 0.6;
+  }
+  .lane__pip--live { background: var(--accent); opacity: 0.85; }
+  .lane__id { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+  .lane__name {
+    font-size: 13px; font-weight: 460; letter-spacing: 0.01em;
+    color: var(--text-bright); line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lane__meta {
+    display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-ui);
+    font-variant-numeric: tabular-nums;
+  }
+  .lane__sep { opacity: 0.5; }
+
+  /* the per-lane amber ACTION-REQUIRED count pill (operator lanes only) */
+  .lane__flag {
+    flex: 0 0 auto; align-self: center; margin-right: 8px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+    padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+  }
+
+  /* THE SOAK chip: a focusable button (Enter/Space opens the cohort drawer).
+     PAIRED label+color -- the literal word SOAK is the load-bearing signal;
+     the violet only co-signals. Text is ALWAYS present; color never alone. */
+  .soakchip {
+    flex: 0 0 auto; align-self: center; margin-right: 10px;
+    appearance: none; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap;
+    padding: 2px 9px; border-radius: 999px;
+    color: var(--soak-fg); background: var(--soak-bg);
+    border: 1px solid var(--soak-border);
+    transition: border-color 180ms ease, filter 180ms ease;
+  }
+  .soakchip__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--soak-edge); flex: 0 0 auto; }
+  .soakchip:hover { border-color: var(--soak-edge); filter: brightness(1.02); }
+  .soakchip:focus-visible { outline: 2px solid var(--soak-edge); outline-offset: 2px; }
+
+  .rail__empty {
+    margin: 0; padding: var(--space-6) var(--space-4);
+    color: var(--text-dim); font-size: 13px; font-style: italic; text-align: center;
+  }
+
+  .rail__foot {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: var(--space-3) var(--space-5);
+    border-top: var(--hairline) solid var(--border); background: var(--bg);
+  }
+  .rail__self {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-ui);
+  }
+  .rail__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); opacity: 0.7; }
+  .rail__self code { color: var(--text-dim); }
+  .rail__hidden-note {
+    margin-left: auto; font-family: var(--ff-mono); font-size: 10px;
+    letter-spacing: 0.04em; color: var(--soak-fg);
+  }
+  .rail__mock {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em; color: var(--badge-ar-fg);
+  }
+
+  /* ----- decisions feed (right column) ----- */
+  .feed {
+    background: var(--bg-card); border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-soft); overflow: hidden;
+  }
+  .feed__head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap;
+    padding: var(--space-4) var(--space-5);
+    border-bottom: var(--hairline) solid var(--border); background: var(--bg);
+  }
+  .feed__title {
+    margin: 0; font-size: 14px; font-weight: 560; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-bright);
+  }
+  .feed__scope {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--text-ui);
+  }
+  .feed__scope b { color: var(--soak-fg); }
+  .feed__list { display: flex; flex-direction: column; }
+  .drow {
+    display: grid; grid-template-columns: auto 1fr auto;
+    align-items: center; gap: var(--space-4);
+    padding: 9px var(--space-5);
+    border-bottom: var(--hairline) solid var(--border);
+  }
+  .drow:last-child { border-bottom: 0; }
+  .drow--soak { background: linear-gradient(90deg, rgba(124,58,237,0.045), transparent 30%); }
+  .drow__verdict {
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .drow__verdict::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .v-allow  { color: #16a34a; background: #dcfce7; border: 1px solid #86efac; }
+  .v-guide  { color: #b45309; background: #fef3c7; border: 1px solid #d97706; }
+  .v-block  { color: #dc2626; background: #fee2e2; border: 1px solid #dc2626; }
+  .drow__body { min-width: 0; }
+  .drow__src {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .drow__detail { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drow__tag {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap;
+    padding: 1px 7px; border-radius: 999px;
+    color: var(--soak-fg); background: var(--soak-bg); border: 1px solid var(--soak-border);
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .drow__tag::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--soak-edge); }
+  .drow__tag--op { color: var(--text-ui); background: transparent; border-color: var(--border); }
+  .drow__tag--op::before { background: var(--text-ui); }
+
+  /* ===================== COHORT DRAWER ===================== */
+  .scrim {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(8,10,12,0.6); backdrop-filter: blur(1.5px);
+    opacity: 0; pointer-events: none; transition: opacity 160ms ease;
+  }
+  .scrim.is-open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 81;
+    width: min(440px, 94vw);
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border-left: 1px solid var(--soak-border);
+    box-shadow: -18px 0 48px -24px rgba(0,0,0,0.8);
+    transform: translateX(16px); opacity: 0; pointer-events: none;
+    transition: transform 170ms ease, opacity 170ms ease;
+  }
+  .drawer.is-open { transform: none; opacity: 1; pointer-events: auto; }
+  .drawer__head {
+    flex: 0 0 auto; padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+  .drawer__head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+  .drawer__title {
+    margin: 0; font-size: 17px; font-weight: 360; letter-spacing: 0.02em;
+    text-transform: uppercase; color: var(--text-bright);
+  }
+  .drawer__title b { font-weight: 640; }
+  .drawer__close {
+    appearance: none; background: transparent; cursor: pointer;
+    border: 1px solid var(--border); border-radius: var(--radius-sharp);
+    color: var(--text-ui); width: 28px; height: 28px; line-height: 1; font-size: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color 180ms ease, border-color 180ms ease;
+  }
+  .drawer__close:hover { color: var(--soak-fg); border-color: var(--soak-border); }
+  .drawer__close:focus-visible { outline: 2px solid var(--soak-edge); outline-offset: 2px; }
+  .drawer__beta {
+    display: inline-block; margin-top: var(--space-3);
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+  .drawer__beta b { color: var(--badge-ar-fg); }
+
+  .drawer__body {
+    flex: 1 1 auto; overflow-y: auto;
+    padding: var(--space-5) var(--space-6) var(--space-7);
+    display: flex; flex-direction: column; gap: var(--space-5);
+  }
+
+  /* the load-bearing AUDIT-ONLY banner: literal text + violet, READ-ONLY */
+  .auditbanner {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--soak-border); border-left-width: 3px;
+    border-left-color: var(--soak-edge);
+    border-radius: var(--radius-soft); background: var(--soak-bg);
+  }
+  .auditbanner__badge {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 10px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--soak-fg);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .auditbanner__badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--soak-edge); }
+  .auditbanner__txt { font-size: 12px; color: #4c1d95; line-height: 1.45; }
+
+  .provgrid {
+    display: grid; grid-template-columns: auto 1fr; gap: 6px var(--space-5);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--border); border-radius: var(--radius-soft);
+    background: var(--bg-row-alt);
+  }
+  .provgrid dt {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-ui); margin: 0;
+  }
+  .provgrid dd {
+    margin: 0; font-family: var(--ff-mono); font-size: 12px; color: var(--text-bright);
+    word-break: break-all;
+  }
+  .computed {
+    font-family: var(--ff-system); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase; color: var(--soak-fg);
+    background: var(--soak-bg); border: 1px solid var(--soak-border);
+    border-radius: 999px; padding: 0 6px; margin-left: 6px; vertical-align: middle;
+  }
+
+  .cohort__cap {
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-ui);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .cohort__cap b {
+    font-family: var(--ff-mono); font-variant-numeric: tabular-nums;
+    font-size: 15px; color: var(--soak-fg);
+  }
+  .member {
+    display: flex; align-items: center; gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border); border-left: 2px solid var(--soak-edge);
+    border-radius: var(--radius-sharp); background: var(--bg-row);
+    margin-top: var(--space-3);
+  }
+  .member__id { flex: 1 1 auto; min-width: 0; }
+  .member__slug { font-family: var(--ff-mono); font-size: 12px; color: var(--text-bright); }
+  .member__when { font-family: var(--ff-mono); font-size: 10px; color: var(--text-dim); }
+  .member__chip {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--soak-fg); background: var(--soak-bg);
+    border: 1px solid var(--soak-border); border-radius: 999px; padding: 1px 8px;
+  }
+  .member__n { font-variant-numeric: tabular-nums; }
+
+  .drawer__foot {
+    flex: 0 0 auto; padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--border); background: var(--bg);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .drawer__readonly {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--text-ui); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .drawer__readonly::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-ui); }
+  .drawer__done {
+    margin-left: auto; appearance: none; cursor: pointer;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-ui); font-family: var(--ff-system); font-size: 13px; font-weight: 600;
+    padding: 6px 16px; border-radius: var(--radius-sharp);
+    transition: color 180ms ease, border-color 180ms ease;
+  }
+  .drawer__done:hover { color: var(--text-bright); border-color: var(--border-hi); }
+  .drawer__done:focus-visible { outline: 2px solid var(--soak-edge); outline-offset: 2px; }
+
+  /* ===================== OFF STATE ===================== */
+  .offstate {
+    margin: 8px clamp(16px, 4vw, 48px) 0;
+    padding: var(--space-6);
+    border: 1px dashed var(--border); border-radius: var(--radius-soft);
+    background: var(--bg-card); color: var(--text-dim); display: none;
+  }
+  body.is-off .offstate { display: block; }
+  body.is-off main { display: none; }
+  .offstate h2 {
+    margin: 0 0 8px; font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-bright);
+  }
+  .offstate code { font-family: var(--ff-mono); color: var(--soak-fg); }
+
+  /* ===================== AMENDMENT FOOTNOTE ===================== */
+  .amend {
+    margin: 24px clamp(16px, 4vw, 48px) 40px;
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: var(--space-5) var(--space-6);
+    border: 1px solid var(--badge-ar-border); border-left-width: 3px;
+    border-radius: var(--radius-soft); background: var(--badge-ar-bg);
+  }
+  .amend__tag {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 10px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--badge-ar-fg);
+    display: inline-flex; align-items: center; gap: 6px; padding-top: 1px;
+  }
+  .amend__tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--badge-ar-fg); }
+  .amend__txt { font-size: 12.5px; color: #7a3d04; line-height: 1.5; }
+  .amend__txt b { color: #5c2d02; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#rail">Skip to session rail</a>
+
+<!-- ===================== HEADER STRIP ===================== -->
+<header class="strip">
+  <div class="strip__mark" aria-hidden="true">BETA #43</div>
+  <div class="strip__titles">
+    <p class="strip__kicker">Audit hygiene -- soak / operator split</p>
+    <h1 class="strip__title">Soak Session <b>Metadata Tagging</b></h1>
+    <p class="strip__sub">
+      Tell, at a glance, which session lanes are SOAK (audit-only evaluation
+      noise from the soak driver) vs OPERATOR (real signal) -- so deterministic
+      fixture traffic stops silently biasing your HITL thresholds and
+      cross-session pattern promotion. Rendered FROM DATA: the soak driver
+      already knows the soak_id of every session it launched; the rail just
+      reads that mapping and paints the line.
+    </p>
+  </div>
+  <div class="beta">
+    <span class="beta__pill">BETA -- group: soak</span>
+    <button id="betaToggle" class="switch" role="switch" aria-pressed="true"
+            aria-label="Toggle the Soak session tagging BETA feature">
+      <span class="switch__txt">SOAK TAGGING: <b id="betaState">ON</b></span>
+      <span class="switch__track" aria-hidden="true"></span>
+    </button>
+    <span class="beta__gate">default OFF -- toggled in Settings &gt; BETA features</span>
+  </div>
+</header>
+
+<!-- ===================== OFF STATE (flag OFF -> no-op, nothing renders) ===================== -->
+<section class="offstate" aria-live="polite">
+  <h2>Feature OFF -- nothing renders</h2>
+  <p>
+    With <code>betaFlags['soak-session-tagging']</code> OFF the component is a
+    pure no-op: no per-lane tint or chip, no "Hide soak" toggle, no cohort
+    drawer, and no poller / SSE handler / fetch registered at all. The rail
+    falls back to its calm slate default, blind to the soak / operator split.
+    Flip the switch above to ON to preview the feature.
+  </p>
+</section>
+
+<!-- ===================== MAIN: rail (left) + decisions feed (right) ===================== -->
+<main>
+  <!-- ---- LEFT: the SessionRail with per-lane SOAK tint+chip ---- -->
+  <section aria-labelledby="rail-cap">
+    <p class="colcap" id="rail-cap">Session rail -- glance layer</p>
+    <nav class="rail" id="rail" aria-label="Governed sessions">
+      <header class="rail__head">
+        <div class="rail__title-wrap">
+          <h2 class="rail__title">Sessions</h2>
+          <span class="rail__tally" id="railTally"
+                title="2 open actions across operator sessions">
+            <span class="rail__tally-tag">ACTIVE</span>
+            <span class="rail__tally-num" id="railTallyNum">2</span>
+          </span>
+        </div>
+        <!-- the ONE calm "Hide soak" toggle. Real switch: literal text state +
+             aria-pressed. Default ON when the feature is enabled. -->
+        <button id="hideSoak" class="hidesoak" aria-pressed="true"
+                aria-label="Hide soak-tagged lanes from the default rail view">
+          <span class="hidesoak__dot" aria-hidden="true"></span>
+          HIDE SOAK: <span id="hideSoakState">ON</span>
+        </button>
+      </header>
+
+      <div class="rail__lanes" id="laneList" role="list">
+        <!-- lanes injected by script from the mock /api/soak/session-tags + /api/sessions -->
+      </div>
+
+      <footer class="rail__foot">
+        <span class="rail__self" title="StreamManager's own session is never governed and never tagged">
+          <span class="rail__self-dot" aria-hidden="true"></span>
+          self excluded <code>sm-self-7c1a</code>
+        </span>
+        <span class="rail__mock" id="mockFlag" hidden>SAMPLE DATA</span>
+        <span class="rail__hidden-note" id="hiddenNote">3 soak lanes hidden</span>
+      </footer>
+    </nav>
+  </section>
+
+  <!-- ---- RIGHT: decisions feed, scoped by "Hide soak" ---- -->
+  <section aria-labelledby="feed-cap">
+    <p class="colcap" id="feed-cap">Decisions feed</p>
+    <div class="feed">
+      <header class="feed__head">
+        <h2 class="feed__title">Recent decisions</h2>
+        <span class="feed__scope" id="feedScope">
+          scope: <b>operator only</b> -- soak decisions hidden
+        </span>
+      </header>
+      <div class="feed__list" id="feedList">
+        <!-- decision rows injected by script -->
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ===================== COHORT DRAWER (read-only provenance) ===================== -->
+<div class="scrim" id="scrim" tabindex="-1"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true"
+       aria-labelledby="drawer-title" aria-hidden="true">
+  <header class="drawer__head">
+    <div class="drawer__head-row">
+      <h2 class="drawer__title" id="drawer-title">Soak cohort <b id="drawerSoakId">--</b></h2>
+      <button class="drawer__close" id="drawerClose" aria-label="Close cohort drawer (Esc)">
+        <span aria-hidden="true">&times;</span>
+      </button>
+    </div>
+    <span class="drawer__beta">
+      BETA -- default OFF, toggled in Settings &gt; BETA features
+      <b id="drawerMock" hidden> -- SAMPLE DATA</b>
+    </span>
+  </header>
+
+  <div class="drawer__body">
+    <!-- the load-bearing audit-only banner: literal text, READ-ONLY warning -->
+    <div class="auditbanner" role="note">
+      <span class="auditbanner__badge">AUDIT-ONLY COHORT</span>
+      <span class="auditbanner__txt">
+        Every session in this cohort was launched deterministically by the soak
+        driver. Patterns learned under soak are evaluation noise -- cite this
+        readout before deciding whether any of them may be promoted
+        cross-session. This drawer is read-only: it warns, it never mutates.
+      </span>
+    </div>
+
+    <!-- provenance the operator cites. Fields tagged COMPUTED are derived by the
+         read endpoint, NOT persisted columns (the schema-strategy clarification). -->
+    <dl class="provgrid">
+      <dt>soak_type</dt>
+      <dd><span id="pvType">--</span><span class="computed">computed</span></dd>
+      <dt>started_by</dt>
+      <dd><span id="pvBy">--</span><span class="computed">computed</span></dd>
+      <dt>tool_version</dt>
+      <dd><span id="pvVer">--</span><span class="computed">computed</span></dd>
+      <dt>audit_only</dt>
+      <dd id="pvAudit">true</dd>
+    </dl>
+
+    <p class="cohort__cap">Cohort members <b id="pvCount">0</b> sessions</p>
+    <div id="memberList"></div>
+  </div>
+
+  <footer class="drawer__foot">
+    <span class="drawer__readonly">read-only -- governance + HITL gate untouched</span>
+    <button class="drawer__done" id="drawerDone">Done</button>
+  </footer>
+</aside>
+
+<!-- ===================== AMENDMENT FOOTNOTE (NEEDS-AMENDMENT) ===================== -->
+<div class="amend" role="note">
+  <span class="amend__tag">BUILD GATED</span>
+  <span class="amend__txt">
+    <b>UI is approvable -- the build is gated on an ADR-18 amendment.</b>
+    This feature is NEEDS-AMENDMENT pending a schema-strategy clarification:
+    <code>soak_type</code> / <code>started_by</code> / <code>tool_version</code>
+    must be COMPUTED by the read endpoints (from the soak_id prefix + soak-launch
+    metadata) -- NOT persisted as new <code>soak_runs</code> columns, which would
+    touch a FROZEN surface and require <code>tools/soak_driver.py</code> changes.
+    Per the Held-2 resolution the panel ships ADDITIVELY (soak_runs table already
+    exists + two new read endpoints, no message_bus edit, no new envelope, no new
+    table). Approve the UI approach now; the build proceeds once the amendment
+    nails the endpoint-compute strategy.
+  </span>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- MOCK DATA (mirrors SoakSessionTags-data.js mockDataSpec) ----
+  // /api/soak/session-tags shape. usedMockData:true is surfaced as literal text.
+  var SOAK_TAGS = {
+    now: 1749600000.0,
+    own_session_id: "sm-self-7c1a",
+    excluded_self: 1,
+    usedMockData: true,
+    tags: [
+      { session_id: "sess-a1", soak_id: "soak-2026-06-11T05-rl-eval",
+        soak_type: "rl_evaluation", project_slug: "alpha-target",
+        started_by: "operator", tool_version: "soak_driver/2.7.1",
+        started_at: 1749598800.0, decision_count: 412 },
+      { session_id: "sess-a2", soak_id: "soak-2026-06-11T05-rl-eval",
+        soak_type: "rl_evaluation", project_slug: "alpha-target",
+        started_by: "operator", tool_version: "soak_driver/2.7.1",
+        started_at: 1749598805.0, decision_count: 388 },
+      { session_id: "sess-b7", soak_id: "soak-2026-06-11T06-shipgate",
+        soak_type: "ship_gate", project_slug: "beta-target",
+        started_by: "ci", tool_version: "soak_driver/2.7.1",
+        started_at: 1749599400.0, decision_count: 60 }
+    ]
+  };
+
+  // /api/sessions rows (operator + soak). Untagged = operator (NO chip).
+  // SM-self is ABSENT (excluded_self counts it).
+  var SESSIONS = [
+    { id: "sess-op1", project_slug: "gamma-target", live: true,  pid: 48211, hitl: "ASYNC", actions: 2 },
+    { id: "sess-a1",  project_slug: "alpha-target", live: true,  pid: 51902, hitl: "OFF",   actions: 0 },
+    { id: "sess-a2",  project_slug: "alpha-target", live: true,  pid: 51903, hitl: "OFF",   actions: 0 },
+    { id: "sess-op2", project_slug: "delta-target", live: false, pid: null,  hitl: "OFF",   actions: 0 },
+    { id: "sess-b7",  project_slug: "beta-target",  live: true,  pid: 52440, hitl: "OFF",   actions: 0 }
+  ];
+
+  // decisions feed (a subset; soak rows flagged so "Hide soak" can scope them)
+  var DECISIONS = [
+    { verdict: "GUIDE", vclass: "v-guide", src: "gamma-target", detail: "shell.run -- destructive flag suggested guard", session: "sess-op1", soak: false },
+    { verdict: "BLOCK", vclass: "v-block", src: "alpha-target", detail: "fixture replay -- deterministic BLOCK pattern",  session: "sess-a1",  soak: true },
+    { verdict: "ALLOW", vclass: "v-allow", src: "delta-target", detail: "read-only fs.list under repo root",            session: "sess-op2", soak: false },
+    { verdict: "ALLOW", vclass: "v-allow", src: "alpha-target", detail: "fixture replay -- ALLOW band sweep",           session: "sess-a2",  soak: true },
+    { verdict: "GUIDE", vclass: "v-guide", src: "beta-target",  detail: "ship-gate fixture -- alignment probe",         session: "sess-b7",  soak: true },
+    { verdict: "ALLOW", vclass: "v-allow", src: "gamma-target", detail: "git.status -- observed, no action",           session: "sess-op1", soak: false }
+  ];
+
+  // map session_id -> tag (soak metadata) for O(1) lane lookup
+  var TAG_BY_SESSION = {};
+  SOAK_TAGS.tags.forEach(function (t) { TAG_BY_SESSION[t.session_id] = t; });
+
+  // soak_type -> the literal paired chip label (the word SOAK is load-bearing)
+  var TYPE_LABEL = {
+    rl_evaluation:    "SOAK / RL-EVAL",
+    ship_gate:        "SOAK / SHIP-GATE",
+    operator_manual:  "SOAK / MANUAL"
+  };
+
+  function relWhen(ts) {
+    var secs = Math.max(0, Math.round(SOAK_TAGS.now - ts));
+    var mins = Math.round(secs / 60);
+    if (mins < 1) return "just now";
+    if (mins < 60) return mins + "m ago";
+    return Math.round(mins / 60) + "h ago";
+  }
+
+  // ---- element handles ----
+  var body        = document.body;
+  var betaToggle  = document.getElementById("betaToggle");
+  var betaState   = document.getElementById("betaState");
+  var hideSoak    = document.getElementById("hideSoak");
+  var hideSoakSt  = document.getElementById("hideSoakState");
+  var laneList    = document.getElementById("laneList");
+  var feedList    = document.getElementById("feedList");
+  var feedScope   = document.getElementById("feedScope");
+  var hiddenNote  = document.getElementById("hiddenNote");
+  var railTallyN  = document.getElementById("railTallyNum");
+  var mockFlag    = document.getElementById("mockFlag");
+
+  var scrim       = document.getElementById("scrim");
+  var drawer      = document.getElementById("drawer");
+  var drawerClose = document.getElementById("drawerClose");
+  var drawerDone  = document.getElementById("drawerDone");
+  var drawerSoakId= document.getElementById("drawerSoakId");
+  var drawerMock  = document.getElementById("drawerMock");
+  var pvType = document.getElementById("pvType");
+  var pvBy   = document.getElementById("pvBy");
+  var pvVer  = document.getElementById("pvVer");
+  var pvCount= document.getElementById("pvCount");
+  var memberList = document.getElementById("memberList");
+
+  var beta = true;      // betaFlags['soak-session-tagging']
+  var hide = true;      // "Hide soak" -- default ON when feature enabled
+  var lastFocused = null;
+
+  if (SOAK_TAGS.usedMockData) mockFlag.hidden = false;
+
+  // ---- render the rail lanes ----
+  function renderLanes() {
+    laneList.innerHTML = "";
+    var hiddenSoak = 0;
+    SESSIONS.forEach(function (s) {
+      var tag = TAG_BY_SESSION[s.id];
+      var isSoak = !!tag;
+      if (beta && isSoak && hide) { hiddenSoak++; return; } // "Hide soak" drop
+
+      var lane = document.createElement("div");
+      lane.className = "lane " + (isSoak && beta ? "lane--soak" : "lane--operator");
+      if (!isSoak && s.actions > 0) lane.classList.add("is-actions");
+      lane.setAttribute("role", "listitem");
+
+      var metaBits = [s.live ? "live" : "ended"];
+      if (s.pid) metaBits.push("pid " + s.pid);
+      metaBits.push(s.hitl);
+
+      var main = document.createElement("div");
+      main.className = "lane__main";
+      main.innerHTML =
+        '<span class="lane__pip ' + (s.live ? "lane__pip--live" : "") + '" aria-hidden="true"></span>' +
+        '<span class="lane__id">' +
+          '<span class="lane__name">' + s.project_slug + '</span>' +
+          '<span class="lane__meta">' + metaBits.join(' <span class="lane__sep" aria-hidden="true">&middot;</span> ') + '</span>' +
+        '</span>';
+      lane.appendChild(main);
+
+      if (isSoak && beta) {
+        // PAIRED label+color chip -- a focusable button opening the cohort drawer
+        var chip = document.createElement("button");
+        chip.className = "soakchip";
+        chip.type = "button";
+        chip.setAttribute("data-soak-id", tag.soak_id);
+        chip.setAttribute("aria-haspopup", "dialog");
+        chip.setAttribute("aria-label",
+          "Soak lane -- " + (TYPE_LABEL[tag.soak_type] || "SOAK") +
+          ", open audit cohort for " + tag.soak_id);
+        chip.innerHTML =
+          '<span class="soakchip__dot" aria-hidden="true"></span>' +
+          (TYPE_LABEL[tag.soak_type] || "SOAK");
+        chip.addEventListener("click", function () { openDrawer(tag.soak_id, chip); });
+        lane.appendChild(chip);
+      } else if (s.actions > 0) {
+        // operator lane with open actions -> the amber ACTION-REQUIRED count pill
+        var flag = document.createElement("span");
+        flag.className = "lane__flag";
+        flag.title = s.actions + " action" + (s.actions === 1 ? "" : "s") + " required in " + s.project_slug;
+        flag.setAttribute("aria-label", s.actions + " actions required in " + s.project_slug);
+        flag.innerHTML = "&#9650;&nbsp;" + s.actions;
+        lane.appendChild(flag);
+      }
+
+      laneList.appendChild(lane);
+    });
+
+    // footer "N soak lanes hidden" readout (only meaningful while Hide soak ON)
+    if (beta && hide && hiddenSoak > 0) {
+      hiddenNote.hidden = false;
+      hiddenNote.textContent = hiddenSoak + " soak lane" + (hiddenSoak === 1 ? "" : "s") + " hidden";
+    } else if (beta && !hide) {
+      hiddenNote.hidden = false;
+      hiddenNote.textContent = SOAK_TAGS.tags.length + " soak lanes shown -- auditing";
+    } else {
+      hiddenNote.hidden = true;
+    }
+  }
+
+  // ---- render the decisions feed (scoped by Hide soak) ----
+  function renderFeed() {
+    feedList.innerHTML = "";
+    DECISIONS.forEach(function (d) {
+      if (beta && hide && d.soak) return; // soak decisions dropped from default view
+      var row = document.createElement("div");
+      row.className = "drow" + (d.soak && beta ? " drow--soak" : "");
+
+      var tagHtml = "";
+      if (beta) {
+        tagHtml = d.soak
+          ? '<span class="drow__tag">SOAK</span>'
+          : '<span class="drow__tag drow__tag--op">OP</span>';
+      }
+
+      row.innerHTML =
+        '<span class="drow__verdict ' + d.vclass + '">' + d.verdict + '</span>' +
+        '<span class="drow__body">' +
+          '<span class="drow__src">' + d.src + '</span>' +
+          '<span class="drow__detail">' + d.detail + '</span>' +
+        '</span>' + tagHtml;
+      feedList.appendChild(row);
+    });
+
+    feedScope.innerHTML = (beta && hide)
+      ? 'scope: <b>operator only</b> -- soak decisions hidden'
+      : (beta ? 'scope: <b>all sessions</b> -- soak + operator' : 'scope: all sessions');
+  }
+
+  // ---- BETA on/off toggle (the whole feature is a no-op when OFF) ----
+  function setBeta(on) {
+    beta = on;
+    betaToggle.setAttribute("aria-pressed", on ? "true" : "false");
+    betaState.textContent = on ? "ON" : "OFF";
+    body.classList.toggle("is-off", !on);
+    if (!on) closeDrawer();
+    render();
+  }
+  betaToggle.addEventListener("click", function () { setBeta(!beta); });
+
+  // ---- Hide soak toggle ----
+  function setHide(on) {
+    hide = on;
+    hideSoak.setAttribute("aria-pressed", on ? "true" : "false");
+    hideSoakSt.textContent = on ? "ON" : "OFF";
+    render();
+  }
+  hideSoak.addEventListener("click", function () { setHide(!hide); });
+
+  function render() { renderLanes(); renderFeed(); }
+
+  // ---- cohort drawer: read-only provenance, focus-trap, Escape ----
+  function buildCohort(soakId) {
+    var members = SOAK_TAGS.tags.filter(function (t) { return t.soak_id === soakId; });
+    var head = members[0] || {};
+    return {
+      soak_id: soakId,
+      soak_type: head.soak_type,
+      started_by: head.started_by,
+      tool_version: head.tool_version,
+      audit_only: true,
+      member_count: members.length,
+      members: members
+    };
+  }
+
+  function openDrawer(soakId, trigger) {
+    if (!beta) return;
+    lastFocused = trigger || document.activeElement;
+    var c = buildCohort(soakId);
+
+    drawerSoakId.textContent = soakId;
+    pvType.textContent = TYPE_LABEL[c.soak_type] || c.soak_type || "--";
+    pvBy.textContent   = c.started_by || "--";
+    pvVer.textContent  = c.tool_version || "--";
+    pvCount.textContent= c.member_count;
+    drawerMock.hidden  = !SOAK_TAGS.usedMockData;
+
+    memberList.innerHTML = "";
+    c.members.forEach(function (m) {
+      var el = document.createElement("div");
+      el.className = "member";
+      el.innerHTML =
+        '<span class="member__id">' +
+          '<span class="member__slug">' + m.project_slug + ' / ' + m.session_id + '</span><br>' +
+          '<span class="member__when">started ' + relWhen(m.started_at) + '</span>' +
+        '</span>' +
+        '<span class="member__chip"><span class="member__n">' + m.decision_count + '</span> decisions</span>';
+      memberList.appendChild(el);
+    });
+
+    scrim.classList.add("is-open");
+    drawer.classList.add("is-open");
+    drawer.setAttribute("aria-hidden", "false");
+    drawerClose.focus();
+    document.addEventListener("keydown", onDrawerKey, true);
+  }
+
+  function closeDrawer() {
+    if (!drawer.classList.contains("is-open")) return;
+    scrim.classList.remove("is-open");
+    drawer.classList.remove("is-open");
+    drawer.setAttribute("aria-hidden", "true");
+    document.removeEventListener("keydown", onDrawerKey, true);
+    if (lastFocused && lastFocused.focus) lastFocused.focus(); // restore focus to the chip
+  }
+
+  function focusables() {
+    return Array.prototype.slice
+      .call(drawer.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])'))
+      .filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  }
+
+  function onDrawerKey(e) {
+    if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+    if (e.key === "Tab") {
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }
+
+  drawerClose.addEventListener("click", closeDrawer);
+  drawerDone.addEventListener("click", closeDrawer);
+  scrim.addEventListener("click", closeDrawer);
+
+  // ---- init ----
+  render();
+})();
+</script>
+</body>
+</html>

@@ -30,6 +30,7 @@
 
   import { onMount, onDestroy } from 'svelte';
   import Frame from './Frame.svelte';
+  import ThemeToggle from './ThemeToggle.svelte';
   import { layoutStore, FRAME_META, FRAME_KEYS } from '../stores/layout.js';
 
   // Per-frame view state, supplied by the composing App (which wires the
@@ -162,6 +163,10 @@
     <div class="shell__header-slot">
       <slot name="header" />
     </div>
+    <!-- LIVE theme control (dark/light + the three-theme menu). Owned by
+         stores/theme.js; mounted here because the original HeaderBar that carried
+         the switch is not part of the composed tree. Calm chrome, never escalates. -->
+    <ThemeToggle />
     {#if layoutControls}
       <button
         type="button"

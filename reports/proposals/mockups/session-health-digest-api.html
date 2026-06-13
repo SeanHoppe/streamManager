@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<!--
+  KingMode mockup -- BETA feature "session-health-digest-api" (#33: Session health digest
+  endpoints for multi-session triage). Self-contained: inline style + script only. NO external
+  assets / CDNs / fonts. System font stack. ASCII-only (dash rendered as "--"; no smart quotes,
+  em-dashes, or box-drawing). Previews the REAL ui-next obsidian tokens
+  (dashboard/ui-next/src/styles/theme.css) so the operator can confirm the UI approach BEFORE
+  any code is written (directive #2). Feature shown ON with realistic mock data drawn from the
+  vetted mockDataSpec. Default-OFF, gated in Settings > BETA features (Soak group).
+
+  WHAT #33 ADDS OVER THE SHIPPED #32 (health-digest):
+    1. A 5-state SERVER-COMPUTED health_signal -- BLOCKED > ATTENTION N > SLOW > STALLED >
+       HEALTHY -- with explicit time/rate rules, so a silently STALLED lane (>5min no message)
+       or a SLOW lane (sustained GUIDE/INTERVENE >50% over 10min) surfaces as its OWN paired
+       badge instead of collapsing into #32's 3-state QUIET.
+    2. URGENCY-SORTED ordering: the sickest lane floats to the top of the rail. Position
+       encodes severity -- the worst thing is simply highest, no legend read needed.
+    3. A per-lane "Worth waiting?" button (STALLED / SLOW lanes) that fires the async
+       POST /health-check classifier for the ONE session the operator is unsure about ->
+       paired LIVE / DEAD verdict chip + one-line reason + suggested action.
+
+  WHERE IT LIVES: NOT a new pane. It re-skins the existing SessionRail (Frame A spine) -- the
+  same mount site #32's HealthDigest uses -- so the operator's glance habit is preserved.
+
+  G2 polarity: NO SM-own session_id in the fixture; the rail self-excludes (footer readout +
+  excluded_self in the payload). M16 domain-agnostic: every lane identity is rendered FROM DATA
+  (session-alpha..session-foxtrot placeholders) -- no monitored-project vocabulary.
+  M4: every state carries a literal text WORD -- color is strictly the SECOND channel; the
+  urgency SORT (position) is a third, color-free channel so a colorblind operator still gets
+  the full signal from ORDER + WORD alone.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA mockup -- Session health digest API (#33)</title>
+<style>
+  /* ---- REAL obsidian theme tokens (verbatim from theme.css :root + [data-theme=obsidian]) ---- */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    /* fixed paired badge tokens (M4) -- theme-invariant. The 5-state health scheme reuses
+       these EXACT frozen, axe-documented AA pairs: blocked (red) / ar (amber) / decided (green). */
+    --badge-ar-fg: #d97706;      --badge-ar-bg: #fef3c7;      --badge-ar-border: #d97706;
+    --badge-obs-fg: #475569;     --badge-obs-bg: #f1f5f9;     --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a; --badge-decided-bg: #dcfce7; --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626; --badge-blocked-bg: #fee2e2; --badge-blocked-border: #dc2626;
+    --badge-warn-fg: #ea580c;    --badge-warn-bg: #ffedd5;    --badge-warn-border: #ea580c;
+    --badge-timeout-fg: #7c3aed; --badge-timeout-bg: #ede9fe; --badge-timeout-border: #c4b5fd;
+
+    /* NEW (#33) NEUTRAL-COOL token for the STALLED state. Deliberately NOT green/amber/red:
+       STALLED is absence-of-signal, not danger. A cool slate ink on a cool slate wash. The
+       ink (#334155) on the wash (#e2e8f0) measures ~9.2:1 -- clears WCAG AAA on the load-
+       bearing word. This is the net-new state #32's 3-state scheme cannot express. */
+    --badge-stalled-fg: #334155; --badge-stalled-bg: #e2e8f0; --badge-stalled-border: #94a3b8;
+  }
+  [data-theme="obsidian"] {
+    --bg: #080a0c;
+    --bg-card: #0c1118;
+    --bg-row: #0e141e;
+    --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245,158,11,0.09);
+    --border: #192030;
+    --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098;
+    --text-dim: #948870;
+    --text-ui: #8a8068;
+    --text-bright: #e8e0cc;
+    --accent: #f59e0b;
+    --accent-dim: rgba(245,158,11,0.09);
+    --accent-glow: rgba(245,158,11,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 28px clamp(16px, 4vw, 56px) 64px;
+  }
+
+  /* ---------- header strip ---------- */
+  .strip {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px; margin-bottom: 14px;
+  }
+  .strip__title {
+    font-size: 19px; font-weight: 700; letter-spacing: 0.01em;
+    color: var(--text-bright); margin: 0;
+  }
+  .strip__sub { color: var(--text-dim); font-size: 12.5px; margin: 3px 0 0; max-width: 78ch; }
+  .head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 2px;
+    color: var(--badge-warn-fg); background: var(--badge-warn-bg);
+    border: 1px dashed var(--badge-warn-border);
+  }
+  .pill__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .strip__spacer { flex: 1 1 auto; }
+
+  /* inline on/off toggle (client-side wired) */
+  .flag {
+    display: inline-flex; align-items: center; gap: 11px;
+    padding: 8px 13px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-card);
+  }
+  .flag__label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+  .flag__key { font-family: var(--ff-mono); color: var(--text-bright); font-size: 12px; }
+  .switch {
+    position: relative; width: 46px; height: 24px; border-radius: 13px;
+    border: 1px solid var(--border-hi); background: var(--bg-row-alt);
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease; padding: 0;
+  }
+  .switch[aria-checked="true"] { background: var(--accent-dim); border-color: var(--accent); }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text-ui); transition: left 120ms ease, background 120ms ease;
+  }
+  .switch[aria-checked="true"] .switch__knob { left: 24px; background: var(--accent); }
+  .switch__state {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    min-width: 26px; color: var(--text-dim);
+  }
+  .switch[aria-checked="true"] ~ .switch__state { color: var(--accent); }
+  .flag:focus-within .switch { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+
+  /* amber "build gated on amendment" footnote (NEEDS-AMENDMENT) */
+  .gate-note {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin: 0 0 24px; padding: 9px 13px; border-radius: 4px;
+    background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border);
+    color: #7a3e06; font-size: 12px; line-height: 1.45; max-width: 96ch;
+  }
+  .gate-note__tag {
+    flex: 0 0 auto; font-family: var(--ff-mono); font-size: 10px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase; color: #92400e;
+    border: 1px solid var(--badge-ar-border); border-radius: 3px; padding: 1px 6px; margin-top: 1px;
+    background: rgba(217,119,6,0.12);
+  }
+  .gate-note code { font-family: var(--ff-mono); font-size: 11.5px; color: #7a3e06; }
+
+  /* ---------- layout: rail preview + notes ---------- */
+  .stage { display: grid; grid-template-columns: minmax(320px, 380px) minmax(0, 1fr); gap: 26px; align-items: start; }
+  @media (max-width: 940px) { .stage { grid-template-columns: 1fr; } }
+
+  /* ======================= THE RAIL (SessionRail.svelte preview) ======================= */
+  .rail {
+    display: flex; flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    max-height: 720px;
+  }
+  .rail__head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .rail__title-wrap { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+  .rail__title {
+    margin: 0; font-family: var(--ff-system); font-size: 14px; font-weight: 560;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-bright); white-space: nowrap;
+  }
+  /* header tally -- #33 surfaces the WORST signal, not just an open-action count. Amber when
+     anything needs attention; red-bordered when something is BLOCKED. Paired label always. */
+  .rail__tally {
+    display: inline-flex; align-items: baseline; gap: 5px;
+    padding: 2px 7px; border-radius: 999px; border: 1px solid var(--badge-ar-border);
+    background: var(--badge-ar-bg);
+  }
+  .rail__tally--blocked { border-color: var(--badge-blocked-border); border-width: 2px; background: var(--badge-blocked-bg); }
+  .rail__tally-tag { font-family: var(--ff-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase; color: var(--badge-ar-fg); }
+  .rail__tally-num { font-family: var(--ff-mono); font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 720; line-height: 1; color: var(--badge-ar-fg); }
+  .rail__tally--blocked .rail__tally-tag, .rail__tally--blocked .rail__tally-num { color: var(--badge-blocked-fg); }
+  /* DIGEST source readout -- a paired label so the operator knows the richer server-side
+     5-state source is live. Calm slate; never a bare icon. Shown only while flag ON. */
+  .rail__digest-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--text-ui);
+    padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--bg-row-alt);
+  }
+  .rail__digest-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--badge-decided-fg); opacity: 0.85; }
+
+  /* BETA caption strip, only present while flag ON */
+  .rail__beta {
+    padding: 5px 14px; font-size: 10.5px; color: var(--text-dim);
+    border-bottom: 1px solid var(--border); background: var(--bg-row-alt);
+    letter-spacing: 0.02em;
+  }
+  .rail__beta b { color: var(--badge-warn-fg); font-weight: 700; }
+
+  /* a thin "sorted by health urgency" readout so the operator knows position encodes severity */
+  .rail__sortby {
+    padding: 4px 14px; font-family: var(--ff-mono); font-size: 9.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-ui);
+    border-bottom: 1px solid var(--border); background: var(--bg);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .rail__sortby b { color: var(--text-bright); font-weight: 700; }
+
+  .rail__lanes {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px; scrollbar-gutter: stable;
+  }
+
+  .rail__foot {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    padding: 4px 14px; border-top: 1px solid var(--border); background: var(--bg);
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-ui);
+  }
+  .rail__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); opacity: 0.7; }
+
+  /* ======================= ONE LANE (SessionLane preview) ======================= */
+  .lane {
+    position: relative; display: grid;
+    grid-template-columns: 1fr auto; grid-template-rows: auto auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left-width: 2px; border-left-color: transparent;
+    border-radius: 4px;
+    transition: border-color 180ms ease, background 180ms ease;
+  }
+  .lane--selected { background: var(--bg-row-hover); }
+  /* 5-state left gutter -- the SECOND color channel. The badge WORD is the first; the rail
+     SORT (position) is a third, color-free channel. */
+  .lane--blocked  { border-left-color: var(--badge-blocked-border); border-left-width: 2px; }
+  .lane--attention { border-left-color: var(--badge-ar-border); }
+  .lane--slow     { border-left-color: var(--badge-warn-border); }
+  .lane--stalled  { border-left-color: var(--badge-stalled-border); }
+  .lane--healthy  { border-left-color: transparent; }
+  /* The ONE saturated surface in the whole rail: the single top lane WHEN something is
+     BLOCKED. Everything below stays calm slate, still water. */
+  .lane--blocked { background: linear-gradient(90deg, rgba(220,38,38,0.06), transparent 60%); }
+
+  .lane__main {
+    grid-column: 1; grid-row: 1;
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+    padding: 7px 10px; cursor: pointer; text-align: left;
+    border-radius: 4px 0 0 4px;
+    background: transparent; border: 0; width: 100%; color: inherit; font: inherit;
+  }
+  .lane__main:hover { background: var(--bg-row-hover); }
+  .lane__main:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 4px; }
+
+  .lane__pip { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); opacity: 0.6; }
+  .lane__pip--live { background: var(--accent); opacity: 0.85; }
+  .lane--stalled .lane__pip--live { background: var(--badge-stalled-border); opacity: 0.8; }
+
+  .lane__id { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+  .lane__name {
+    font-family: var(--ff-system); font-size: 13px; font-weight: 460; letter-spacing: 0.01em;
+    color: var(--text-bright); line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lane--blocked .lane__name, .lane--attention .lane__name,
+  .lane--slow .lane__name, .lane--stalled .lane__name { font-weight: 620; }
+  .lane__meta {
+    display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-ui); font-variant-numeric: tabular-nums;
+  }
+  .lane__sep { opacity: 0.5; }
+
+  /* ---- the 5-state SessionHealthBadge (the upgraded #32 atom) ----
+     A single typographic word-chip in the lane's signal slot. Paired label + color (M4):
+     the WORD is always present; color is strictly the second channel. Sits on its OWN light
+     bg so the fg-on-bg contrast is self-contained against the dark lane ground. */
+  .health {
+    flex: 0 0 auto; align-self: center;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em; line-height: 1.4; padding: 1px 8px; border-radius: 999px;
+    white-space: nowrap; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .health__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  /* RED BLOCKED -- negative-regression escalation in last 2min. 2px border, heaviest weight. */
+  .health--blocked  { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 2px solid var(--badge-blocked-border); font-weight: 800; }
+  /* AMBER ATTENTION N -- pending_hitl_count > 0. Count inline (mirrors #32's ACTION N). */
+  .health--attention { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border); }
+  /* AMBER-DIM SLOW -- sustained GUIDE/INTERVENE >50% over 10min. WARN wash, lighter weight. */
+  .health--slow     { color: var(--badge-warn-fg); background: var(--badge-warn-bg); border: 1px solid var(--badge-warn-border); }
+  /* SLATE-COOL STALLED -- >5min no message. NEW neutral-cool token (NOT green/amber/red). */
+  .health--stalled  { color: var(--badge-stalled-fg); background: var(--badge-stalled-bg); border: 1px solid var(--badge-stalled-border); }
+  /* GREEN HEALTHY -- active, no open actions. */
+  .health--healthy  { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+
+  /* expand control (existing chevron) */
+  .lane__expand {
+    grid-column: 2; grid-row: 1; align-self: stretch; appearance: none; background: transparent;
+    border: none; color: var(--text-ui); width: 1.45rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color 180ms ease, background 180ms ease;
+  }
+  .lane__expand:hover { color: var(--text-bright); background: var(--bg-row-hover); }
+  .lane__expand:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; border-radius: 4px; }
+  .lane__chev { display: inline-block; font-size: 1rem; line-height: 1; transition: transform 180ms ease; }
+  .lane__chev--open { transform: rotate(90deg); }
+
+  /* ---- expand region: digest detail dl (renders HERE) ---- */
+  .lane__detail {
+    grid-column: 1 / -1; grid-row: 2;
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-row-alt);
+    border-radius: 0 0 4px 4px;
+    display: none;
+  }
+  .lane--open .lane__detail { display: block; }
+  .lane__dl { margin: 0; }
+  .lane__dlrow { display: grid; grid-template-columns: 9rem 1fr; gap: 10px; padding: 2px 0; }
+  .lane__dlrow dt {
+    margin: 0; font-family: var(--ff-mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-ui);
+  }
+  .lane__dlrow dd {
+    margin: 0; min-width: 0; font-family: var(--ff-mono); font-size: 11px;
+    color: var(--text); word-break: break-word; font-variant-numeric: tabular-nums;
+  }
+  .lane__dlrow dd b { color: var(--text-bright); font-weight: 700; }
+  .lane__reason {
+    margin: 7px 0 0; padding: 6px 9px; font-size: 11px; line-height: 1.45;
+    font-family: var(--ff-mono); color: var(--text);
+    border-left: 2px solid var(--border-hi); background: var(--bg-card); border-radius: 0 3px 3px 0;
+  }
+  .lane__reason b { color: var(--text-bright); }
+
+  /* ---- the "Worth waiting?" classifier control + verdict (the KEY #33 interaction) ----
+     A separate focusable <button> in the lane (Tab order: lane -> classify -> expand).
+     Lives in the lane's expand region. NEVER a modal -- monitor-first, no focus steal. */
+  .wait {
+    grid-column: 1 / -1; grid-row: 3;
+    display: none; /* only present on STALLED / SLOW lanes */
+    align-items: center; flex-wrap: wrap; gap: 9px;
+    padding: 7px 10px 9px;
+    border-top: 1px dashed var(--border);
+    background: var(--bg-row-alt);
+    border-radius: 0 0 4px 4px;
+  }
+  .lane--can-wait .wait { display: flex; }
+  /* if the lane is open, the detail rounds; let the wait strip own the bottom radius */
+  .lane--open.lane--can-wait .lane__detail { border-radius: 0; }
+  .wait__btn {
+    appearance: none; cursor: pointer;
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    padding: 4px 11px; border-radius: 4px;
+    color: var(--text-bright); background: var(--bg-card);
+    border: 1px solid var(--border-hi);
+    transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+  }
+  .wait__btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+  .wait__btn:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+  .wait__btn[disabled] { cursor: default; opacity: 0.85; }
+  .wait__hint { font-size: 10.5px; color: var(--text-dim); font-family: var(--ff-mono); letter-spacing: 0.02em; }
+
+  /* in-flight "classifying..." -- the spinner. Reduced-motion degrades it to static text. */
+  .wait__spin {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--ff-mono); font-size: 11px; color: var(--badge-warn-fg); letter-spacing: 0.04em;
+  }
+  .wait__spinner {
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid var(--badge-warn-border); border-top-color: transparent;
+    animation: spin 720ms linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  :global(html[data-motion='reduce']) .wait__spinner,
+  html[data-motion='reduce'] .wait__spinner { animation: none; border-top-color: var(--badge-warn-border); opacity: 0.4; }
+  @media (prefers-reduced-motion: reduce) {
+    .wait__spinner { animation: none; border-top-color: var(--badge-warn-border); opacity: 0.4; }
+  }
+
+  /* the paired LIVE / DEAD verdict chip -- itself a paired label+color atom */
+  .verdict {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--ff-mono); font-size: 11px; font-weight: 800; letter-spacing: 0.05em;
+    padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .verdict__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  /* LIVE -- green dot + word. Job in progress, worth waiting. */
+  .verdict--live { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  /* DEAD -- slate + word. Deliberately NOT red: dead is not an error, it is a fact. */
+  .verdict--dead { color: var(--badge-stalled-fg); background: var(--badge-stalled-bg); border: 1px solid var(--badge-stalled-border); }
+  /* error degrade -- the classifier is unavailable. NEVER silently reads as live/dead. */
+  .verdict--error { color: var(--badge-timeout-fg); background: var(--badge-timeout-bg); border: 1px solid var(--badge-timeout-border); }
+  .verdict-line { font-family: var(--ff-mono); font-size: 10.5px; color: var(--text); letter-spacing: 0.01em; }
+  .verdict-line b { color: var(--text-bright); }
+  .verdict-action { font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-dim); letter-spacing: 0.01em; }
+  .verdict-action b { color: var(--accent); font-weight: 700; }
+  .wait__result { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; width: 100%; }
+
+  /* the latest-decision action chip inside the detail, paired text + color */
+  .act {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--ff-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    padding: 0 6px; border-radius: 3px; line-height: 1.5;
+  }
+  .act__dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .act--allow { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .act--block { color: var(--badge-blocked-fg); background: var(--badge-blocked-bg); border: 1px solid var(--badge-blocked-border); }
+  .act--l2, .act--l3 { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border); }
+
+  /* ---------- design notes column ---------- */
+  .notes { display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); letter-spacing: 0.02em; }
+  .card p { margin: 0 0 8px; color: var(--text-dim); font-size: 12.5px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; }
+  .card li { margin-bottom: 4px; }
+  kbd {
+    font-family: var(--ff-mono); font-size: 11px; color: var(--text-bright);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; background: var(--bg-row-alt);
+  }
+  code { font-family: var(--ff-mono); font-size: 11.5px; color: var(--accent); }
+
+  /* badge legend mini-rows (the 5 states + the 2 verdicts) */
+  .legend { display: flex; flex-direction: column; gap: 8px; }
+  .legend__row { display: flex; align-items: center; gap: 10px; }
+  .legend__why { font-size: 11.5px; color: var(--text-dim); }
+
+  /* OFF state: hide the digest source readout, beta caption, sort readout, all health chips +
+     the wait controls, and restore the DEFAULT started-at order -- the no-op gate. */
+  .is-off .rail__digest-tag,
+  .is-off .rail__beta,
+  .is-off .rail__sortby,
+  .is-off .rail__tally,
+  .is-off .health,
+  .is-off .wait { display: none; }
+  .is-off .lane { border-left-color: transparent !important; background: var(--bg-card) !important; }
+  .is-off .lane--blocked { background: var(--bg-card) !important; }
+  .is-off .lane__off-note { display: block; }
+  .lane__off-note { display: none; margin: 6px 0 0; font-size: 11px; color: var(--text-dim); }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+</style>
+</head>
+<body>
+
+  <!-- ====================== HEADER STRIP ====================== -->
+  <div class="strip">
+    <div>
+      <div class="head-row">
+        <h1 class="strip__title">Session Health Digest -- urgency triage + "is it worth waiting?"</h1>
+        <span class="pill"><span class="pill__dot"></span>BETA -- default OFF</span>
+      </div>
+      <p class="strip__sub">Feature #33 -- toggled in Settings &gt; BETA features (Soak &amp; non-SM session
+        validation group). Extends the shipped #32 digest with a 5-state server-computed
+        <code>health_signal</code> (BLOCKED &gt; ATTENTION N &gt; SLOW &gt; STALLED &gt; HEALTHY),
+        URGENCY-sorted ordering so the sickest lane floats to the top, and a per-lane "Worth waiting?"
+        classifier (<code>POST /api/sessions/{id}/health-check</code>) that answers LIVE vs DEAD for the
+        one session you are unsure about. Answer "which lane needs me RIGHT NOW, and is the stalled one
+        worth waiting for?" in one glance plus one click. KingMode mockup -- no code written yet.</p>
+    </div>
+    <div class="strip__spacer"></div>
+    <label class="flag">
+      <span class="flag__label">flag <span class="flag__key">session-health-digest-api</span></span>
+      <button id="flagSwitch" class="switch" role="switch" aria-checked="true" aria-label="Toggle session-health-digest-api feature flag">
+        <span class="switch__knob"></span>
+      </button>
+      <span id="flagState" class="switch__state">ON</span>
+    </label>
+  </div>
+
+  <!-- amber NEEDS-AMENDMENT footnote: the UI is approvable, the BACKEND build is gated -->
+  <p class="gate-note">
+    <span class="gate-note__tag">Gated</span>
+    <span><b>Build gated on ADR-18 amendment.</b> This UI approach is approvable now, but the four new
+      read endpoints in <code>dashboard/server.py</code> may NOT be built until ADR-18 explicitly
+      classifies <code>dashboard/server.py</code> as EVOLVING (and <code>ui-next/</code> as EXPERIMENTAL),
+      so the <code>frozenTouch=false</code> claim is documented, not assumed. The mockup, the registry
+      entry, and the gated component proceed; the endpoints land in the same PR as -- or after -- the
+      amendment.</span>
+  </p>
+
+  <!-- ====================== STAGE ====================== -->
+  <div id="stage" class="stage">
+
+    <!-- ---- SessionRail preview (the #33 re-skin mounts at #32's site) ---- -->
+    <nav class="rail" id="rail" aria-label="Governed sessions">
+      <header class="rail__head">
+        <div class="rail__title-wrap">
+          <h2 class="rail__title">Sessions</h2>
+          <!-- header tally -- surfaces the WORST signal (paired word + count) -->
+          <span class="rail__tally rail__tally--blocked" id="railTally"
+                title="Worst signal: BLOCKED. 1 blocked, 1 attention across 6 sessions."
+                aria-label="Worst health signal across governed sessions: BLOCKED">
+            <span class="rail__tally-tag" id="railTallyTag">BLOCKED</span>
+            <span class="rail__tally-num" id="railTallyNum">1</span>
+          </span>
+          <!-- DIGEST source readout (paired label, only while flag ON) -->
+          <span class="rail__digest-tag" id="digestTag" title="5-state health digest source live (server-side)">
+            <span class="rail__digest-dot" aria-hidden="true"></span>DIGEST 5-STATE
+          </span>
+        </div>
+      </header>
+
+      <!-- BETA caption, only while flag ON -->
+      <div class="rail__beta" id="betaCaption"><b>BETA</b> -- default OFF, toggled in Settings &gt; BETA features</div>
+
+      <!-- urgency-sort readout: position encodes severity, so no legend is needed at the rail -->
+      <div class="rail__sortby" id="sortBy">
+        <span aria-hidden="true">&darr;</span>
+        sorted by <b>health urgency</b> -- sickest first
+      </div>
+
+      <div class="rail__lanes" id="lanes" role="list"><!-- lanes injected by script, urgency-sorted --></div>
+
+      <footer class="rail__foot">
+        <span class="rail__self-dot" aria-hidden="true"></span>
+        <span id="footText">1 self row excluded (polarity filter)</span>
+      </footer>
+    </nav>
+
+    <!-- ---- design notes ---- -->
+    <div class="notes">
+      <div class="card">
+        <h3>The glance + the one click (mid-afternoon, three quiet lanes)</h3>
+        <p>Three background sessions are humming; the dashboard is ambient glass on your second monitor.
+          One that was mid-refactor goes quiet. WITHOUT this, you notice the quiet by chance, then
+          reconstruct it across four panes: <code>/api/sessions</code> (last move),
+          <code>/api/decisions</code> (was the last verdict a BLOCK?), <code>/api/lifecycle/jobs</code>
+          (still a job open?), <code>/api/hitl/pending</code> (waiting on YOU?). Four panes, a mental
+          diff, a guess -- the constant tax of not being able to trust the calm.</p>
+        <p>WITH it ON, the rail RE-SORTS and the sick lane jumps to the top wearing its literal word.
+          <b>GLANCE</b>: your eye lands on the top lane, reads <b>STALLED</b> (or BLOCKED) -- no scroll.
+          <b>CLICK</b>: on the STALLED lane, one "Worth waiting?" button fires the async classifier;
+          a beat later the lane resolves to a paired <b>LIVE</b> ("leave it -- work in progress") or
+          <b>DEAD</b> ("archive or move focus") chip. The 7-step UC-01 collapses to &lt;30s.</p>
+        <p style="margin-bottom:0"><b>Try it:</b> the top STALLED lane resolves LIVE, the SLOW lane below
+          it resolves DEAD, and one is wired to the error-degrade path -- click each "Worth waiting?".</p>
+      </div>
+
+      <div class="card">
+        <h3>5-state paired label + color badge (M4 -- color is never the only channel)</h3>
+        <div class="legend">
+          <div class="legend__row">
+            <span class="health health--blocked"><span class="health__dot" aria-hidden="true"></span>BLOCKED</span>
+            <span class="legend__why">red, 2px -- <code>governance_negative_regression</code> in the last 2min</span>
+          </div>
+          <div class="legend__row">
+            <span class="health health--attention"><span class="health__dot" aria-hidden="true"></span>ATTENTION 2</span>
+            <span class="legend__why">amber -- <code>pending_hitl_count &gt; 0</code> (count inline)</span>
+          </div>
+          <div class="legend__row">
+            <span class="health health--slow"><span class="health__dot" aria-hidden="true"></span>SLOW</span>
+            <span class="legend__why">amber-dim -- GUIDE/INTERVENE &gt;50% rolling 10min</span>
+          </div>
+          <div class="legend__row">
+            <span class="health health--stalled"><span class="health__dot" aria-hidden="true"></span>STALLED</span>
+            <span class="legend__why">slate-cool (NEW token) -- no message &gt;5min. Absence-of-signal, not danger.</span>
+          </div>
+          <div class="legend__row">
+            <span class="health health--healthy"><span class="health__dot" aria-hidden="true"></span>HEALTHY</span>
+            <span class="legend__why">green -- active, no open actions</span>
+          </div>
+        </div>
+        <p style="margin-top:10px;margin-bottom:8px">The "Worth waiting?" result chip is itself paired:</p>
+        <div class="legend">
+          <div class="legend__row">
+            <span class="verdict verdict--live"><span class="verdict__dot" aria-hidden="true"></span>LIVE</span>
+            <span class="legend__why">green -- open job + recent command; worth waiting</span>
+          </div>
+          <div class="legend__row">
+            <span class="verdict verdict--dead"><span class="verdict__dot" aria-hidden="true"></span>DEAD</span>
+            <span class="legend__why">slate (NOT red) -- terminal state, no activity. Dead is a fact, not an error.</span>
+          </div>
+          <div class="legend__row">
+            <span class="verdict verdict--error"><span class="verdict__dot" aria-hidden="true"></span>UNAVAILABLE</span>
+            <span class="legend__why">violet -- classifier failed; "check manually". Never silently reads as live/dead.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Why position is the third, color-free channel</h3>
+        <p>The urgency SORT is the hierarchy: the worst <code>health_signal</code> is simply highest, so a
+          colorblind operator gets the full signal from ORDER + WORD alone -- color removed entirely and
+          the UI still works (the strongest possible M5 compliance). The rail stays calm slate; the ONLY
+          saturated surface is the single top lane when something is BLOCKED. No card grid, no
+          dashboard-of-meters.</p>
+      </div>
+
+      <div class="card">
+        <h3>Calm + safety contract</h3>
+        <ul>
+          <li>The classifier is strictly OPERATOR-triggered and read-only-advisory -- it NEVER
+            auto-foregrounds or pulses (M2). It spends a Sonnet call only when the human clicks. The lone
+            permitted foreground stays reserved for the real escalation stream.</li>
+          <li>The verdict resolves IN-PLACE in the lane (no modal, no focus steal) -- monitor-first.</li>
+          <li>Read-only endpoints: <code>GET /digest</code>, <code>GET /sessions/digest</code>,
+            <code>POST</code> + <code>GET /health-check</code>. NO new bus envelope, NO new table, NO
+            governance-flow mutation. The async classifier uses the existing <code>cli_pool</code> public
+            send seam without modifying it (<code>frozenTouch=false</code>, pending the amendment).</li>
+          <li>G2 polarity: the server excludes SM-self by <code>project_slug</code> +
+            <code>session_id</code>; <code>excluded_self</code> is surfaced in the payload and the rail
+            footer. No SM-own lane is ever constructed.</li>
+          <li>M16: every lane identity is rendered FROM DATA (<code>project_slug</code>) -- placeholder
+            names only, no monitored-project vocabulary.</li>
+          <li>Flag OFF =&gt; zero pollers, the rail falls back to its default started-at order and #32's
+            badge (if #32 is on). Flip the switch above to see it collapse.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Keyboard path (M17)</h3>
+        <ul>
+          <li>Each lane is a real <code>&lt;button&gt;</code> -- <kbd>Tab</kbd> to it,
+            <kbd>Enter</kbd> / <kbd>Space</kbd> selects.</li>
+          <li>The "Worth waiting?" control is a SEPARATE focusable <code>&lt;button&gt;</code> in the same
+            lane. Tab order: <b>lane -&gt; classify -&gt; expand</b>.</li>
+          <li>2px amber focus ring offset 2px on every interactive element, matching the rail.</li>
+          <li>Reduced motion: the classifying spinner degrades to a static "classifying..." text; no lane
+            transition animates.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p class="sr-only" id="liveStatus" aria-live="polite"></p>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // -- fixed "now" so ages render deterministically (mirrors #32's MOCK_NOW convention) --
+  var NOW = 1749635802; // epoch seconds (2026-06-11T09:16:42Z)
+
+  // ===========================================================================
+  // MOCK PAYLOAD -- GET /api/sessions/digest -> already URGENCY-SORTED (blocked
+  // first). Mirrors the vetted mockDataSpec DigestRow shape EXACTLY. All
+  // identities are generic placeholders; NO monitored-project vocabulary; NO
+  // SM-own id (G2). 6 lanes: 1 BLOCKED + 1 ATTENTION-REQUIRED + 1 SLOW +
+  // 1 STALLED + 2 HEALTHY. health_signal is SERVER-computed (shown verbatim).
+  // ===========================================================================
+  var ROWS = [
+    { session_id: "sess-alpha", project_slug: "session-alpha", state: "active",
+      last_message_ts: NOW - 38, message_count: 612, decision_count: 263,
+      pending_hitl_count: 0, lifecycle_job_count: 2, latest_action: "BLOCK",
+      health_signal: "blocked", signal_reason: "negative regression 38s ago" },
+
+    { session_id: "sess-bravo", project_slug: "session-bravo", state: "active",
+      last_message_ts: NOW - 22, message_count: 441, decision_count: 141,
+      pending_hitl_count: 2, lifecycle_job_count: 1, latest_action: "L3",
+      health_signal: "attention-required", signal_reason: "HITL waiting on operator" },
+
+    { session_id: "sess-charlie", project_slug: "session-charlie", state: "active",
+      last_message_ts: NOW - 14, message_count: 902, decision_count: 418,
+      pending_hitl_count: 0, lifecycle_job_count: 1, latest_action: "INTERVENE",
+      health_signal: "slow", signal_reason: "GUIDE/INTERVENE 63% over 10m" },
+
+    { session_id: "sess-delta", project_slug: "session-delta", state: "stalled",
+      last_message_ts: NOW - 372, message_count: 188, decision_count: 54,
+      pending_hitl_count: 0, lifecycle_job_count: 1, latest_action: "ALLOW",
+      health_signal: "stalled", signal_reason: "no message 6m12s" },
+
+    { session_id: "sess-echo", project_slug: "session-echo", state: "active",
+      last_message_ts: NOW - 8, message_count: 1204, decision_count: 502,
+      pending_hitl_count: 0, lifecycle_job_count: 1, latest_action: "ALLOW",
+      health_signal: "healthy", signal_reason: "active, no open actions" },
+
+    { session_id: "sess-foxtrot", project_slug: "session-foxtrot", state: "active",
+      last_message_ts: NOW - 3, message_count: 77, decision_count: 19,
+      pending_hitl_count: 0, lifecycle_job_count: 1, latest_action: "ALLOW",
+      health_signal: "healthy", signal_reason: "active, no open actions" }
+  ];
+  var EXCLUDED_SELF = 1;
+
+  // POST then GET /api/sessions/{id}/health-check -> the classifier result.
+  // Keyed by session_id. LIVE for the STALLED lane (delta), DEAD for the SLOW
+  // lane (charlie), and an error-degrade wired on one to show the safe path.
+  var HEALTH_CHECK = {
+    "sess-delta": {
+      session_id: "sess-delta", status: "complete", is_live: true, classification: "live",
+      classification_reason: "open lifecycle job + command issued 40s ago",
+      suggested_action: "leave it -- work in progress", ts: NOW
+    },
+    "sess-charlie": {
+      session_id: "sess-charlie", status: "complete", is_live: false, classification: "dead",
+      classification_reason: "terminal state, no activity 11m",
+      suggested_action: "archive or move focus", ts: NOW
+    },
+    // a third lane is deliberately wired to the error degrade so the safe path
+    // ('classifier unavailable -- check manually', never read as live/dead) is inspectable.
+    "sess-bravo": { session_id: "sess-bravo", status: "error", ts: NOW }
+  };
+
+  // urgency rank: BLOCKED first, HEALTHY last (server returns pre-sorted; we keep
+  // this map only to render the order deterministically + drive the worst-signal tally).
+  var RANK = { "blocked": 0, "attention-required": 1, "slow": 2, "stalled": 3, "healthy": 4 };
+
+  // -- 5-state paired verdict (the server-positioned classification, shown verbatim) --
+  // The WORD is the load-bearing channel; color is second; position (sort) is third.
+  function badge(row) {
+    switch (row.health_signal) {
+      case "blocked":
+        return { state: "blocked", word: "BLOCKED",
+                 aria: "blocked -- " + row.signal_reason };
+      case "attention-required":
+        return { state: "attention", word: "ATTENTION " + row.pending_hitl_count,
+                 aria: row.pending_hitl_count + " action" + (row.pending_hitl_count === 1 ? "" : "s") +
+                       " required -- " + row.signal_reason };
+      case "slow":
+        return { state: "slow", word: "SLOW", aria: "slow -- " + row.signal_reason };
+      case "stalled":
+        return { state: "stalled", word: "STALLED", aria: "stalled -- " + row.signal_reason };
+      default:
+        return { state: "healthy", word: "HEALTHY", aria: "healthy -- " + row.signal_reason };
+    }
+  }
+  function canWait(row) {
+    // the "Worth waiting?" control is offered on the ambiguous absence-of-signal states
+    return row.health_signal === "stalled" || row.health_signal === "slow";
+  }
+  function ago(ts) {
+    var s = Math.max(0, NOW - ts);
+    if (s < 60) return s + "s ago";
+    var m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return m + "m " + r + "s ago";
+    return Math.floor(m / 60) + "h ago";
+  }
+  function actClass(a) {
+    a = String(a || "").toUpperCase();
+    return a === "ALLOW" ? "act--allow" : (a === "BLOCK" ? "act--block"
+         : (a === "L3" || a === "GUIDE") ? "act--l3" : "act--l2");
+  }
+
+  // ---------------- render one lane ----------------
+  function laneEl(row) {
+    var v = badge(row);
+
+    var wrap = document.createElement("div");
+    wrap.setAttribute("role", "listitem");
+
+    var lane = document.createElement("div");
+    lane.className = "lane lane--" + v.state + (canWait(row) ? " lane--can-wait" : "");
+    lane.setAttribute("data-session-id", row.session_id);
+    lane.setAttribute("data-health-state", v.state);
+
+    // ---- main (selectable) ----
+    var laneAria = "Session " + row.project_slug + ", " + row.state + ", " + v.aria;
+    var main = document.createElement("button");
+    main.type = "button";
+    main.className = "lane__main";
+    main.setAttribute("aria-pressed", "false");
+    main.setAttribute("aria-label", laneAria);
+
+    var pip = document.createElement("span");
+    pip.className = "lane__pip lane__pip--live"; pip.setAttribute("aria-hidden", "true");
+
+    var idCol = document.createElement("span");
+    idCol.className = "lane__id";
+    var name = document.createElement("span");
+    name.className = "lane__name"; name.title = row.project_slug; name.textContent = row.project_slug;
+    var meta = document.createElement("span");
+    meta.className = "lane__meta";
+    meta.innerHTML = ago(row.last_message_ts) +
+                     " <span class=\"lane__sep\" aria-hidden=\"true\">&middot;</span> " +
+                     row.decision_count + " dec" +
+                     " <span class=\"lane__sep\" aria-hidden=\"true\">&middot;</span> " +
+                     row.lifecycle_job_count + " job" + (row.lifecycle_job_count === 1 ? "" : "s");
+    idCol.appendChild(name); idCol.appendChild(meta);
+
+    // the 5-state SessionHealthBadge -- aria-hidden (laneAria carries the verdict)
+    var chip = document.createElement("span");
+    chip.className = "health health--" + v.state;
+    chip.setAttribute("aria-hidden", "true");
+    chip.title = v.aria;
+    chip.innerHTML = "<span class=\"health__dot\" aria-hidden=\"true\"></span>" + v.word;
+
+    main.appendChild(pip); main.appendChild(idCol); main.appendChild(chip);
+
+    // ---- expand button ----
+    var exp = document.createElement("button");
+    exp.type = "button"; exp.className = "lane__expand";
+    exp.setAttribute("aria-expanded", "false");
+    exp.setAttribute("aria-controls", "detail-" + row.session_id);
+    exp.setAttribute("aria-label", "Show digest detail for " + row.project_slug);
+    var chev = document.createElement("span");
+    chev.className = "lane__chev"; chev.setAttribute("aria-hidden", "true"); chev.innerHTML = "&rsaquo;";
+    exp.appendChild(chev);
+
+    // ---- detail (digest dl) ----
+    var detail = document.createElement("div");
+    detail.className = "lane__detail"; detail.id = "detail-" + row.session_id;
+    detail.setAttribute("role", "region");
+    detail.setAttribute("aria-label", row.project_slug + " digest detail");
+    detail.innerHTML =
+      "<dl class=\"lane__dl\">" +
+        "<div class=\"lane__dlrow\"><dt>health signal</dt><dd><b>" + v.word + "</b></dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>last message</dt><dd>" + ago(row.last_message_ts) + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>messages</dt><dd>" + row.message_count + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>decisions</dt><dd><b>" + row.decision_count + "</b></dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>latest action</dt><dd><span class=\"act " + actClass(row.latest_action) +
+          "\"><span class=\"act__dot\" aria-hidden=\"true\"></span>" + row.latest_action + "</span></dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>hitl pending</dt><dd>" + row.pending_hitl_count + "</dd></div>" +
+        "<div class=\"lane__dlrow\"><dt>active jobs</dt><dd>" + row.lifecycle_job_count + "</dd></div>" +
+      "</dl>" +
+      "<p class=\"lane__reason\"><b>why:</b> " + row.signal_reason + "</p>" +
+      "<p class=\"lane__off-note\">Health digest OFF -- the rail uses its default started-at order and #32's 3-state badge.</p>";
+
+    // ---- the "Worth waiting?" classifier strip (STALLED / SLOW lanes only) ----
+    var wait = null;
+    if (canWait(row)) {
+      wait = document.createElement("div");
+      wait.className = "wait";
+
+      var btn = document.createElement("button");
+      btn.type = "button"; btn.className = "wait__btn";
+      btn.setAttribute("aria-label", "Classify whether " + row.project_slug + " is worth waiting for");
+      btn.textContent = "Worth waiting?";
+
+      var hint = document.createElement("span");
+      hint.className = "wait__hint";
+      hint.textContent = "one Sonnet call -- only when you ask";
+
+      wait.appendChild(btn); wait.appendChild(hint);
+
+      btn.addEventListener("click", function () { runHealthCheck(row, wait, btn); });
+    }
+
+    // ---- expand wiring ----
+    exp.addEventListener("click", function () {
+      var open = lane.classList.toggle("lane--open");
+      exp.setAttribute("aria-expanded", String(open));
+      chev.classList.toggle("lane__chev--open", open);
+    });
+
+    // ---- select wiring (highlights the lane; in the real app routes scope) ----
+    main.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".lane--selected"), function (l) {
+        l.classList.remove("lane--selected");
+        var m = l.querySelector(".lane__main"); if (m) m.setAttribute("aria-pressed", "false");
+      });
+      lane.classList.add("lane--selected");
+      main.setAttribute("aria-pressed", "true");
+      $("liveStatus").textContent = "Scope set to " + row.project_slug + " (" + v.word + ").";
+    });
+
+    lane.appendChild(main); lane.appendChild(exp); lane.appendChild(detail);
+    if (wait) lane.appendChild(wait);
+    wrap.appendChild(lane);
+    return wrap;
+  }
+
+  // ---------------- the async classifier (POST -> spinner -> GET poll) ----------------
+  function runHealthCheck(row, waitEl, btn) {
+    // in-flight: the button swaps to an in-place "classifying..." label (NOT a modal).
+    btn.disabled = true;
+    waitEl.innerHTML = "";
+    var spin = document.createElement("span");
+    spin.className = "wait__spin";
+    spin.innerHTML = "<span class=\"wait__spinner\" aria-hidden=\"true\"></span>classifying...";
+    waitEl.appendChild(spin);
+    $("liveStatus").textContent = "Classifying " + row.project_slug + " -- is it worth waiting for?";
+
+    // simulate the async ~10-30s round-trip (compressed to ~1.1s for the mockup)
+    setTimeout(function () {
+      var res = HEALTH_CHECK[row.session_id] || { status: "error", ts: NOW };
+      renderVerdict(row, waitEl, res);
+    }, 1100);
+  }
+
+  function renderVerdict(row, waitEl, res) {
+    waitEl.innerHTML = "";
+    var result = document.createElement("div");
+    result.className = "wait__result";
+
+    if (!res || res.status === "error") {
+      // ERROR DEGRADE -- never silently reads as live/dead.
+      var ev = document.createElement("span");
+      ev.className = "verdict verdict--error";
+      ev.setAttribute("role", "status");
+      ev.innerHTML = "<span class=\"verdict__dot\" aria-hidden=\"true\"></span>UNAVAILABLE";
+      var eline = document.createElement("span");
+      eline.className = "verdict-line";
+      eline.innerHTML = "<b>classifier unavailable</b> -- check manually";
+      result.appendChild(ev); result.appendChild(eline);
+      $("liveStatus").textContent = row.project_slug + ": classifier unavailable -- check manually.";
+    } else {
+      var live = !!res.is_live;
+      var chip = document.createElement("span");
+      chip.className = "verdict verdict--" + (live ? "live" : "dead");
+      chip.setAttribute("role", "status");
+      chip.innerHTML = "<span class=\"verdict__dot\" aria-hidden=\"true\"></span>" + (live ? "LIVE" : "DEAD");
+
+      var line = document.createElement("span");
+      line.className = "verdict-line";
+      line.innerHTML = "<b>" + (live ? "live" : "dead") + ":</b> " + res.classification_reason;
+
+      var action = document.createElement("span");
+      action.className = "verdict-action";
+      action.innerHTML = "suggested: <b>" + res.suggested_action + "</b>";
+
+      result.appendChild(chip); result.appendChild(line); result.appendChild(action);
+      $("liveStatus").textContent = row.project_slug + ": " + (live ? "LIVE" : "DEAD") +
+        " -- " + res.classification_reason + ". Suggested: " + res.suggested_action;
+    }
+
+    // a small re-run affordance, so the operator can re-ask later
+    var redo = document.createElement("button");
+    redo.type = "button"; redo.className = "wait__btn";
+    redo.style.marginLeft = "auto";
+    redo.setAttribute("aria-label", "Re-classify whether " + row.project_slug + " is worth waiting for");
+    redo.textContent = "Re-check";
+    redo.addEventListener("click", function () { runHealthCheck(row, waitEl, redo); });
+    result.appendChild(redo);
+
+    waitEl.appendChild(result);
+  }
+
+  // ---------------- render the rail (urgency-sorted) ----------------
+  function render() {
+    var host = $("lanes");
+    host.innerHTML = "";
+    var sorted = ROWS.slice().sort(function (a, b) {
+      var d = RANK[a.health_signal] - RANK[b.health_signal];
+      if (d !== 0) return d;
+      return a.last_message_ts - b.last_message_ts; // older message = sicker within a tier
+    });
+    sorted.forEach(function (row) { host.appendChild(laneEl(row)); });
+
+    // header tally = the WORST signal across lanes (paired word + count of that worst tier)
+    var worst = sorted[0];
+    var wv = badge(worst);
+    var worstCount = sorted.filter(function (r) { return r.health_signal === worst.health_signal; }).length;
+    $("railTallyTag").textContent = wv.word.replace(/\s+\d+$/, ""); // strip the inline count
+    $("railTallyNum").textContent = worstCount;
+    var tally = $("railTally");
+    tally.classList.toggle("rail__tally--blocked", worst.health_signal === "blocked");
+    tally.setAttribute("aria-label", "Worst health signal across governed sessions: " + wv.word);
+    $("footText").textContent = EXCLUDED_SELF + " self row" + (EXCLUDED_SELF === 1 ? "" : "s") +
+                                " excluded (polarity filter)";
+  }
+
+  // ---------------- flag toggle (no-op gate preview) ----------------
+  function toggleFlag() {
+    var sw = $("flagSwitch");
+    var on = sw.getAttribute("aria-checked") === "true";
+    var next = !on;
+    sw.setAttribute("aria-checked", String(next));
+    $("flagState").textContent = next ? "ON" : "OFF";
+    $("stage").classList.toggle("is-off", !next);
+    $("liveStatus").textContent = next
+      ? "session-health-digest-api ON -- the rail computes the 5-state signal, urgency-sorts, and offers the Worth-waiting classifier."
+      : "session-health-digest-api OFF -- no pollers; the rail falls back to its default started-at order and #32's badge.";
+  }
+  $("flagSwitch").addEventListener("click", toggleFlag);
+
+  // initial paint
+  render();
+})();
+</script>
+</body>
+</html>

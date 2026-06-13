@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<!--
+  cleanup-stale-sessions.html -- KingMode self-contained MOCKUP (operator sign-off gate).
+  BETA feature #7 (key: cleanup-stale-sessions): Dashboard stale session cleanup
+  (auto + manual) -- the HEAVIER variant of the sibling #46 'stale-cleanup'.
+
+  DELTA OVER #46: this is hands-off calm-away auto-purge + a forensic audit log.
+    - #46 = SOFT-delete + restore preview (reversible; no envelope; rail-FOOTER trigger).
+    - #7  = HARD-delete of message/decision/hitl rows >24h for exited NON-SM sessions,
+            an opt-in daily 02:00 UTC auto-cleanup scheduler, a cleanup_event bus
+            envelope, and a cleanup_log audit table. Surfaced via a TOP BANNER strip
+            (not a rail footer) so it reads on first glance after returning from away.
+
+  STATUS: approvable UI / build GATED on an ADR-18 amendment -- cleanup_event is a
+  NEW FROZEN bus envelope kind (governance_decision 2026-05-12 precedent), to be minted
+  metadata-only with an optional-fields constraint, with same-PR cassette_record.py +
+  soak_driver.py coverage (NEW BUS ENVELOPE RULE). See the amber footnote at the bottom.
+
+  This is a preview-only artifact -- no Svelte, no fetch, no real gov.db. The data is
+  the mockDataSpec mock served when gov.db is unavailable (SAMPLE DATA). All client
+  behavior (beta toggle, banner, drawer modal, paired confirm, auto-cleanup checkbox,
+  audit-log disclosure, keyboard path) is wired in inline JS so the operator can click
+  through the exact interaction before any code is written.
+
+  POLARITY ON SCREEN: SM's own session (sess-self0, project_slug streamManager) is
+  structurally 'self' -- never counted, never deleted -- and that exclusion is echoed
+  in the banner, the modal footer, and the per-session list.
+
+  Tokens are lifted VERBATIM from dashboard/ui-next/src/styles/theme.css (obsidian
+  default) so this previews the REAL palette. ASCII-only: no smart quotes, no em-dashes
+  (-- used), no box-drawing chars.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BETA -- stale session cleanup (auto + manual) (mockup)</title>
+<style>
+  /* ====================================================================
+     TOKEN LAYER -- verbatim from theme.css (obsidian theme, default).
+     Only the active theme is inlined here.
+  ==================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* fixed badge tokens (M4) -- theme-INVARIANT, always paired with a text label */
+    --badge-ar-fg:      #d97706;  --badge-ar-bg:      #fef3c7;  --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;  --badge-obs-bg:     #f1f5f9;  --badge-obs-border: #cbd5e1;
+    --badge-decided-fg: #16a34a;  --badge-decided-bg: #dcfce7;  --badge-decided-border: #86efac;
+    --badge-blocked-fg: #dc2626;  --badge-blocked-bg: #fee2e2;  --badge-blocked-border: #dc2626;
+    --badge-warn-fg:    #ea580c;  --badge-warn-bg:    #ffedd5;  --badge-warn-border: #ea580c;
+
+    /* focus-ring contract (focus.css) -- 2px solid #d97706, 2px offset */
+    --focus-ring-color: #d97706; --focus-ring-width: 2px;
+    --focus-ring-offset: 2px;    --focus-ring-style: solid;
+
+    /* spacing rhythm + radius (calm.css) */
+    --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px; --space-8: 58px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+
+    /* motion / transition tokens (calm.css) */
+    --t-calm: 180ms ease; --t-flash: 300ms ease; --motion-pulse: 1.6s;
+
+    /* min font sizes (calm.css NFR-UI-2) */
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+  }
+
+  [data-theme="obsidian"] {
+    --bg: #080a0c; --bg-card: #0c1118; --bg-row: #0e141e; --bg-row-alt: #0b1018;
+    --bg-row-hover: #131c2a; --bg-row-flash: rgba(245,158,11,0.09);
+    --border: #192030; --border-hi: rgba(245,158,11,0.25);
+    --text: #b8b098; --text-dim: #948870; --text-ui: #8a8068; --text-bright: #e8e0cc;
+    --accent: #f59e0b; --accent-dim: rgba(245,158,11,0.09); --accent-glow: rgba(245,158,11,0.35);
+    --font-h: var(--ff-system); --font-d: var(--ff-mono);
+  }
+
+  /* calm semantic aliases */
+  :root {
+    --calm-surface: var(--bg); --calm-surface-raised: var(--bg-card);
+    --calm-surface-row: var(--bg-row); --calm-surface-alt: var(--bg-row-alt);
+    --calm-surface-hover: var(--bg-row-hover);
+    --calm-hairline: var(--border); --calm-hairline-hi: var(--border-hi);
+    --calm-ink: var(--text); --calm-ink-quiet: var(--text-dim);
+    --calm-ink-chrome: var(--text-ui); --calm-ink-loud: var(--text-bright);
+    --calm-accent: var(--accent); --calm-accent-wash: var(--accent-dim);
+    --calm-accent-glow: var(--accent-glow);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--calm-surface); color: var(--calm-ink);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* universal :focus-visible ring (focus.css) */
+  :focus-visible {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  /* ====================================================================
+     PAGE SCAFFOLD -- masthead, then the gated BANNER seam (header-above-
+     frames), then a Frame-A shelf + SessionRail mock so the banner reads
+     in real context. NO new frame is introduced (M1 honoured).
+  ==================================================================== */
+  .page { min-height: 100vh; display: grid; grid-template-rows: auto auto 1fr; }
+
+  /* compact header strip (mockup requirement): title + BETA pill + inline toggle */
+  .topbar {
+    display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap;
+    padding: var(--space-4) var(--space-6);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface-raised);
+  }
+  .topbar__brand {
+    font-family: var(--font-d);
+    font-size: var(--fs-chrome); letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .topbar__title {
+    margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--calm-ink-loud);
+  }
+  .topbar__spacer { flex: 1 1 auto; }
+
+  /* BETA pill (paired text + amber -- never color alone) */
+  .beta-pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+    border-radius: 999px;
+    border: var(--hairline) solid var(--badge-ar-border);
+    background: var(--badge-ar-bg); color: var(--badge-ar-fg);
+    font-family: var(--font-d);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .beta-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--badge-ar-fg); }
+
+  /* inline on/off toggle (wired) -- mirrors SettingsDrawer .sd-switch idiom */
+  .flag {
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    font-family: var(--font-d); font-size: 11px; letter-spacing: 0.06em;
+    color: var(--calm-ink-chrome);
+  }
+  .flag__label { text-transform: uppercase; }
+  .switch { display: inline-flex; align-items: center; gap: var(--space-3); cursor: pointer; }
+  .switch input {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    border: 0; clip: rect(0 0 0 0); overflow: hidden;
+  }
+  .switch__track {
+    position: relative; width: 38px; height: 20px; border-radius: 999px;
+    background: var(--calm-surface-row);
+    border: var(--hairline) solid var(--calm-hairline);
+    transition: background var(--t-calm), border-color var(--t-calm); flex: 0 0 auto;
+  }
+  .switch__knob {
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--calm-ink-chrome);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .switch input:checked + .switch__track { background: var(--calm-accent-wash); border-color: var(--calm-hairline-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform: translateX(18px); background: var(--calm-accent); }
+  .switch input:focus-visible + .switch__track {
+    outline: var(--focus-ring-width) var(--focus-ring-style) var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+  .switch__text {
+    min-width: 3ch; font-family: var(--font-d); font-size: var(--fs-meta);
+    letter-spacing: 0.06em; color: var(--calm-ink-quiet);
+  }
+  .switch__text[data-on="true"] { color: var(--calm-accent); }
+
+  /* ====================================================================
+     BANNER STRIP -- the heart of the manual mode (CleanupStaleSessions.svelte).
+     Mounted at AppShell's header-above-frames seam, BETWEEN the masthead and
+     the Frame-A shelf. Exists ONLY while exited_count>0. A single hairline-
+     bounded NOTICE (not a saturated alert) -- monitor-first cruft is notice,
+     never alarm. The action is the ONLY interactive accent.
+  ==================================================================== */
+  .banner-seam { background: var(--calm-surface); }
+  .banner {
+    display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap;
+    margin: var(--space-4) var(--space-6) 0;
+    padding: var(--space-4) var(--space-5);
+    border: var(--hairline) solid var(--calm-hairline-hi);
+    border-radius: var(--radius-soft);
+    background: var(--calm-surface-raised);
+  }
+  .banner[hidden] { display: none; }
+  /* slate count chip "STALE 4" (paired number + label) */
+  .banner__chip {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    padding: 2px 9px; border-radius: 999px;
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: var(--hairline) solid var(--badge-obs-border);
+    font-family: var(--font-d); flex: 0 0 auto;
+  }
+  .banner__chip-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; }
+  .banner__chip-num { font-size: var(--fs-meta); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .banner__prose {
+    flex: 1 1 360px; min-width: 0;
+    font-size: var(--fs-meta); line-height: var(--lh-tight); color: var(--calm-ink);
+  }
+  .banner__prose strong { color: var(--calm-ink-loud); font-weight: 700; }
+  .banner__prose .banner__self {
+    font-family: var(--font-d); font-size: 11px; color: var(--calm-ink-chrome);
+    letter-spacing: 0.02em; white-space: nowrap;
+  }
+  .banner__spacer { flex: 1 1 auto; }
+  /* the single hairline-outline action (the ONLY interactive accent) */
+  .banner__action {
+    appearance: none; display: inline-flex; align-items: center; gap: 6px;
+    background: transparent;
+    border: var(--hairline) solid var(--calm-hairline-hi);
+    color: var(--calm-ink-loud); font-family: var(--font-d);
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 5px 12px; border-radius: 999px; cursor: pointer;
+    transition: color var(--t-calm), border-color var(--t-calm), background var(--t-calm);
+    flex: 0 0 auto;
+  }
+  .banner__action:hover { color: var(--calm-accent); border-color: var(--calm-accent); background: var(--calm-accent-wash); }
+  /* ghost dismiss "x" */
+  .banner__dismiss {
+    appearance: none; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); color: var(--calm-ink-chrome);
+    width: 26px; height: 26px; line-height: 1; font-size: 13px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .banner__dismiss:hover { color: var(--calm-ink-loud); border-color: var(--calm-hairline-hi); }
+  /* SAMPLE DATA marker (mock path) */
+  .sample-tag {
+    font-family: var(--font-d); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--badge-warn-fg); background: var(--badge-warn-bg);
+    border: var(--hairline) dashed var(--badge-warn-border);
+    padding: 1px 6px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto;
+  }
+
+  /* off-state notice (banner suppressed because flag OFF) */
+  .off-note {
+    margin: var(--space-4) var(--space-6) 0;
+    padding: var(--space-3) var(--space-5);
+    border: var(--hairline) dashed var(--calm-hairline);
+    border-radius: var(--radius-soft); background: var(--calm-surface-alt);
+    font-family: var(--font-d); font-size: var(--fs-chrome);
+    letter-spacing: 0.04em; color: var(--calm-ink-quiet);
+  }
+  .off-note[hidden] { display: none; }
+  .off-note strong { color: var(--calm-ink-chrome); }
+
+  /* ====================================================================
+     STAGE: a Frame-A shelf mock (left) + the SessionRail mock (right) so
+     the clutter the banner relieves is felt in context.
+  ==================================================================== */
+  .stage {
+    display: grid; grid-template-columns: 1fr minmax(280px, 330px);
+    gap: var(--space-6); padding: var(--space-6); align-items: start;
+  }
+  @media (max-width: 820px) { .stage { grid-template-columns: 1fr; } }
+
+  .frame-a {
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft); background: var(--calm-surface-raised);
+    padding: var(--space-6); min-height: 220px;
+  }
+  .frame-a__tag {
+    font-family: var(--font-d); font-size: var(--fs-chrome);
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .frame-a__title {
+    margin: var(--space-3) 0 var(--space-5); font-size: 16px; font-weight: 600;
+    letter-spacing: 0.02em; color: var(--calm-ink-loud);
+  }
+  .frame-a p { margin: 0 0 var(--space-4); font-size: var(--fs-meta); line-height: var(--lh-body); color: var(--calm-ink); max-width: 64ch; }
+  .frame-a code {
+    font-family: var(--font-d); font-size: 12px; color: var(--calm-accent);
+    background: var(--calm-surface-alt); padding: 1px 5px; border-radius: var(--radius-sharp);
+  }
+  .frame-a ol { margin: 0 0 var(--space-5); padding-left: 1.3em; }
+  .frame-a li { font-size: var(--fs-meta); line-height: var(--lh-body); color: var(--calm-ink); margin-bottom: 4px; }
+
+  /* legend of the paired badge scheme (M4) */
+  .legend { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
+  .legend__row { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+  .legend__txt { font-size: 12px; color: var(--calm-ink-quiet); }
+
+  /* --- SessionRail (graft from SessionRail.svelte) -- the graveyard --- */
+  .rail {
+    display: flex; flex-direction: column;
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft); overflow: hidden; max-height: 78vh;
+  }
+  .rail__head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); padding: var(--space-4) var(--space-5);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface);
+  }
+  .rail__title {
+    margin: 0; font-family: var(--font-h); font-size: var(--fs-body);
+    font-weight: 560; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--calm-ink-loud); white-space: nowrap;
+  }
+  .rail__tally {
+    display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 7px;
+    border-radius: 999px; background: var(--calm-accent-wash);
+  }
+  .rail__tally-tag {
+    font-family: var(--font-d); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .rail__tally-num {
+    font-family: var(--font-d); font-variant-numeric: tabular-nums;
+    font-size: var(--fs-meta); font-weight: 560; line-height: 1; color: var(--calm-ink-quiet);
+  }
+  .rail__lanes {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding: var(--space-4); scrollbar-gutter: stable;
+  }
+  .lane {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-left: 2px solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+    transition: opacity var(--t-calm), border-color var(--t-calm),
+                max-height 220ms ease, padding 220ms ease, margin 220ms ease;
+    overflow: hidden;
+  }
+  .lane__slug {
+    font-family: var(--font-d); font-size: var(--fs-meta);
+    color: var(--calm-ink-loud); letter-spacing: 0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lane__meta {
+    font-family: var(--font-d); font-size: 10px;
+    color: var(--calm-ink-quiet); letter-spacing: 0.04em; white-space: nowrap;
+  }
+  .lane__spacer { flex: 1 1 auto; }
+  .lane--stale { border-left-color: #2a3344; }
+  .lane--stale .lane__slug { color: var(--calm-ink-chrome); }
+  .lane--live { border-left-color: var(--calm-accent); }
+  .lane--self { border-left-style: dashed; border-left-color: #2a3344; opacity: 0.75; }
+  .lane__tag {
+    font-family: var(--font-d); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 999px;
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: var(--hairline) solid var(--badge-obs-border);
+  }
+  .lane__tag--live { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border-color: var(--badge-ar-border); }
+  .lane__tag--self { border-style: dashed; background: transparent; }
+  .lane.is-purging {
+    max-height: 0; padding-top: 0; padding-bottom: 0;
+    margin-top: 0; margin-bottom: 0; opacity: 0; border-width: 0;
+  }
+  .rail__foot {
+    flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface);
+  }
+  .rail__self {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .rail__self-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--calm-ink-quiet); opacity: 0.7; }
+
+  /* ====================================================================
+     DRAWER MODAL (CleanupStaleSessions.svelte body) -- right-anchored,
+     reuses the SettingsDrawer dialog idiom + the #46 .sc-modal geometry,
+     scoped .csc-*. Houses: paired CONFIRM, per-session list w/ paired
+     badges, auto-cleanup checkbox, and the collapsible Audit log disclosure.
+  ==================================================================== */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(8,10,12,0.55);
+    backdrop-filter: blur(1px); z-index: 80;
+  }
+  .scrim[hidden], .csc-modal[hidden] { display: none; }
+
+  .csc-modal {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: min(480px, 95vw); z-index: 81;
+    display: flex; flex-direction: column;
+    background: var(--calm-surface-raised);
+    border-left: var(--hairline) solid var(--calm-hairline-hi);
+    box-shadow: -18px 0 48px -24px rgba(0,0,0,0.7);
+    color: var(--calm-ink); font-family: var(--ff-system); overflow: hidden;
+  }
+  .csc-head {
+    flex: 0 0 auto; padding: var(--space-5) var(--space-6);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+  }
+  .csc-head-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .csc-title {
+    margin: 0; font-family: var(--font-h); font-size: 18px;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--calm-ink-loud);
+  }
+  .csc-close {
+    appearance: none; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); color: var(--calm-ink-chrome);
+    width: 28px; height: 28px; line-height: 1; font-size: 14px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .csc-close:hover { color: var(--calm-accent); border-color: var(--calm-hairline-hi); }
+  .csc-beta {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: var(--space-3);
+    padding: 2px 8px; border-radius: 999px;
+    border: var(--hairline) solid var(--badge-ar-border);
+    background: var(--badge-ar-bg); color: var(--badge-ar-fg);
+    font-family: var(--font-d); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+
+  .csc-body {
+    flex: 1 1 auto; overflow-y: auto;
+    padding: var(--space-5) var(--space-6) var(--space-7);
+    display: flex; flex-direction: column; gap: var(--space-6);
+  }
+
+  /* paired CONFIRM prose block -- the irreversibility contrast vs #46 */
+  .csc-confirm-prose {
+    padding: var(--space-4) var(--space-5);
+    border: var(--hairline) solid var(--badge-warn-border);
+    border-left: 3px solid var(--badge-warn-border);
+    border-radius: var(--radius-soft); background: var(--calm-surface-alt);
+  }
+  .csc-confirm-prose__lead {
+    margin: 0 0 4px; font-size: var(--fs-body); font-weight: 700;
+    color: var(--calm-ink-loud); line-height: var(--lh-tight);
+  }
+  .csc-confirm-prose__lead .num { color: var(--badge-warn-fg); font-variant-numeric: tabular-nums; }
+  .csc-confirm-prose__sub { margin: 0; font-size: var(--fs-meta); line-height: var(--lh-body); color: var(--calm-ink); }
+  .csc-confirm-prose__sub strong { color: var(--badge-warn-fg); }
+
+  /* preview tally line (M4: number never alone) */
+  .csc-tally {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border: var(--hairline) solid var(--calm-hairline-hi);
+    border-radius: var(--radius-soft); background: var(--calm-surface-alt);
+  }
+  .csc-tally__seg { display: inline-flex; align-items: baseline; gap: 6px; }
+  .csc-tally__num {
+    font-family: var(--font-d); font-variant-numeric: tabular-nums;
+    font-size: 22px; font-weight: 750; line-height: 1; color: var(--badge-warn-fg);
+  }
+  .csc-tally__lbl { font-family: var(--font-d); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--calm-ink-chrome); }
+  .csc-tally__verb { font-family: var(--font-d); font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-loud); }
+
+  /* per-session list */
+  .csc-slist { display: flex; flex-direction: column; gap: var(--space-3); }
+  .csc-slist__head { font-size: var(--fs-chrome); letter-spacing: 0.08em; text-transform: uppercase; color: var(--calm-ink-chrome); font-family: var(--font-d); }
+  .csc-srow {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--calm-surface-row);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp);
+  }
+  .csc-srow__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .csc-srow__slug { font-family: var(--font-d); font-size: var(--fs-meta); color: var(--calm-ink-loud); }
+  .csc-srow__when { font-family: var(--font-d); font-size: 10px; color: var(--calm-ink-quiet); letter-spacing: 0.03em; }
+  .csc-srow__spacer { flex: 1 1 auto; }
+  .csc-srow__reason { font-size: 10px; font-family: var(--font-d); margin-top: 2px; letter-spacing: 0.02em; color: var(--calm-ink-chrome); }
+  .csc-srow--protected { border-color: var(--badge-ar-border); }
+  .csc-srow--protected .csc-srow__reason { color: var(--badge-ar-fg); }
+  .csc-srow--self { border-style: dashed; opacity: 0.85; }
+
+  /* PAIRED label+color badges (M4) -- color is NEVER the sole signal.
+     Every badge = colored dot + literal text. 5 states. */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-d); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .badge__dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+  /* Eligible -> slate dot, "Eligible -- rows >24h" (the only purge-eligible state) */
+  .badge--eligible  { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .badge--eligible .badge__dot { background: var(--badge-obs-fg); }
+  /* Protected -> amber dot, "Protected -- open HITL" (absolute HITL gate, 2px) */
+  .badge--protected { color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 2px solid var(--badge-ar-border); }
+  .badge--protected .badge__dot { background: var(--badge-ar-fg); }
+  /* Grace -> dim dot, "Within grace -- <24h or restart race" (shown, not eligible) */
+  .badge--grace     { color: var(--badge-obs-fg); background: transparent; border: 1px solid var(--badge-obs-border); }
+  .badge--grace .badge__dot { background: var(--calm-ink-quiet); opacity: 0.6; }
+  /* Self -> dashed dim outline, "Self -- never governed" (structurally excluded) */
+  .badge--self      { color: var(--badge-obs-fg); background: transparent; border: 1px dashed var(--badge-obs-border); }
+  .badge--self .badge__dot { background: var(--calm-ink-quiet); opacity: 0.7; }
+  /* Purged -> green dot, "Purged" (post-action receipt; hard delete is final) */
+  .badge--purged    { color: var(--badge-decided-fg); background: var(--badge-decided-bg); border: 1px solid var(--badge-decided-border); }
+  .badge--purged .badge__dot { background: var(--badge-decided-fg); }
+
+  /* auto-cleanup checkbox field -- the calm-away set-once affordance */
+  .csc-auto {
+    padding: var(--space-4) var(--space-5);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft); background: var(--calm-surface);
+    display: flex; flex-direction: column; gap: var(--space-3);
+  }
+  .csc-auto__row { display: flex; align-items: flex-start; gap: var(--space-4); }
+  .csc-auto__box {
+    flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px;
+    accent-color: var(--calm-accent); cursor: pointer;
+  }
+  .csc-auto__txt { display: flex; flex-direction: column; gap: 3px; }
+  .csc-auto__label { font-size: var(--fs-meta); font-weight: 600; color: var(--calm-ink-loud); letter-spacing: 0.02em; cursor: pointer; }
+  .csc-auto__help { margin: 0; font-size: var(--fs-chrome); line-height: var(--lh-body); color: var(--calm-ink-quiet); max-width: 52ch; }
+  .csc-auto__help[hidden] { display: none; }
+  .csc-auto__last {
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--calm-ink-chrome);
+  }
+
+  /* collapsible Audit log disclosure (real <button aria-expanded>) */
+  .csc-disc { border: var(--hairline) solid var(--calm-hairline); border-radius: var(--radius-soft); overflow: hidden; }
+  .csc-disc__btn {
+    appearance: none; width: 100%; display: flex; align-items: center; gap: var(--space-3);
+    background: var(--calm-surface); border: 0; cursor: pointer;
+    padding: var(--space-4) var(--space-5);
+    font-family: var(--font-d); font-size: var(--fs-meta); font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--calm-ink-loud);
+    transition: background var(--t-calm);
+  }
+  .csc-disc__btn:hover { background: var(--calm-surface-hover); }
+  .csc-disc__caret { font-family: var(--font-d); color: var(--calm-ink-chrome); transition: transform var(--t-calm); }
+  .csc-disc__btn[aria-expanded="true"] .csc-disc__caret { transform: rotate(90deg); }
+  .csc-disc__count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--calm-ink-chrome); font-weight: 400; }
+  .csc-disc__panel { padding: var(--space-4) var(--space-5); border-top: var(--hairline) solid var(--calm-hairline); background: var(--calm-surface-alt); }
+  .csc-disc__panel[hidden] { display: none; }
+  .csc-logrow {
+    display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-4);
+    align-items: baseline; padding: var(--space-2) 0;
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    font-family: var(--font-d); font-size: 11px;
+  }
+  .csc-logrow:last-child { border-bottom: 0; }
+  .csc-logrow__action { letter-spacing: 0.04em; }
+  .csc-logrow__action--manual { color: var(--calm-ink-loud); }
+  .csc-logrow__action--auto   { color: var(--calm-accent); }
+  .csc-logrow__meta { color: var(--calm-ink-quiet); font-variant-numeric: tabular-nums; }
+  .csc-logrow__ts { color: var(--calm-ink-chrome); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+  /* modal footer: self-exclude echo (polarity on-screen) + action bar */
+  .csc-foot {
+    flex: 0 0 auto; border-top: var(--hairline) solid var(--calm-hairline);
+    padding: var(--space-4) var(--space-6);
+    display: flex; flex-direction: column; gap: var(--space-4);
+    background: var(--calm-surface);
+  }
+  .csc-self {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-d); font-size: 10px; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--calm-ink-chrome);
+  }
+  .csc-self code { color: var(--calm-ink-quiet); background: transparent; }
+  .csc-actionbar { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-4); }
+  .csc-actionbar__spacer { flex: 1 1 auto; }
+  .btn-cancel {
+    appearance: none; background: transparent;
+    border: var(--hairline) solid var(--calm-hairline);
+    color: var(--calm-ink-chrome); font-family: var(--ff-system);
+    font-size: var(--fs-meta); font-weight: 600; letter-spacing: 0.04em;
+    padding: var(--space-3) var(--space-5); border-radius: var(--radius-sharp); cursor: pointer;
+    transition: color var(--t-calm), border-color var(--t-calm);
+  }
+  .btn-cancel:hover { color: var(--calm-ink-loud); border-color: var(--calm-hairline-hi); }
+  /* CONFIRM -- the ONLY saturated control. Deliberate AMBER warn fill because,
+     unlike #46, this IS irreversible -- language is "Purge rows", not "Archive". */
+  .btn-confirm {
+    appearance: none; background: var(--badge-warn-fg);
+    border: var(--hairline) solid var(--badge-warn-fg);
+    color: #1a1206; font-family: var(--ff-system);
+    font-size: var(--fs-meta); font-weight: 750; letter-spacing: 0.04em;
+    padding: var(--space-3) var(--space-5); border-radius: var(--radius-sharp); cursor: pointer;
+    transition: filter var(--t-calm);
+  }
+  .btn-confirm:hover { filter: brightness(1.08); }
+  .btn-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* post-confirm receipt line (aria-live) */
+  .csc-receipt { font-family: var(--font-d); font-size: var(--fs-meta); color: var(--badge-decided-fg); letter-spacing: 0.02em; }
+  .csc-receipt[hidden] { display: none; }
+
+  /* the amber build-gated footnote (mockup requirement) */
+  .gatenote {
+    margin: var(--space-6); padding: var(--space-4) var(--space-5);
+    border: var(--hairline) dashed var(--badge-ar-border);
+    border-radius: var(--radius-soft); background: var(--badge-ar-bg);
+    color: #6b4a08; font-size: 12px; line-height: var(--lh-body);
+  }
+  .gatenote strong { color: var(--badge-ar-fg); }
+  .gatenote code { font-family: var(--font-d); background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 2px; }
+
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    border: 0; clip: rect(0 0 0 0); overflow: hidden;
+  }
+
+  /* reduced-motion: suppress the lane collapse + transitions */
+  @media (prefers-reduced-motion: reduce) {
+    .lane, .switch__knob, .banner__action, .csc-disc__caret { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============ COMPACT HEADER STRIP (mockup requirement) ============ -->
+  <header class="topbar">
+    <span class="topbar__brand">StreamManager // operator monitor</span>
+    <h1 class="topbar__title">Stale session cleanup (auto + manual)</h1>
+    <span class="beta-pill"><span class="beta-pill__dot" aria-hidden="true"></span>BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    <span class="topbar__spacer"></span>
+    <!-- inline on/off toggle (wired, client-side only) so the gated nature is visible -->
+    <span class="flag">
+      <span class="flag__label" id="flag-lbl">cleanup-stale-sessions</span>
+      <label class="switch" title="Beta flag: cleanup-stale-sessions">
+        <input id="beta-toggle" type="checkbox" checked aria-labelledby="flag-lbl" />
+        <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        <span class="switch__text" id="flag-state" data-on="true">ON</span>
+      </label>
+    </span>
+  </header>
+
+  <!-- ============ BANNER SEAM (header-above-frames; NOT a new frame) ============ -->
+  <div class="banner-seam">
+    <!-- exists ONLY while exited_count>0 AND flag ON; renders NOTHING when OFF -->
+    <div class="banner" id="banner" role="region" aria-label="Stale session cleanup notice">
+      <span class="banner__chip" title="Banner-worthy exited non-SM sessions (eligible + protected); self never counted">
+        <span class="banner__chip-lbl">Stale</span>
+        <span class="banner__chip-num" id="banner-count" aria-live="polite">4</span>
+      </span>
+      <span class="banner__prose">
+        <span id="banner-prose"><strong>4 exited sessions</strong> holding <strong>433 rows</strong> older than 24h.</span>
+        <span class="banner__self" title="SM's own session is structurally invisible to cleanup">SM-self excluded.</span>
+      </span>
+      <span class="sample-tag" title="Live gov.db unavailable -- mockDataSpec served; cleanup is client-side only">SAMPLE DATA</span>
+      <span class="banner__spacer"></span>
+      <button id="banner-action" type="button" class="banner__action"
+              aria-haspopup="dialog" aria-controls="csc-modal"
+              title="Review and hard-delete stale rows for exited non-SM sessions">
+        Clean stale sessions
+      </button>
+      <button id="banner-dismiss" type="button" class="banner__dismiss" aria-label="Dismiss stale session notice">
+        <span aria-hidden="true">x</span>
+      </button>
+    </div>
+
+    <!-- shown only when the flag is OFF: proves the component renders NOTHING -->
+    <div class="off-note" id="off-note" hidden role="note">
+      <strong>cleanup-stale-sessions OFF.</strong> The component renders nothing and
+      registers no poller / SSE / timer / fetch. Flip the toggle above (or Settings &gt;
+      BETA features) to ON to surface the banner.
+    </div>
+  </div>
+
+  <!-- ============ STAGE: Frame-A explainer (left) + SessionRail (right) ============ -->
+  <div class="stage">
+
+    <!-- ---- Frame-A shelf mock: explainer of the heavier variant ---- -->
+    <section class="frame-a" aria-label="How this beta feature works">
+      <span class="frame-a__tag">Frame A // live reading</span>
+      <h2 class="frame-a__title">Reclaim a lean, trustworthy SessionRail -- without hand-written SQL</h2>
+      <p>
+        Over a long day the rail accretes dead non-SM lanes -- exited <code>claude -p</code>
+        runs, crashed PIDs, one-off probes -- that crowd the calm rail and dilute the
+        <code>ACTIVE</code> tally. Today the only purge is to alt-tab to a terminal and
+        hand-write <code>DELETE</code> against gov.db: irreversible, scary, and a context
+        switch out of the monitor.
+      </p>
+      <p>This BETA is the HEAVIER sibling of <code>stale-cleanup</code> (#46). The honest delta is two things #46 does not do:</p>
+      <ol>
+        <li><strong>Hands-off calm-away auto-purge.</strong> Tick <code>Enable daily cleanup at 02:00 UTC</code> once; the rail purges itself overnight and you never reach for it again.</li>
+        <li><strong>A forensic audit log.</strong> Every deletion writes a <code>cleanup_log</code> row + a <code>cleanup_event</code> -- proof of WHAT was removed and WHEN.</li>
+      </ol>
+      <p style="margin-bottom:var(--space-3)">
+        Manual mode is glance -&gt; 1 click: the banner above surfaces when &gt;0 exited
+        sessions are &gt;=30 min stale. Unlike #46's reversible soft-delete, this
+        <strong>hard-deletes</strong> message / decision / hitl rows &gt;24h -- the confirm
+        copy says so plainly so you never confuse the two BETAs.
+      </p>
+
+      <h2 class="frame-a__title" style="font-size:14px; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:var(--space-3)">Paired label + color badge scheme (ADR-18 M4)</h2>
+      <p style="margin-bottom:var(--space-3); font-size:12px">Every state is a text+color pair. The colored dot is decoration; the literal label carries the signal -- a color-blind operator never depends on the dot.</p>
+      <div class="legend">
+        <div class="legend__row">
+          <span class="badge badge--eligible"><span class="badge__dot" aria-hidden="true"></span>Eligible -- rows &gt;24h</span>
+          <span class="legend__txt">the only purge-eligible state</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--protected"><span class="badge__dot" aria-hidden="true"></span>Protected -- open HITL</span>
+          <span class="legend__txt">absolute HITL gate; excluded, reason in prose</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--grace"><span class="badge__dot" aria-hidden="true"></span>Within grace -- &lt;24h or restart race</span>
+          <span class="legend__txt">5-min restart-race window + 24h row-age cutoff; shown, not eligible</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+          <span class="legend__txt">SM own session; structurally excluded, echoed in footer</span>
+        </div>
+        <div class="legend__row">
+          <span class="badge badge--purged"><span class="badge__dot" aria-hidden="true"></span>Purged</span>
+          <span class="legend__txt">post-action receipt; no restore -- hard delete is final</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---- SessionRail mock: the graveyard the banner relieves ---- -->
+    <nav class="rail" aria-label="Governed sessions">
+      <header class="rail__head">
+        <h2 class="rail__title">Sessions</h2>
+        <span class="rail__tally" title="1 live governed session diluted by 4 exited non-SM lanes">
+          <span class="rail__tally-tag">ACTIVE</span>
+          <span class="rail__tally-num" id="active-num">1</span>
+        </span>
+      </header>
+
+      <div class="rail__lanes" role="list" id="rail-lanes">
+        <!-- 1 LIVE lane (the only one that matters; diluted by the graveyard) -->
+        <div role="listitem">
+          <div class="lane lane--live">
+            <span class="lane__slug">delta-stream</span>
+            <span class="lane__tag lane__tag--live">live</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">just now</span>
+          </div>
+        </div>
+        <!-- exited non-SM lanes (eligible + protected + grace) -->
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-a91f">
+            <span class="lane__slug">alpha-svc</span>
+            <span class="lane__tag">exited</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">1h 32m ago</span>
+          </div>
+        </div>
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-7c20">
+            <span class="lane__slug">beta-pipe</span>
+            <span class="lane__tag">exited</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">2h 20m ago</span>
+          </div>
+        </div>
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-de03">
+            <span class="lane__slug">gamma-batch</span>
+            <span class="lane__tag">exited</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">1h 1m ago</span>
+          </div>
+        </div>
+        <div role="listitem">
+          <div class="lane lane--stale" data-sid="sess-11bd">
+            <span class="lane__slug">delta-stream-batch</span>
+            <span class="lane__tag">exited</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">33m ago</span>
+          </div>
+        </div>
+        <!-- SM-self lane: structurally invisible to cleanup (polarity on-screen) -->
+        <div role="listitem">
+          <div class="lane lane--self" data-sid="sess-self0">
+            <span class="lane__slug">streamManager</span>
+            <span class="lane__tag lane__tag--self">self</span>
+            <span class="lane__spacer"></span>
+            <span class="lane__meta">never governed</span>
+          </div>
+        </div>
+      </div>
+
+      <footer class="rail__foot">
+        <span class="rail__self" title="StreamManager's own session (sess-self0) is never governed and never cleaned">
+          <span class="rail__self-dot" aria-hidden="true"></span>
+          self excluded
+        </span>
+      </footer>
+    </nav>
+  </div>
+
+  <!-- the amber build-gated footnote (mockup requirement) -->
+  <div class="gatenote" role="note">
+    <strong>BUILD GATED on an ADR-18 amendment.</strong> The UI approach above is
+    approvable, but the build is held: <code>cleanup_event</code> is a NEW FROZEN bus
+    envelope kind (per the <code>governance_decision</code> precedent of 2026-05-12), so
+    it must be minted <strong>metadata-only with an optional-fields constraint</strong>
+    via an ADR-18 amendment before any code lands. Same-PR mandatory (NEW BUS ENVELOPE
+    RULE): <code>tools/cassette_record.py</code> must recognize <code>cleanup_event</code>
+    in soak-replay, and <code>tools/soak_driver.py</code> must emit it under load, assert
+    <code>cleanup_log</code> rows, and assert the <code>SM_OWN_SESSION_ID</code> row is
+    NOT deleted. ADR-18 floor is otherwise met (no 4th frame -- the banner is a gated
+    child at the header-above-frames seam; escalation-only foreground; paired label+color
+    badges; absolute HITL gate via PROTECTED exclusion; domain-agnostic invented slugs;
+    a11y axe gate; self-exclude polarity on-screen). Approve the UI to unblock amendment drafting.
+  </div>
+
+</div>
+
+<!-- ====================================================================
+     DRAWER MODAL: CleanupStaleSessions.svelte body (paired confirm).
+     Hidden until the banner action fires. role=dialog, aria-modal, focus
+     trap, Escape-to-close, focus restored to the banner action on close.
+     CONFIRM is NOT default-focused (prevents an accidental Enter purge).
+==================================================================== -->
+<div class="scrim" id="scrim" hidden></div>
+<div class="csc-modal" id="csc-modal" role="dialog" aria-modal="true"
+     aria-labelledby="csc-title" tabindex="-1" hidden>
+
+  <header class="csc-head">
+    <div class="csc-head-row">
+      <h2 class="csc-title" id="csc-title">Clean stale sessions</h2>
+      <button type="button" class="csc-close" id="csc-close" aria-label="Close cleanup window">
+        <span aria-hidden="true">x</span>
+      </button>
+    </div>
+    <span class="csc-beta" id="csc-beta">BETA -- default OFF, toggled in Settings &gt; BETA features -- SAMPLE DATA</span>
+  </header>
+
+  <div class="csc-body" id="csc-body" tabindex="-1">
+
+    <!-- PAIRED CONFIRM PROSE -- the irreversibility contrast vs #46 -->
+    <div class="csc-confirm-prose">
+      <p class="csc-confirm-prose__lead">
+        Hard-delete <span class="num" id="cp-rows">433</span> rows from
+        <span class="num" id="cp-sess">2</span> sessions?
+      </p>
+      <p class="csc-confirm-prose__sub">
+        This is <strong>irreversible</strong> -- there is no restore. (Reversible
+        soft-delete with a restore preview is the other BETA, <code style="font-family:var(--font-d)">stale-cleanup</code> #46.)
+        Only message / decision / hitl rows older than 24h for exited non-SM sessions
+        are removed; the session lane itself stays until its own row ages out.
+      </p>
+    </div>
+
+    <!-- preview tally line (M4: number never alone) -->
+    <div class="csc-tally" aria-live="polite">
+      <span class="csc-tally__verb" id="csc-verb">Purge</span>
+      <span class="csc-tally__seg"><span class="csc-tally__num" id="t-sessions">2</span><span class="csc-tally__lbl">sessions</span></span>
+      <span class="csc-tally__seg"><span class="csc-tally__num" id="t-rows">433</span><span class="csc-tally__lbl">rows</span></span>
+    </div>
+
+    <!-- per-session list (paired badges; self + protected + grace shown, not eligible) -->
+    <div class="csc-slist">
+      <span class="csc-slist__head">Exited non-SM sessions (<span id="match-meta">5 shown</span>)</span>
+      <div id="session-rows"><!-- populated by JS from the mock preview --></div>
+    </div>
+
+    <p class="csc-receipt" id="receipt" hidden aria-live="polite"></p>
+
+    <!-- AUTO-CLEANUP checkbox -- the calm-away set-once affordance -->
+    <div class="csc-auto">
+      <div class="csc-auto__row">
+        <input type="checkbox" class="csc-auto__box" id="auto-box" checked
+               aria-describedby="auto-help" />
+        <span class="csc-auto__txt">
+          <label class="csc-auto__label" for="auto-box">Enable daily cleanup at 02:00 UTC</label>
+          <p class="csc-auto__help" id="auto-help">
+            Fires unattended at 02:00 UTC with a 5-min restart-race grace, writes a
+            <code style="font-family:var(--font-d)">cleanup_log</code> row + a
+            <code style="font-family:var(--font-d)">cleanup_event</code>, and the next
+            morning the rail is already lean. The SM-self session and any session with an
+            open HITL row are excluded at every run.
+          </p>
+        </span>
+      </div>
+      <span class="csc-auto__last" id="auto-last">Last auto run: 2026-06-11 02:00:04 UTC -- 97 rows</span>
+    </div>
+
+    <!-- collapsible AUDIT LOG disclosure (real button aria-expanded) -->
+    <div class="csc-disc">
+      <button type="button" class="csc-disc__btn" id="disc-btn"
+              aria-expanded="false" aria-controls="disc-panel">
+        <span class="csc-disc__caret" aria-hidden="true">&gt;</span>
+        Audit log
+        <span class="csc-disc__count" id="disc-count">3 rows</span>
+      </button>
+      <div class="csc-disc__panel" id="disc-panel" hidden>
+        <div id="log-rows"><!-- populated by JS from the mock cleanup_log --></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- modal footer: self-exclude echo (polarity on-screen) + action bar -->
+  <footer class="csc-foot">
+    <span class="csc-self" title="StreamManager's own session is never eligible for cleanup">
+      <span class="badge badge--self"><span class="badge__dot" aria-hidden="true"></span>Self -- never governed</span>
+      <code>sess-self0</code>
+    </span>
+    <div class="csc-actionbar">
+      <span class="csc-actionbar__spacer"></span>
+      <button type="button" class="btn-cancel" id="btn-cancel">Cancel</button>
+      <button type="button" class="btn-confirm" id="btn-confirm">Purge rows</button>
+    </div>
+  </footer>
+</div>
+
+<script>
+/* ====================================================================
+   Mock data -- the mockDataSpec responses (gov.db unavailable -> SAMPLE DATA).
+   On the mock path cleanup is client-side only (NO POST). Domain-agnostic
+   invented slugs. Includes one SM-self row (polarity) and one open-HITL
+   protected row (HITL gate).
+==================================================================== */
+var OWN_SESSION_ID = "sess-self0";
+var SM_SLUGS = { "streamManager": true };   // BRIDGE_SM_PROJECT_SLUGS default
+var ROW_CUTOFF_HOURS = 24;                  // hard-delete row-age cutoff
+var STALE_GATE_MIN = 30;                    // last_seen >= 30 min => banner-worthy
+
+/* GET /api/sessions/exited mock */
+var EXITED = [
+  { id:"sess-a91f", project_slug:"alpha-svc",          pid:48213, state:"exited", last_seen_minutes_ago:92,  message_count:210, decision_count:71, hitl_count:0, open_hitl:0, oldest_row_hours_ago:31 },
+  { id:"sess-7c20", project_slug:"beta-pipe",          pid:48990, state:"exited", last_seen_minutes_ago:140, message_count:150, decision_count:52, hitl_count:3, open_hitl:0, oldest_row_hours_ago:40 },
+  { id:"sess-de03", project_slug:"gamma-batch",        pid:null,  state:"exited", last_seen_minutes_ago:61,  message_count:52,  decision_count:15, hitl_count:2, open_hitl:2, oldest_row_hours_ago:36 },
+  { id:"sess-11bd", project_slug:"delta-stream-batch", pid:49120, state:"exited", last_seen_minutes_ago:33,  message_count:88,  decision_count:30, hitl_count:0, open_hitl:0, oldest_row_hours_ago:12 },
+  { id:"sess-self0", project_slug:"streamManager",     pid:40001, state:"exited", last_seen_minutes_ago:200, message_count:999, decision_count:999, hitl_count:0, open_hitl:0, oldest_row_hours_ago:50 }
+];
+
+/* GET /api/sessions/cleanup/log mock (audit trail) */
+var LOG_ROWS = [
+  { id:7, session_id:"sess-a91f", action:"manual_cleanup", count_deleted:281, timestamp:"2026-06-11T14:02:09Z" },
+  { id:6, session_id:"sess-7c20", action:"manual_cleanup", count_deleted:152, timestamp:"2026-06-11T14:02:09Z" },
+  { id:5, session_id:"sess-c4e1", action:"auto_cleanup",   count_deleted:97,  timestamp:"2026-06-11T02:00:04Z" }
+];
+
+var purged = {};   // id -> true once confirmed (client-side hard-delete mock)
+
+function fmtNum(n){ return n.toLocaleString("en-US"); }
+function isSelf(s){ return s.id === OWN_SESSION_ID || SM_SLUGS[s.project_slug] === true; }
+
+function fmtAge(min){
+  if (min < 60) return min + "m ago";
+  var h = Math.floor(min/60), r = min % 60;
+  return h + "h" + (r ? " " + r + "m" : "") + " ago";
+}
+
+/* classifier -- the rule the mock exercises:
+     self      -> SM own session / slug (never counted, never deleted)
+     protected -> open_hitl>0 (absolute HITL gate)
+     grace     -> oldest_row_hours_ago < 24h OR last_seen just past 30m (restart race)
+     eligible  -> exited, stale >=30m, rows >24h, no open HITL  */
+function classify(s){
+  if (isSelf(s)) return { state:"self", eligible:false, reason:"SM own session -- structurally excluded" };
+  if (s.open_hitl > 0) return { state:"protected", eligible:false,
+    reason:"has " + s.open_hitl + " open HITL row" + (s.open_hitl===1?"":"s") + " -- protected" };
+  if (s.oldest_row_hours_ago < ROW_CUTOFF_HOURS)
+    return { state:"grace", eligible:false, reason:"oldest row " + s.oldest_row_hours_ago + "h < 24h cutoff -- within grace" };
+  return { state:"eligible", eligible:true, reason:"" };
+}
+
+var BADGE = {
+  eligible:  { cls:"badge--eligible",  label:"Eligible -- rows >24h" },
+  protected: { cls:"badge--protected", label:"Protected -- open HITL" },
+  grace:     { cls:"badge--grace",     label:"Within grace -- <24h or restart race" },
+  self:      { cls:"badge--self",      label:"Self -- never governed" },
+  purged:    { cls:"badge--purged",    label:"Purged" }
+};
+
+/* rows hard-deleted for an eligible session = msgs + decisions + hitl older than 24h.
+   The mock approximates "older than 24h" as the full count for a >24h-oldest session. */
+function deletableRows(s){ return s.message_count + s.decision_count + s.hitl_count; }
+
+/* ---- banner: count = eligible + protected non-self exited (self never counted) ---- */
+function bannerStats(){
+  var count = 0, rows = 0, eligibleSess = 0, eligibleRows = 0;
+  EXITED.forEach(function(s){
+    var c = classify(s);
+    if (c.state === "self") return;           // self never counted
+    count++;                                   // banner-worthy = eligible+protected+grace non-self
+    if (c.eligible && !purged[s.id]) { eligibleSess++; eligibleRows += deletableRows(s); }
+  });
+  return { count: count, eligibleSess: eligibleSess, eligibleRows: eligibleRows };
+}
+
+/* ---- render the banner prose + chip from the live mock ---- */
+function renderBanner(){
+  var on = betaOn();
+  var dismissed = banner.getAttribute("data-dismissed") === "true";
+  var st = bannerStats();
+
+  // off OR no banner-worthy sessions OR dismissed => banner renders nothing
+  var showBanner = on && st.count > 0 && !dismissed;
+  banner.hidden = !showBanner;
+  document.getElementById("off-note").hidden = on;
+
+  document.getElementById("banner-count").textContent = String(st.count);
+  document.getElementById("banner-prose").innerHTML =
+    "<strong>" + st.count + " exited sessions</strong> holding <strong>" +
+    fmtNum(st.eligibleRows) + " rows</strong> older than 24h.";
+}
+
+/* ---- render the per-session list + recompute the paired tally ---- */
+function renderPreview(){
+  var rowsEl = document.getElementById("session-rows");
+  rowsEl.innerHTML = "";
+  var nSess = 0, nRows = 0, shown = 0;
+
+  EXITED.forEach(function(s){
+    var c = classify(s);
+    shown++;
+    var isPurged = !!purged[s.id];
+    if (c.eligible && !isPurged) { nSess++; nRows += deletableRows(s); }
+
+    var badgeKey = isPurged ? "purged" : c.state;
+    var b = BADGE[badgeKey];
+
+    var row = document.createElement("div");
+    row.className = "csc-srow"
+      + (c.state === "protected" ? " csc-srow--protected" : "")
+      + (c.state === "self" ? " csc-srow--self" : "");
+
+    var main = document.createElement("div");
+    main.className = "csc-srow__main";
+    var slug = document.createElement("span");
+    slug.className = "csc-srow__slug"; slug.textContent = s.project_slug;
+    var when = document.createElement("span");
+    when.className = "csc-srow__when";
+    when.textContent = "exited " + fmtAge(s.last_seen_minutes_ago) + " // "
+      + fmtNum(s.message_count) + " msgs, " + fmtNum(s.decision_count) + " decisions"
+      + (s.hitl_count ? ", " + s.hitl_count + " hitl" : "");
+    main.appendChild(slug); main.appendChild(when);
+    if (!c.eligible && c.reason){
+      var reason = document.createElement("span");
+      reason.className = "csc-srow__reason"; reason.textContent = c.reason;
+      main.appendChild(reason);
+    }
+    row.appendChild(main);
+
+    var spacer = document.createElement("span");
+    spacer.className = "csc-srow__spacer"; row.appendChild(spacer);
+
+    var badge = document.createElement("span");
+    badge.className = "badge " + b.cls;
+    var dot = document.createElement("span"); dot.className = "badge__dot"; dot.setAttribute("aria-hidden","true");
+    badge.appendChild(dot);
+    badge.appendChild(document.createTextNode(b.label));
+    row.appendChild(badge);
+
+    rowsEl.appendChild(row);
+  });
+
+  document.getElementById("t-sessions").textContent = String(nSess);
+  document.getElementById("t-rows").textContent = fmtNum(nRows);
+  document.getElementById("cp-sess").textContent = String(nSess);
+  document.getElementById("cp-rows").textContent = fmtNum(nRows);
+  document.getElementById("match-meta").textContent = shown + " shown";
+
+  // disable CONFIRM when nothing eligible remains (no auto-fire ever)
+  document.getElementById("btn-confirm").disabled = (nSess === 0);
+
+  renderBanner();
+  syncRail();
+}
+
+/* ---- the rail: reflect purge into the lanes (self lane never purges) ---- */
+function syncRail(){
+  EXITED.forEach(function(s){
+    var lane = document.querySelector('.lane[data-sid="' + s.id + '"]');
+    if (!lane) return;
+    if (isSelf(s)) { lane.parentElement.style.display = ""; return; } // self always stays
+    lane.parentElement.style.display = purged[s.id] ? "none" : "";
+  });
+}
+
+/* ---- audit log render ---- */
+function renderLog(){
+  var el = document.getElementById("log-rows");
+  el.innerHTML = "";
+  LOG_ROWS.forEach(function(r){
+    var manual = r.action === "manual_cleanup";
+    var row = document.createElement("div");
+    row.className = "csc-logrow";
+
+    var act = document.createElement("span");
+    act.className = "csc-logrow__action " + (manual ? "csc-logrow__action--manual" : "csc-logrow__action--auto");
+    act.textContent = manual ? "manual" : "auto";
+
+    var meta = document.createElement("span");
+    meta.className = "csc-logrow__meta";
+    meta.textContent = r.session_id + " -- " + fmtNum(r.count_deleted) + " rows";
+
+    var ts = document.createElement("span");
+    ts.className = "csc-logrow__ts";
+    ts.textContent = r.timestamp.replace("T", " ").replace("Z", " UTC");
+
+    row.appendChild(act); row.appendChild(meta); row.appendChild(ts);
+    el.appendChild(row);
+  });
+  document.getElementById("disc-count").textContent = LOG_ROWS.length + " rows";
+}
+
+/* ---- confirm = hard-delete the eligible rows (mock; client-side only) ---- */
+function onConfirm(){
+  var ids = [], total = 0;
+  EXITED.forEach(function(s){
+    var c = classify(s);
+    if (c.eligible && !purged[s.id]){ purged[s.id] = true; ids.push(s.id); total += deletableRows(s); }
+  });
+  if (!ids.length) return;
+
+  // prepend a new manual_cleanup log row per purged session (forensic trail)
+  var nextId = LOG_ROWS.length ? Math.max.apply(null, LOG_ROWS.map(function(r){return r.id;})) + 1 : 1;
+  ids.slice().reverse().forEach(function(id){
+    var s = EXITED.filter(function(x){ return x.id === id; })[0];
+    LOG_ROWS.unshift({ id: nextId++, session_id: id, action: "manual_cleanup",
+                       count_deleted: deletableRows(s), timestamp: "2026-06-11T14:02:09Z" });
+  });
+
+  var receipt = document.getElementById("receipt");
+  receipt.hidden = false;
+  receipt.textContent = "Purged " + fmtNum(total) + " rows from " + ids.length
+    + " sessions -- cleanup_log written, cleanup_event emitted. SM-self + protected skipped. Hard delete is final.";
+  document.getElementById("csc-verb").textContent = "Purged";
+
+  renderLog();
+  renderPreview();
+}
+
+/* ====================================================================
+   Beta flag toggle (wired, client-side only) -- gated nature visible.
+==================================================================== */
+function betaOn(){ return document.getElementById("beta-toggle").checked; }
+
+document.getElementById("beta-toggle").addEventListener("change", function(){
+  document.getElementById("flag-state").textContent = this.checked ? "ON" : "OFF";
+  document.getElementById("flag-state").setAttribute("data-on", String(this.checked));
+  if (!this.checked) closeModal();
+  renderBanner();
+});
+
+/* banner action -> open modal; dismiss -> hide banner this session */
+document.getElementById("banner-dismiss").addEventListener("click", function(){
+  banner.setAttribute("data-dismissed", "true");
+  renderBanner();
+});
+
+/* auto-cleanup checkbox: toggling shows the inline helper + echoes state */
+document.getElementById("auto-box").addEventListener("change", function(){
+  var help = document.getElementById("auto-help");
+  var last = document.getElementById("auto-last");
+  help.hidden = false; // helper always visible; checkbox just flips the pref
+  last.textContent = this.checked
+    ? "Daily at 02:00 UTC, 5-min restart-race grace -- last run 2026-06-11 02:00:04 UTC, 97 rows"
+    : "Auto-cleanup OFF -- no scheduled run; cleanup_config.enabled=false";
+});
+
+/* audit-log disclosure (aria-expanded toggle) */
+document.getElementById("disc-btn").addEventListener("click", function(){
+  var open = this.getAttribute("aria-expanded") === "true";
+  this.setAttribute("aria-expanded", String(!open));
+  document.getElementById("disc-panel").hidden = open;
+});
+
+/* ====================================================================
+   Modal open/close + a11y (focus trap, Escape, focus restore).
+   CONFIRM is NOT default-focused -- first focus lands on the body/list,
+   preventing an accidental Enter purge.
+==================================================================== */
+var scrim = document.getElementById("scrim");
+var modal = document.getElementById("csc-modal");
+var banner = document.getElementById("banner");
+var bannerAction = document.getElementById("banner-action");
+var prevFocus = null;
+
+function focusables(){
+  return Array.prototype.slice.call(
+    modal.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')
+  ).filter(function(el){ return el.offsetParent !== null; });
+}
+
+function openModal(){
+  prevFocus = document.activeElement;
+  document.getElementById("csc-verb").textContent = "Purge";
+  document.getElementById("receipt").hidden = true;
+  renderPreview();
+  renderLog();
+  scrim.hidden = false; modal.hidden = false;
+  // first focus = the scrollable body, NOT the confirm button (no accidental Enter purge)
+  document.getElementById("csc-body").focus();
+}
+
+function closeModal(){
+  if (modal.hidden) return;
+  scrim.hidden = true; modal.hidden = true;
+  if (prevFocus && prevFocus.focus) prevFocus.focus();
+  else if (bannerAction) bannerAction.focus();
+  prevFocus = null;
+}
+
+bannerAction.addEventListener("click", openModal);
+document.getElementById("csc-close").addEventListener("click", closeModal);
+document.getElementById("btn-cancel").addEventListener("click", closeModal);
+scrim.addEventListener("click", closeModal);
+document.getElementById("btn-confirm").addEventListener("click", onConfirm);
+
+// keyboard: Escape closes + restores focus; Tab is trapped inside the modal
+document.addEventListener("keydown", function(e){
+  if (modal.hidden) return;
+  if (e.key === "Escape"){ e.preventDefault(); closeModal(); return; }
+  if (e.key === "Tab"){
+    var f = focusables();
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || document.activeElement === modal)){ e.preventDefault(); first.focus(); }
+  }
+});
+
+// first paint
+renderBanner();
+renderLog();
+</script>
+</body>
+</html>

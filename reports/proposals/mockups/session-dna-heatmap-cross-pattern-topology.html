@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "session-dna-heatmap-cross-pattern-topology"
+  (#30: Session DNA Heatmap -- cross-session pattern topology).
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written
+  (directive #2). This previews a Frame-A composition fragment
+  (dashboard/ui-next/src/lib/components/beta/SessionDnaHeatmap.svelte, sibling to
+  VelocityHeatmap, mounted {#if $betaFlags['session-dna-heatmap']}) plus the
+  1-click SessionDnaCard drill-down. NO frame-body component is modified -- the
+  Frame A mount preserves the 3-frame INTENT per ADR-20 M6.
+
+  THE QUESTION IT ANSWERS at a glance: is this governance pattern SPREADING
+  across my sessions, ISOLATED to one, or ASYMMETRIC (hot in one, dormant in
+  another)? Today CrossSessionPatterns shows a flat de-duplicated list (hash,
+  level, occurrences, success_rate, last_seen) -- it says a pattern recurs across
+  >1 session but NOT which sessions nor the per-session confidence spread. The
+  DNA Heatmap renders that spread as a session x top-pattern matrix so a 26pp
+  confidence gap (Dev 0.78 vs Reviewer 0.52) is one glance, not a cross-tab.
+
+  Real obsidian/phosphor/paper tokens lifted VERBATIM from
+  dashboard/ui-next/src/styles/theme.css (incl. the fixed M4 paired-badge tokens
+  --badge-warn-* / --badge-ar-*). NO new color tokens introduced. NO D3 -- the
+  matrix is hand-rolled CSS + a single 1px SVG connector, mirroring the
+  EscalationHeatmap precedent (D3 is not a dependency in this stack).
+
+  ADR-18 MUSTs honored in this mockup:
+    M4  PAIRED label+color everywhere -- every confidence CELL carries the LITERAL
+        numeric value (tabular-nums) as the load-bearing signal; the band color +
+        a one-word band label (HIGH / MEDIUM / LEARNING) are redundant
+        reinforcement. Color is never the sole channel. A text legend pairs each
+        band swatch with its written name + range.
+    M6  3-frame INTENT preserved -- this is an additive Frame A fragment ABOVE the
+        decision stream; no frame-body edit (the proposal's FrameC_Jobs edit is
+        REJECTED, see footnote). frozenTouch=false stays accurate.
+    M15/G2 self-exclude: any session whose project_slug is in the SM exclusion set
+        (BRIDGE_SM_PROJECT_SLUGS, default {streamManager}) is dropped at the SQL
+        WHERE; excluded_self is surfaced (shown + proof button).
+    M16 domain-agnostic: session identity (slug, project_slug, agent roster) +
+        pattern payload are rendered FROM DATA. No monitored-project vocabulary.
+    M17 a11y: the matrix is a real grid widget (role=grid, roving tabindex; arrow
+        keys move cell-to-cell; Enter on a row-header opens SessionDnaCard; Enter
+        on a multi-session cell highlights the whole column + aria-live announce;
+        Escape closes/clears). 2px solid accent focus ring + 2px offset. Reduced
+        motion honoured.
+    M18 post-hoc read-only; pure render over an additive read endpoint. No writes.
+
+  Self-contained: inline <style> + inline <script>. No external assets / CDNs /
+  fonts. System font stack. ASCII-only (no smart quotes, no em-dashes -- written
+  as "--", no box-drawing chars; cells are CSS/SVG, not glyphs).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session DNA Heatmap -- KingMode mockup (BETA)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    /* fixed paired-badge tokens (theme-invariant per M4 -- verbatim theme.css) */
+    --badge-ar-fg:#b45309; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-warn-fg:#9a3412; --badge-warn-bg:#ffedd5; --badge-warn-border:#ea580c;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+  }
+  /* ---- THEME TOKENS (verbatim from theme.css) ---- */
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    display:flex; min-height:100%;
+    align-items:flex-start; justify-content:center;
+    padding: 36px 20px 80px;
+  }
+  .stage { width:100%; max-width: 1100px; }
+
+  /* ============================ HEADER STRIP ============================ */
+  .legend { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    font-size:25px; color:var(--text-bright); line-height:1.05;
+  }
+  .legend p { margin:6px 0 0; font-size:13px; color:var(--text-dim); max-width:66ch; line-height:1.55; }
+  .legend .lead-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:var(--font-d); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--accent); border:1px solid var(--border-hi); border-radius:999px;
+    padding:4px 11px; background:var(--accent-dim); white-space:nowrap;
+  }
+  .beta-pill .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent-glow); }
+
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+  [data-theme="paper"] .themes button.on { color:#fffbeb; }
+
+  /* the master on/off switch (the gated nature, wired client-side) */
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; flex:0 0 auto; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border); transition:background .18s, border-color .18s; flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform .18s, background .18s;
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track { outline:2px solid var(--badge-ar-border); outline-offset:2px; }
+  .switch__text {
+    min-width:3.2ch; font-family:var(--font-d); font-size:12px; letter-spacing:.06em; font-weight:600;
+    color:var(--text-dim);
+  }
+  .switch__text[data-on="true"] { color:var(--accent); }
+
+  /* ============================ FRAME A FACSIMILE ============================ */
+  .frame {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    box-shadow: -18px 24px 60px -30px rgba(0,0,0,.7);
+    overflow:hidden;
+  }
+  .frame__head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 18px; border-bottom:1px solid var(--border); gap:14px;
+  }
+  .frame__title {
+    margin:0; font-family:var(--font-h); font-size:17px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-bright);
+  }
+  .frame__title .frame-tag {
+    font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.12em; margin-left:9px;
+  }
+  .fh-count {
+    display:inline-flex; align-items:baseline; gap:6px;
+    font-family:var(--font-d); font-size:12px; color:var(--text-dim);
+    border:1px solid var(--border); border-radius:4px; padding:3px 9px;
+  }
+  .fh-count .n { color:var(--accent); font-variant-numeric:tabular-nums; font-weight:700; }
+  .fh-count .lab { letter-spacing:.1em; text-transform:uppercase; font-size:10px; }
+
+  /* ---- the DNA fragment header: caption + the build-gate amber footnote ---- */
+  .dna-cap {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    padding:10px 18px 0;
+  }
+  .dna-cap .ttl { font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:var(--text-ui); }
+  .dna-cap .ttl b { color:var(--text-bright); }
+  .beta-anno {
+    font-family:var(--font-d); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border);
+    border-radius:3px; padding:2px 8px;
+  }
+  /* the amber "build gated on ADR-18 amendment" note required by this brief */
+  .gate-note {
+    margin:9px 18px 0; display:flex; align-items:flex-start; gap:9px;
+    font-family:var(--font-d); font-size:11px; line-height:1.5;
+    color:var(--badge-warn-fg); background:var(--badge-warn-bg); border:1px dashed var(--badge-warn-border);
+    border-radius:5px; padding:8px 11px;
+  }
+  .gate-note .lab {
+    flex:0 0 auto; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+    border-right:1px solid var(--badge-warn-border); padding-right:9px;
+  }
+
+  /* ---- the DNA matrix (SessionDnaHeatmap.svelte facsimile) ---- */
+  .dna { padding:12px 18px 16px; }
+  /* the bespoke asymmetric "strand" grid: a left session-label column + N pattern
+     columns. role=grid; sessions are ROWS, patterns are COLUMNS. */
+  .matrix {
+    display:inline-grid;
+    /* col 0 = session label/roster; cols 1..N = pattern columns */
+    gap:6px;
+    align-items:stretch;
+    position:relative;
+  }
+  /* COLUMN HEADERS: compact vertical hash chips (rotated mono label). */
+  .corner { /* top-left blank corner of the grid */ }
+  .col-h {
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+    padding:2px 0 4px;
+  }
+  .col-h .hash {
+    font-family:var(--font-d); font-size:10px; letter-spacing:.04em; color:var(--text-bright);
+    writing-mode:vertical-rl; transform:rotate(180deg); white-space:nowrap; line-height:1;
+    max-height:74px; overflow:hidden;
+  }
+  /* L-level chip pairs the level WORD with a band tone -- never color alone */
+  .lvl {
+    font-family:var(--font-d); font-size:9px; font-weight:700; letter-spacing:.05em;
+    border:1px solid var(--border); border-radius:2px; padding:1px 5px; color:var(--text-bright);
+    white-space:nowrap;
+  }
+  .lvl[data-lvl="L3"] { border-color:var(--badge-warn-border); color:var(--badge-warn-fg); background:var(--badge-warn-bg); }
+  .lvl[data-lvl="L2"] { border-color:var(--badge-ar-border); color:var(--badge-ar-fg); background:var(--badge-ar-bg); }
+
+  /* ROW HEADER: left-anchored mono slug + a thin agent-roster ribbon. */
+  .row-h {
+    display:flex; flex-direction:column; align-items:flex-start; gap:4px;
+    justify-content:center; padding:0 12px 0 6px; min-width:160px;
+    border:1px solid transparent; border-radius:5px; cursor:pointer;
+    background:transparent;
+    text-align:left;
+  }
+  .row-h:hover { background:var(--bg-row-hover); }
+  .row-h:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:5px; }
+  .row-h .slug {
+    font-family:var(--font-d); font-size:13px; color:var(--text-bright); font-weight:600; letter-spacing:.02em;
+  }
+  .row-h .proj { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.04em; }
+  .roster { display:inline-flex; gap:4px; flex-wrap:wrap; margin-top:1px; }
+  .roster .agent {
+    font-family:var(--font-d); font-size:9px; letter-spacing:.04em; text-transform:lowercase;
+    color:var(--text-ui); border:1px solid var(--border); border-radius:2px; padding:0 4px; line-height:1.5;
+  }
+  .row-h .open-hint {
+    font-family:var(--font-d); font-size:9px; color:var(--text-dim); letter-spacing:.05em; opacity:0; transition:opacity .12s;
+  }
+  .row-h:hover .open-hint, .row-h:focus-visible .open-hint { opacity:1; }
+
+  /* CONFIDENCE CELL: a small square; fill = band color, FACE = literal numeric.
+     KingMode still-water: cold/learning cells are near-empty hairline outlines;
+     only high-confidence cells gain weight, so the eye is pulled to the
+     spreading-hot patterns and nothing else earns ink. */
+  .cell {
+    position:relative;
+    width:62px; height:46px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+    border:1px solid var(--border); border-radius:5px;
+    background:var(--bg-row-alt);
+    font-family:var(--font-d); cursor:default; color:var(--text);
+    transition:box-shadow .12s ease;
+  }
+  .cell.has { cursor:pointer; }
+  .cell .val { font-size:15px; font-variant-numeric:tabular-nums; font-weight:700; letter-spacing:.01em; line-height:1; }
+  .cell .band { font-size:8px; letter-spacing:.07em; text-transform:uppercase; }
+  /* EMPTY (no occurrence): a hairline ghost, no ink. */
+  .cell.empty { background:transparent; border-style:dashed; opacity:.55; }
+  .cell.empty .val { color:var(--text-dim); font-weight:500; }
+  .cell.empty .band { color:var(--text-dim); }
+  /* LEARNING band <0.40: quiet slate, lightest, hairline only. */
+  .cell[data-band="LEARNING"] { background:var(--bg-row-alt); border-color:var(--border); }
+  .cell[data-band="LEARNING"] .val { color:var(--text); font-weight:600; }
+  .cell[data-band="LEARNING"] .band { color:var(--text-dim); }
+  /* MEDIUM band 0.40-0.69: slate-amber, mid weight. */
+  .cell[data-band="MEDIUM"] { background:var(--badge-ar-bg); border-color:var(--badge-ar-border); }
+  .cell[data-band="MEDIUM"] .val { color:#7c2d12; font-weight:700; }   /* AAA on #fef3c7 */
+  .cell[data-band="MEDIUM"] .band { color:var(--badge-ar-fg); }
+  /* HIGH band >=0.70: warn-toned amber, HEAVIEST type weight. */
+  .cell[data-band="HIGH"] { background:var(--badge-warn-bg); border-color:var(--badge-warn-border); border-width:2px; }
+  .cell[data-band="HIGH"] .val { color:#7c2d12; font-weight:800; }     /* literal numeric = the load-bearing signal, AAA on #ffedd5 */
+  .cell[data-band="HIGH"] .band { color:var(--badge-warn-fg); font-weight:700; }
+
+  /* roving-tabindex focus on a cell: 2px accent ring + 2px offset (M17). */
+  .cell:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:5px; }
+  /* a highlighted column (Enter on a multi-session cell lights every occurrence). */
+  .cell.col-lit { box-shadow:0 0 0 2px var(--accent), 0 0 14px -2px var(--accent-glow); }
+
+  /* the propagation connector: a 1px SVG path between the two brightest cells of
+     any multi-session column = the propagation vector. No chrome. */
+  .vector { position:absolute; inset:0; pointer-events:none; overflow:visible; z-index:3; }
+  .vector path { fill:none; stroke:var(--accent); stroke-width:1; opacity:.5; stroke-dasharray:3 3; }
+  .vector path.lit { opacity:1; stroke-width:1.5; stroke-dasharray:none; }
+
+  /* ISOLATED tag: a single hot cell in a cold row -- a small "contained" note. */
+  .iso-tag {
+    font-family:var(--font-d); font-size:9px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-dim); border:1px solid var(--border); border-radius:2px; padding:0 4px; margin-top:3px;
+    align-self:flex-start;
+  }
+
+  /* ---- the band legend (paired swatch + WRITTEN band name + numeric range) ---- */
+  .dna-legend {
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-top:14px;
+    font-family:var(--font-d); font-size:11px; color:var(--text-dim);
+    border-top:1px solid var(--border); padding-top:11px;
+  }
+  .dna-legend .k { display:inline-flex; align-items:center; gap:7px; }
+  .dna-legend .sw { width:13px; height:13px; border-radius:3px; flex:0 0 auto; border:1px solid var(--border); }
+  .dna-legend .sw.high { background:var(--badge-warn-bg); border:2px solid var(--badge-warn-border); }
+  .dna-legend .sw.med  { background:var(--badge-ar-bg); border-color:var(--badge-ar-border); }
+  .dna-legend .sw.learn{ background:var(--bg-row-alt); border-color:var(--border); }
+  .dna-legend .k b { color:var(--text-bright); font-weight:700; }
+  .dna-legend .vec-key { display:inline-flex; align-items:center; gap:7px; }
+  .dna-legend .vec-key svg { width:26px; height:8px; }
+  .dna-legend .mock {
+    margin-left:auto; color:var(--badge-ar-fg); letter-spacing:.06em; text-transform:uppercase;
+  }
+  /* aria-live announce target (visually quiet, never empty layout) */
+  .dna-live {
+    margin-top:8px; min-height:1.4em; font-family:var(--font-d); font-size:11px; color:var(--text-bright);
+  }
+
+  /* OFF state: the fragment renders NOTHING (no-op gate). A ghost note explains. */
+  .frame[data-beta="off"] .dna,
+  .frame[data-beta="off"] .gate-note,
+  .frame[data-beta="off"] .dna-cap .beta-anno { display:none; }
+  .dna-off {
+    display:none; margin:12px 18px 16px; font-size:12px; color:var(--text-dim); font-style:italic;
+    border:1px dashed var(--border); border-radius:5px; padding:10px 13px; line-height:1.55;
+  }
+  .frame[data-beta="off"] .dna-off { display:block; }
+  .dna-off code { font-family:var(--font-d); color:var(--text-ui); font-style:normal; }
+
+  /* ============================ SESSION DNA CARD (1-click drill-down) ====== */
+  .scrim {
+    position:fixed; inset:0; background:rgba(0,0,0,.6); display:none;
+    align-items:center; justify-content:center; padding:24px; z-index:50;
+  }
+  .scrim.on { display:flex; }
+  .card {
+    width:100%; max-width:560px; max-height:86vh; overflow:auto;
+    background:var(--bg-card); border:1px solid var(--border-hi); border-radius:9px;
+    box-shadow:0 30px 80px -28px rgba(0,0,0,.85);
+  }
+  .card__head {
+    display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+    padding:14px 18px; border-bottom:1px solid var(--border);
+  }
+  .card__head .slug { font-family:var(--font-d); font-size:16px; color:var(--text-bright); font-weight:700; }
+  .card__head .proj { font-family:var(--font-d); font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .card__head .roster { margin-top:6px; }
+  .card__close {
+    appearance:none; background:transparent; border:1px solid var(--border); color:var(--text-ui);
+    border-radius:4px; font-family:var(--font-d); font-size:12px; padding:4px 10px; cursor:pointer; flex:0 0 auto;
+  }
+  .card__close:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .card__sec { padding:14px 18px; border-bottom:1px solid var(--border); }
+  .card__sec:last-child { border-bottom:none; }
+  .card__sec h4 {
+    margin:0 0 9px; font-family:var(--font-h); font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-bright);
+  }
+  .card__sec .sub { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.04em; margin-left:8px; }
+  .plist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
+  .pitem {
+    display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;
+    padding:7px 9px; border:1px solid var(--border); border-radius:5px; background:var(--bg-row-alt);
+  }
+  .pitem .pay { font-size:12px; color:var(--text); min-width:0; }
+  .pitem .pay .h { font-family:var(--font-d); font-size:10px; color:var(--text-dim); margin-right:7px; }
+  .pitem .spread { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; }
+  /* the paired confidence chip reused inside the card (numeric + band + tone) */
+  .chip {
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:var(--font-d); font-size:11px; font-weight:700; font-variant-numeric:tabular-nums;
+    border:1px solid var(--border); border-radius:3px; padding:2px 7px; color:var(--text-bright);
+  }
+  .chip[data-band="HIGH"]     { background:var(--badge-warn-bg); border:2px solid var(--badge-warn-border); color:#7c2d12; }
+  .chip[data-band="MEDIUM"]   { background:var(--badge-ar-bg); border-color:var(--badge-ar-border); color:#7c2d12; }
+  .chip[data-band="LEARNING"] { background:var(--bg-row-alt); border-color:var(--border); color:var(--text); }
+  .chip .who { font-weight:600; color:var(--text-ui); letter-spacing:.02em; }
+  .chip .band { font-size:8px; letter-spacing:.06em; text-transform:uppercase; }
+  .verdict {
+    display:inline-flex; align-items:center; gap:6px; margin-top:6px;
+    font-family:var(--font-d); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    border-radius:3px; padding:2px 7px;
+  }
+  .verdict[data-v="spreading"] { color:var(--badge-warn-fg); background:var(--badge-warn-bg); border:1px solid var(--badge-warn-border); }
+  .verdict[data-v="isolated"]  { color:var(--text-dim); background:var(--bg-row-alt); border:1px solid var(--border); }
+  .verdict[data-v="asymmetric"]{ color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border); }
+
+  /* ============================ SETTINGS + PROOF + FOOTNOTE ================ */
+  .settings {
+    margin-top:22px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; overflow:hidden;
+  }
+  .settings__head { padding:12px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .settings__head h3 { margin:0; font-family:var(--font-h); font-size:15px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-bright); }
+  .settings__head .grp { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.1em; text-transform:uppercase; }
+  .settings__row { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:13px 18px; }
+  .settings__row .main { min-width:0; }
+  .settings__row .name { font-size:13px; font-weight:600; color:var(--text-bright); }
+  .settings__row .name .num { font-family:var(--font-d); font-size:11px; color:var(--text-dim); margin-left:7px; }
+  .settings__row .desc { font-size:12px; color:var(--text-dim); line-height:1.5; margin-top:3px; max-width:60ch; }
+
+  .self-note {
+    margin-top:12px; padding:10px 13px; border:1px solid var(--border); border-radius:5px;
+    background:var(--bg-row-alt); font-size:12px; color:var(--text-dim); line-height:1.55;
+  }
+  .self-note strong { color:var(--text-bright); }
+  .self-note code { font-family:var(--font-d); color:var(--accent); }
+  .self-note .fclear {
+    appearance:none; background:transparent; border:1px solid var(--border); color:var(--text-ui);
+    border-radius:4px; font-size:11px; padding:3px 9px; cursor:pointer; letter-spacing:.04em; font-family:var(--font-d);
+  }
+  .self-note .fclear:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .footnote { margin-top:20px; font-size:11px; color:var(--text-dim); line-height:1.65; max-width:96ch; }
+  .footnote code { font-family:var(--font-d); color:var(--text-ui); }
+  .footnote strong { color:var(--text-bright); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cell, .row-h .open-hint { transition:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <!-- ===================== HEADER STRIP ===================== -->
+    <div class="legend">
+      <div>
+        <div class="lead-row">
+          <h1>Session DNA Heatmap</h1>
+          <span class="beta-pill"><span class="dot" aria-hidden="true"></span> BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+        </div>
+        <p>Cross-session pattern topology. A bespoke session x top-pattern matrix that answers one
+           glance question -- is this governance pattern SPREADING across my sessions, ISOLATED to
+           one, or ASYMMETRIC (hot in one, dormant in another)? Each cell is a paired confidence chip:
+           the LITERAL value (e.g. 0.78) is the signal, the band color is reinforcement. Reading DOWN
+           a column = is this pattern spreading. Reading ACROSS a row = a session's pattern signature
+           ("DNA"). Click a session row or press Enter for the SessionDnaCard drill-down. Switch theme
+           to preview all three.</p>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:12px; align-items:flex-end;">
+        <label class="switch" title="Master ON/OFF -- BETA, default OFF">
+          <input type="checkbox" id="betaToggle" checked aria-label="Session DNA Heatmap BETA (currently ON)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="betaText" data-on="true">ON</span>
+        </label>
+        <div class="themes" role="group" aria-label="Theme preview">
+          <button class="on" data-theme-btn="obsidian" aria-pressed="true">Obsidian</button>
+          <button data-theme-btn="phosphor" aria-pressed="false">Phosphor</button>
+          <button data-theme-btn="paper" aria-pressed="false">Paper</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== FRAME A FACSIMILE ===================== -->
+    <div class="frame" id="frame" data-beta="on" role="region" aria-label="Monitor frame -- Interactive sessions">
+      <div class="frame__head">
+        <h2 class="frame__title">Interactive Sessions <span class="frame-tag">FRAME A</span></h2>
+        <span class="fh-count"><span class="n" id="edgeCount">2</span> <span class="lab">spreading patterns</span></span>
+      </div>
+
+      <div class="dna-cap">
+        <span class="ttl">Session DNA -- <b>cross-session pattern topology</b> (composition fragment, above the decision stream)</span>
+        <span class="beta-anno">BETA -- default OFF, toggled in Settings</span>
+      </div>
+
+      <!-- the amber build-gate footnote required by this brief -->
+      <div class="gate-note" role="note">
+        <span class="lab">Build gated</span>
+        <span>UI is approvable now -- but the build is gated on an ADR-18 amendment. The original
+          proposal (line 23) claimed to MODIFY FrameC_Jobs as a collapsible sub-pane; that is REJECTED.
+          BETA features never edit a frame-body component. This Frame A gated-fragment mount preserves
+          the 3-frame INTENT (ADR-20 M6: "arrangement is free; frame presence is not") and keeps
+          frozenTouch=false accurate. The D3 radial/chord dependency in the original is also rejected --
+          the matrix is hand-rolled SVG/CSS (EscalationHeatmap precedent, no new deps).</span>
+      </div>
+
+      <!-- THE DNA MATRIX (SessionDnaHeatmap.svelte facsimile) -->
+      <div class="dna" id="dna">
+        <div
+          class="matrix"
+          id="matrix"
+          role="grid"
+          aria-label="Session DNA heatmap. Rows are sessions, columns are governance patterns. Arrow keys move cell to cell. Enter on a session label opens its detail card. Enter on a shared-pattern cell highlights every occurrence of that pattern across sessions."
+        ></div>
+
+        <div class="dna-live" id="live" role="status" aria-live="polite"></div>
+
+        <div class="dna-legend" aria-label="Confidence band legend (paired label and color)">
+          <span class="k"><span class="sw high" aria-hidden="true"></span><b>HIGH</b> &gt;=0.70</span>
+          <span class="k"><span class="sw med" aria-hidden="true"></span><b>MEDIUM</b> 0.40--0.69</span>
+          <span class="k"><span class="sw learn" aria-hidden="true"></span><b>LEARNING</b> &lt;0.40</span>
+          <span class="vec-key"><svg viewBox="0 0 26 8" aria-hidden="true"><path d="M1 7 L25 1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><span>propagation vector</span></span>
+          <span class="mock" id="mockFlag" title="Live gov.db had no cross-session patterns -- showing a deterministic fixture so the matrix is visible and testable.">sample data</span>
+        </div>
+      </div>
+
+      <div class="dna-off">Session DNA Heatmap OFF -- the fragment renders nothing and registers no
+        poller / fetch (no-op gate <code>{#if $betaFlags['session-dna-heatmap']}</code>). The
+        3-frame body is untouched. Flip the master switch above to ON.</div>
+    </div>
+
+    <!-- ===================== SESSION DNA CARD (1-click drill-down) ===================== -->
+    <div class="scrim" id="scrim" role="presentation">
+      <div class="card" id="card" role="dialog" aria-modal="true" aria-labelledby="cardSlug" tabindex="-1">
+        <div class="card__head">
+          <div>
+            <div class="slug" id="cardSlug">--</div>
+            <div class="proj" id="cardProj">--</div>
+            <div class="roster" id="cardRoster"></div>
+          </div>
+          <button class="card__close" id="cardClose" aria-label="Close session detail (Escape)">Close (Esc)</button>
+        </div>
+        <div class="card__sec">
+          <h4>Unique to this session <span class="sub">top patterns seen ONLY here</span></h4>
+          <ul class="plist" id="cardUnique"></ul>
+        </div>
+        <div class="card__sec">
+          <h4>Shared "contagion" patterns <span class="sub">per-session confidence spread</span></h4>
+          <ul class="plist" id="cardShared"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS > BETA FEATURES (row shown ON) ===================== -->
+    <div class="settings" role="region" aria-label="Settings -- BETA features">
+      <div class="settings__head">
+        <h3>Settings &gt; BETA features</h3>
+        <span class="grp">group: Monitor</span>
+      </div>
+      <div class="settings__row">
+        <div class="main">
+          <div class="name">Session DNA Heatmap <span class="num">#30</span></div>
+          <div class="desc">Cross-session pattern topology -- see which governance patterns are spreading,
+            isolated, or asymmetric across concurrent sessions in one glance. Default OFF. When OFF the
+            fragment renders nothing and registers no fetch.</div>
+        </div>
+        <label class="switch" title="Toggle the BETA flag">
+          <input type="checkbox" id="settingsToggle" checked aria-label="Session DNA Heatmap (currently ON)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="settingsText" data-on="true">ON</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- G2 / M15 self-exclude proof -->
+    <div class="self-note">
+      <strong>Self-exclude proof (G2 polarity / M15).</strong> SM monitors NON-SM sessions only. Any
+      session whose <code>project_slug</code> is in the SM exclusion set (<code>BRIDGE_SM_PROJECT_SLUGS</code>,
+      default <code>{streamManager}</code>) is dropped at the SQL WHERE -- identical to the
+      <code>/api/escalation-timeline</code> template. The endpoint surfaces <code>excluded_self</code> as
+      a count; the SM-own session never appears as a node. The fixture below drops 1 self session.
+      <div style="margin-top:9px;">
+        <button id="proofBtn" class="fclear">Show the dropped SM-own session</button>
+        <span id="proofMsg" style="margin-left:10px; font-family:var(--font-d); font-size:11px;"></span>
+      </div>
+    </div>
+
+    <p class="footnote">
+      <strong>Footprint.</strong> Additive <code>new-read-api</code>, no FROZEN touch, no new envelope, no new table,
+      <code>frozenTouch=false</code>. One read endpoint
+      <code>GET /api/patterns/cross-session-topology?limit&amp;session_id</code> (server JOINs decisions d -&gt;
+      messages m -&gt; sessions s, groups by <code>(d.matched_hash, m.session_id)</code>, self-excludes on
+      <code>s.project_slug NOT IN BRIDGE_SM_PROJECT_SLUGS</code>, degrades-to-empty on error). Three new
+      files: <code>beta/SessionDnaHeatmap.svelte</code>, <code>beta/SessionDnaCard.svelte</code>,
+      <code>beta/SessionDnaHeatmap-data.js</code>. One registry row
+      <code>{key:'session-dna-heatmap', num:30, group:'monitor', defaultEnabled:false}</code> and one
+      <code>getCrossSessionTopology()</code> wrapper (try/catch degrade-to-empty -&gt; deterministic
+      <code>mockTopology</code> fixture, mirroring EscalationHeatmap's <code>usedMock</code>). Graph shape:
+      <code>{nodes,[edges],patterns,isolated,excluded_self}</code> -- a pattern in &gt;=2 non-SM sessions yields
+      an edge; in 1 yields an isolated node tag. Reuses the fixed paired-badge tokens
+      <code>--badge-warn-* / --badge-ar-*</code> -- no new color tokens. Every cell pairs the LITERAL numeric
+      with band color + a one-word band label; color is never the sole signal (ADR-18 M4). axe target:
+      0 serious, color-contrast PASS (numeric labels target &gt;=7:1 / AAA across all three themes).
+    </p>
+  </div>
+
+<script>
+  // ---------------------------------------------------------------------------
+  // MOCK DATA -- matches the endpoint contract in mockDataSpec EXACTLY. Returned
+  // by SessionDnaHeatmap-data.js (mockTopology) when getCrossSessionTopology()
+  // degrades to empty (fresh / ALLOW-only gov.db). used_mock is exposed for the
+  // test harness + shown in the panel foot note (mirrors EscalationHeatmap).
+  //
+  // The fixture deliberately encodes all three readings the feature exists to
+  // surface:
+  //   * h_force_push  = SPREADING / ASYMMETRIC: 0.78 (a1b2c3d4) vs 0.52 (e5f6a7b8),
+  //                     a 26pp confidence gap = the headline asymmetry.
+  //   * h_secret_echo = a second cross-session edge: 0.81 (a1b2c3d4) vs 0.44 (c9d0e1f2).
+  //   * h_wide_rm     = ISOLATED: present in one session only (0.66, e5f6a7b8).
+  //   * excluded_self = 1 -> the SM-own session was dropped at the SQL WHERE.
+  // ---------------------------------------------------------------------------
+  var TOPO = {
+    used_mock: true,
+    excluded_self: 1,
+    nodes: [
+      { id:'a1b2c3d4-...', slug:'a1b2c3d4', project_slug:'alpha-svc', agent_slugs:['build','review'] },
+      { id:'e5f6a7b8-...', slug:'e5f6a7b8', project_slug:'alpha-svc', agent_slugs:['plan'] },
+      { id:'c9d0e1f2-...', slug:'c9d0e1f2', project_slug:'beta-lib',  agent_slugs:['build'] }
+    ],
+    patterns: {
+      h_force_push:  { level:'L3', payload:'force-push to protected ref' },
+      h_secret_echo: { level:'L2', payload:'echo of credential-shaped token' },
+      h_wide_rm:     { level:'L3', payload:'recursive delete outside workspace' }
+    },
+    edges: [
+      { hash:'h_force_push',  session_a:'a1b2c3d4-...', conf_a:0.78, session_b:'e5f6a7b8-...', conf_b:0.52 },
+      { hash:'h_secret_echo', session_a:'a1b2c3d4-...', conf_a:0.81, session_b:'c9d0e1f2-...', conf_b:0.44 }
+    ],
+    isolated: [
+      { hash:'h_wide_rm', session_id:'e5f6a7b8-...', confidence:0.66 }
+    ]
+  };
+
+  // the SM-own session the endpoint DROPPED (proof only -- never rendered as a node)
+  var DROPPED_SELF = { slug:'sm-7e1d', project_slug:'streamManager', agent_slugs:['self'] };
+
+  // ---- derive the dense (session x pattern) cell grid FROM the graph shape ----
+  // Column order: edges first (by appearance), then isolated-only patterns.
+  function buildGrid(topo){
+    var patternOrder = [];
+    var seen = {};
+    topo.edges.forEach(function(e){ if (!seen[e.hash]) { seen[e.hash]=1; patternOrder.push(e.hash); } });
+    topo.isolated.forEach(function(iso){ if (!seen[iso.hash]) { seen[iso.hash]=1; patternOrder.push(iso.hash); } });
+
+    // cellConf[hash][session_id] = confidence (or undefined when absent)
+    var cellConf = {};
+    patternOrder.forEach(function(h){ cellConf[h] = {}; });
+    topo.edges.forEach(function(e){
+      cellConf[e.hash][e.session_a] = e.conf_a;
+      cellConf[e.hash][e.session_b] = e.conf_b;
+    });
+    topo.isolated.forEach(function(iso){ cellConf[iso.hash][iso.session_id] = iso.confidence; });
+
+    // which patterns are SHARED (>=2 sessions) -> spreading; the rest -> isolated
+    var sharedHashes = {};
+    patternOrder.forEach(function(h){
+      var n = Object.keys(cellConf[h]).length;
+      if (n >= 2) sharedHashes[h] = true;
+    });
+    return { patternOrder:patternOrder, cellConf:cellConf, sharedHashes:sharedHashes };
+  }
+
+  // ---- band classification (paired numeric + band word; color is reinforcement) ----
+  function bandOf(c){
+    if (c === undefined || c === null) return 'EMPTY';
+    if (c >= 0.70) return 'HIGH';
+    if (c >= 0.40) return 'MEDIUM';
+    return 'LEARNING';
+  }
+  function bandWord(b){ return b === 'EMPTY' ? 'absent' : b; }
+  function fmt(c){ return (c === undefined || c === null) ? '--' : c.toFixed(2); }
+  function shortHash(h){ return h.replace(/^h_/, '#'); }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(ch){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]; }); }
+
+  var GRID = buildGrid(TOPO);
+  var litColumn = null; // the currently highlighted shared-pattern column (hash)
+
+  // ---- render the matrix (role=grid; sessions=rows, patterns=cols) ----
+  function renderMatrix(){
+    var m = document.getElementById('matrix');
+    var nodes = TOPO.nodes;
+    var cols = GRID.patternOrder;
+
+    // grid template: [session label col] + one col per pattern
+    m.style.gridTemplateColumns = 'max-content repeat(' + cols.length + ', 62px)';
+
+    var html = '';
+    // --- header row: blank corner + the vertical hash chips ---
+    html += '<div class="corner" role="columnheader" aria-hidden="true"></div>';
+    cols.forEach(function(h){
+      var p = TOPO.patterns[h];
+      html += '<div class="col-h" role="columnheader">'
+        + '<span class="lvl" data-lvl="' + esc(p.level) + '" title="' + esc(p.payload) + '">' + esc(p.level) + '</span>'
+        + '<span class="hash" title="' + esc(p.payload) + '">' + esc(shortHash(h)) + ' ' + esc(p.payload) + '</span>'
+        + '</div>';
+    });
+
+    // --- one row per session ---
+    nodes.forEach(function(node, ri){
+      // row header = clickable session label + roster ribbon (Enter opens the card)
+      var roster = node.agent_slugs.map(function(a){ return '<span class="agent">' + esc(a) + '</span>'; }).join('');
+      html += '<button class="row-h" role="rowheader" data-node="' + esc(node.id) + '"'
+        + ' aria-label="Session ' + esc(node.slug) + ', project ' + esc(node.project_slug)
+        + ', agents ' + esc(node.agent_slugs.join(' ')) + '. Enter to open detail card.">'
+        + '<span class="slug">' + esc(node.slug) + '</span>'
+        + '<span class="proj">' + esc(node.project_slug) + '</span>'
+        + '<span class="roster">' + roster + '</span>'
+        + '<span class="open-hint">Enter -- open card</span>'
+        + '</button>';
+
+      // one cell per pattern column
+      cols.forEach(function(h){
+        var c = GRID.cellConf[h][node.id];
+        var band = bandOf(c);
+        var shared = !!GRID.sharedHashes[h];
+        var present = c !== undefined && c !== null;
+        var cls = 'cell' + (present ? ' has' : ' empty');
+        var aria;
+        if (!present) {
+          aria = 'Pattern ' + shortHash(h) + ' absent in session ' + node.slug;
+        } else {
+          aria = 'Pattern ' + shortHash(h) + ' (' + TOPO.patterns[h].payload + ') in session '
+            + node.slug + ': confidence ' + fmt(c) + ', band ' + bandWord(band)
+            + (shared ? ', SHARED across sessions' : ', ISOLATED to this session');
+        }
+        html += '<div class="' + cls + '"'
+          + ' role="gridcell"'
+          + ' data-band="' + band + '"'
+          + ' data-hash="' + esc(h) + '"'
+          + ' data-shared="' + (shared ? 'true' : 'false') + '"'
+          + ' data-node="' + esc(node.id) + '"'
+          + ' tabindex="-1"'
+          + ' title="' + esc(aria) + '"'
+          + ' aria-label="' + esc(aria) + '">'
+          + '<span class="val">' + fmt(c) + '</span>'
+          + '<span class="band">' + (present ? bandWord(band) : 'absent') + '</span>'
+          + '</div>';
+      });
+    });
+
+    m.innerHTML = html;
+
+    // draw the propagation connectors after layout settles
+    requestAnimationFrame(drawVectors);
+  }
+
+  // ---- the 1px SVG propagation vector between the two brightest cells of a
+  //      multi-session column (the propagation vector). One per shared pattern. ----
+  function drawVectors(){
+    var m = document.getElementById('matrix');
+    var old = m.querySelector('.vector'); if (old) old.remove();
+    var mrect = m.getBoundingClientRect();
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('class', 'vector');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.width = mrect.width + 'px';
+    svg.style.height = mrect.height + 'px';
+
+    Object.keys(GRID.sharedHashes).forEach(function(h){
+      // the present cells for this column, ranked by confidence desc
+      var cells = Array.prototype.slice.call(m.querySelectorAll('.cell.has[data-hash="' + h + '"]'));
+      if (cells.length < 2) return;
+      cells.sort(function(a,b){
+        return parseFloat(b.querySelector('.val').textContent) - parseFloat(a.querySelector('.val').textContent);
+      });
+      var a = cells[0].getBoundingClientRect(), b = cells[1].getBoundingClientRect();
+      var x1 = a.left - mrect.left + a.width/2, y1 = a.top - mrect.top + a.height/2;
+      var x2 = b.left - mrect.left + b.width/2, y2 = b.top - mrect.top + b.height/2;
+      var path = document.createElementNS(svgNS, 'path');
+      path.setAttribute('d', 'M' + x1.toFixed(1) + ' ' + y1.toFixed(1) + ' L' + x2.toFixed(1) + ' ' + y2.toFixed(1));
+      path.setAttribute('data-hash', h);
+      if (litColumn === h) path.setAttribute('class', 'lit');
+      svg.appendChild(path);
+    });
+    m.appendChild(svg);
+  }
+
+  // ---- KEY INTERACTION 1: Enter on a multi-session cell lights the whole column ----
+  function lightColumn(hash){
+    var m = document.getElementById('matrix');
+    // toggle off if re-pressing the same column
+    if (litColumn === hash) { clearColumn(); return; }
+    litColumn = hash;
+    m.querySelectorAll('.cell').forEach(function(c){
+      c.classList.toggle('col-lit', c.getAttribute('data-hash') === hash && c.classList.contains('has'));
+    });
+    drawVectors();
+    // aria-live announce: name the pattern + every session it fires in, with value
+    var cells = Array.prototype.slice.call(m.querySelectorAll('.cell.has[data-hash="' + hash + '"]'));
+    var parts = cells.map(function(c){
+      var node = TOPO.nodes.filter(function(n){ return n.id === c.getAttribute('data-node'); })[0];
+      return node.slug + ' ' + c.querySelector('.val').textContent;
+    });
+    announce('Pattern ' + shortHash(hash) + ' fires in ' + parts.join(' and ') + '.');
+  }
+  function clearColumn(){
+    litColumn = null;
+    document.getElementById('matrix').querySelectorAll('.cell.col-lit').forEach(function(c){ c.classList.remove('col-lit'); });
+    drawVectors();
+    announce('');
+  }
+  function announce(msg){ document.getElementById('live').textContent = msg; }
+
+  // ---- roving-tabindex grid navigation (arrow keys move cell-to-cell) ----
+  function allFocusables(){
+    // row headers + gridcells, in DOM (reading) order
+    return Array.prototype.slice.call(document.getElementById('matrix').querySelectorAll('.row-h, .cell'));
+  }
+  function gridDims(){
+    var cols = GRID.patternOrder.length + 1; // +1 for the row-header column
+    return { cols: cols, rows: TOPO.nodes.length };
+  }
+  // map a focusable element to {row,col} in the navigable grid (excludes header row)
+  function posOf(el){
+    var foc = allFocusables();
+    var i = foc.indexOf(el);
+    if (i < 0) return null;
+    var d = gridDims();
+    return { row: Math.floor(i / d.cols), col: i % d.cols, idx: i };
+  }
+  function focusAt(row, col){
+    var d = gridDims();
+    row = Math.max(0, Math.min(d.rows - 1, row));
+    col = Math.max(0, Math.min(d.cols - 1, col));
+    var foc = allFocusables();
+    var el = foc[row * d.cols + col];
+    if (el) {
+      foc.forEach(function(f){ f.setAttribute('tabindex', '-1'); });
+      el.setAttribute('tabindex', '0');
+      el.focus();
+    }
+  }
+  document.getElementById('matrix').addEventListener('keydown', function(e){
+    var pos = posOf(document.activeElement);
+    if (!pos) return;
+    switch (e.key) {
+      case 'ArrowRight': e.preventDefault(); focusAt(pos.row, pos.col + 1); break;
+      case 'ArrowLeft':  e.preventDefault(); focusAt(pos.row, pos.col - 1); break;
+      case 'ArrowDown':  e.preventDefault(); focusAt(pos.row + 1, pos.col); break;
+      case 'ArrowUp':    e.preventDefault(); focusAt(pos.row - 1, pos.col); break;
+      case 'Home':       e.preventDefault(); focusAt(pos.row, 0); break;
+      case 'End':        e.preventDefault(); focusAt(pos.row, gridDims().cols - 1); break;
+      case 'Enter':
+      case ' ': {
+        e.preventDefault();
+        var el = document.activeElement;
+        if (el.classList.contains('row-h')) { openCard(el.getAttribute('data-node')); }
+        else if (el.classList.contains('cell') && el.getAttribute('data-shared') === 'true' && el.classList.contains('has')) {
+          lightColumn(el.getAttribute('data-hash'));
+        }
+        break;
+      }
+      case 'Escape': e.preventDefault(); clearColumn(); break;
+      default: break;
+    }
+  });
+
+  // click paths mirror the keyboard paths
+  document.getElementById('matrix').addEventListener('click', function(e){
+    var rh = e.target.closest('.row-h');
+    if (rh) { openCard(rh.getAttribute('data-node')); return; }
+    var cell = e.target.closest('.cell.has[data-shared="true"]');
+    if (cell) { lightColumn(cell.getAttribute('data-hash')); }
+  });
+
+  // ---- KEY INTERACTION 2: SessionDnaCard drill-down (top-5 unique + top-5 shared) ----
+  var lastFocus = null;
+  function nodeById(id){ return TOPO.nodes.filter(function(n){ return n.id === id; })[0]; }
+  function patternsForNode(id){
+    // collect every pattern this node participates in, with {hash, conf, shared, spread[]}
+    var out = [];
+    GRID.patternOrder.forEach(function(h){
+      var conf = GRID.cellConf[h][id];
+      if (conf === undefined || conf === null) return;
+      var shared = !!GRID.sharedHashes[h];
+      var spread = Object.keys(GRID.cellConf[h]).map(function(sid){
+        return { node: nodeById(sid), conf: GRID.cellConf[h][sid] };
+      });
+      out.push({ hash:h, conf:conf, shared:shared, spread:spread });
+    });
+    return out;
+  }
+  function chip(band, val, who){
+    var w = who ? '<span class="who">' + esc(who) + '</span>' : '';
+    return '<span class="chip" data-band="' + band + '">' + w
+      + '<span class="v">' + val + '</span><span class="band">' + bandWord(band) + '</span></span>';
+  }
+  function openCard(nodeId){
+    var node = nodeById(nodeId);
+    if (!node) return;
+    lastFocus = document.activeElement;
+    document.getElementById('cardSlug').textContent = node.slug;
+    document.getElementById('cardProj').textContent = node.project_slug;
+    document.getElementById('cardRoster').innerHTML =
+      node.agent_slugs.map(function(a){ return '<span class="agent">' + esc(a) + '</span>'; }).join('');
+
+    var all = patternsForNode(nodeId);
+    var unique = all.filter(function(p){ return !p.shared; }).sort(function(a,b){ return b.conf - a.conf; }).slice(0, 5);
+    var shared = all.filter(function(p){ return p.shared; }).sort(function(a,b){ return b.conf - a.conf; }).slice(0, 5);
+
+    // unique-to-this-session list
+    var uHost = document.getElementById('cardUnique');
+    if (!unique.length) {
+      uHost.innerHTML = '<li class="pitem"><span class="pay" style="color:var(--text-dim);font-style:italic">No patterns unique to this session -- everything here is shared.</span><span></span></li>';
+    } else {
+      uHost.innerHTML = unique.map(function(p){
+        var band = bandOf(p.conf);
+        return '<li class="pitem">'
+          + '<span class="pay"><span class="h">' + esc(shortHash(p.hash)) + '</span>' + esc(TOPO.patterns[p.hash].payload)
+          + '<div class="verdict" data-v="isolated">isolated -- contained</div></span>'
+          + '<span class="spread">' + chip(band, p.conf.toFixed(2), '') + '</span>'
+          + '</li>';
+      }).join('');
+    }
+
+    // shared "contagion" list -- each shows the per-session spread
+    var sHost = document.getElementById('cardShared');
+    if (!shared.length) {
+      sHost.innerHTML = '<li class="pitem"><span class="pay" style="color:var(--text-dim);font-style:italic">No shared patterns -- this session is currently isolated.</span><span></span></li>';
+    } else {
+      sHost.innerHTML = shared.map(function(p){
+        var spreadChips = p.spread.sort(function(a,b){ return b.conf - a.conf; }).map(function(s){
+          return chip(bandOf(s.conf), s.conf.toFixed(2), s.node.slug);
+        }).join('');
+        // verdict: asymmetric if the gap across the spread is wide, else spreading
+        var vals = p.spread.map(function(s){ return s.conf; });
+        var gap = Math.max.apply(null, vals) - Math.min.apply(null, vals);
+        var verdict = gap >= 0.20 ? 'asymmetric' : 'spreading';
+        var vtext = verdict === 'asymmetric'
+          ? 'asymmetric -- ' + Math.round(gap * 100) + 'pp gap'
+          : 'spreading -- tighten now';
+        return '<li class="pitem">'
+          + '<span class="pay"><span class="h">' + esc(shortHash(p.hash)) + '</span>' + esc(TOPO.patterns[p.hash].payload)
+          + '<div class="verdict" data-v="' + verdict + '">' + vtext + '</div></span>'
+          + '<span class="spread">' + spreadChips + '</span>'
+          + '</li>';
+      }).join('');
+    }
+
+    var scrim = document.getElementById('scrim');
+    scrim.classList.add('on');
+    var card = document.getElementById('card');
+    card.focus();
+  }
+  function closeCard(){
+    document.getElementById('scrim').classList.remove('on');
+    if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+  }
+  document.getElementById('cardClose').addEventListener('click', closeCard);
+  document.getElementById('scrim').addEventListener('click', function(e){
+    if (e.target === document.getElementById('scrim')) closeCard();
+  });
+  // card self-manages focus + Escape dismissal (SettingsDrawer precedent)
+  document.getElementById('card').addEventListener('keydown', function(e){
+    if (e.key === 'Escape') { e.preventDefault(); closeCard(); }
+  });
+
+  // ---- master ON/OFF toggle (the gated nature, wired client-side) ----
+  function setBeta(on){
+    var frame = document.getElementById('frame');
+    frame.setAttribute('data-beta', on ? 'on' : 'off');
+    document.getElementById('betaToggle').checked = on;
+    document.getElementById('settingsToggle').checked = on;
+    document.getElementById('betaText').textContent = on ? 'ON' : 'OFF';
+    document.getElementById('betaText').setAttribute('data-on', on ? 'true' : 'false');
+    document.getElementById('settingsText').textContent = on ? 'ON' : 'OFF';
+    document.getElementById('settingsText').setAttribute('data-on', on ? 'true' : 'false');
+    if (on) { renderMatrix(); }
+    else { clearColumn(); }
+  }
+  document.getElementById('betaToggle').addEventListener('change', function(e){ setBeta(e.target.checked); });
+  document.getElementById('settingsToggle').addEventListener('change', function(e){ setBeta(e.target.checked); });
+
+  // ---- self-exclude proof ----
+  document.getElementById('proofBtn').addEventListener('click', function(){
+    document.getElementById('proofMsg').textContent =
+      'dropped: ' + DROPPED_SELF.slug + ' (project_slug=' + DROPPED_SELF.project_slug
+      + ') -- excluded_self=' + TOPO.excluded_self + ', never a node.';
+  });
+
+  // ---- theme switcher ----
+  document.querySelectorAll('[data-theme-btn]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.documentElement.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function(x){
+        var on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      requestAnimationFrame(drawVectors);
+    });
+  });
+
+  // redraw connectors on resize so the vector tracks the matrix
+  window.addEventListener('resize', function(){ requestAnimationFrame(drawVectors); });
+
+  // mock-flag visibility mirrors used_mock
+  document.getElementById('mockFlag').style.display = TOPO.used_mock ? '' : 'none';
+
+  // initial paint
+  renderMatrix();
+</script>
+</body>
+</html>

@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<!--
+  KingMode MOCKUP -- BETA #28 "session-confidence-sparkline"
+  Per-session confidence trend sparklines beside the SessionPicker.
+
+  PURPOSE: a self-contained, click-through preview so the operator can confirm
+  the UI APPROACH before any code is written. This is a MOCKUP, not the shipping
+  component. The shipping leaf is dashboard/ui-next/src/lib/components/beta/
+  PickerSparkRail.svelte, gated on $betaFlags['session-confidence-sparkline'],
+  reusing the #34 HealthSparklines.data.js helpers verbatim.
+
+  ASCII-only (cp1252-safe): dash is "--". No smart quotes, no em-dash, no box
+  drawing. System font stack only -- no external assets / CDNs / web fonts.
+
+  TOKENS: the inline :root below mirrors theme.css (obsidian) + calm.css so the
+  mockup previews the REAL CSS-variable names the component consumes. The
+  --spark-* tri-state inks are the exact values from the vetted brief.
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BETA #28 -- Session confidence sparklines (mockup)</title>
+<style>
+  /* ======================================================================
+     TOKEN MIRROR -- lifted from dashboard/ui-next/src/styles/theme.css
+     (obsidian) + calm.css so this mockup previews the production tokens by
+     their real names. Do not re-baseline; this is a preview copy only.
+     ====================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* obsidian base (theme.css) */
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    /* fixed badge tokens (theme.css -- M4, theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+
+    /* calm.css resting aliases */
+    --calm-surface:        var(--bg);
+    --calm-surface-raised: var(--bg-card);
+    --calm-surface-alt:    var(--bg-row-alt);
+    --calm-surface-hover:  var(--bg-row-hover);
+    --calm-hairline:       var(--border);
+    --calm-hairline-hi:    var(--border-hi);
+    --calm-ink:            var(--text);
+    --calm-ink-quiet:      var(--text-dim);
+    --calm-ink-chrome:     var(--text-ui);
+    --calm-ink-loud:       var(--text-bright);
+    --calm-accent:         var(--accent);
+
+    /* spacing rhythm + radius (calm.css) */
+    --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 10px;
+    --space-5: 14px; --space-6: 22px; --space-7: 36px;
+    --radius-sharp: 2px; --radius-soft: 4px; --hairline: 1px;
+
+    /* type scale (calm.css) */
+    --fs-badge: 12px; --fs-meta: 13px; --fs-body: 14px; --fs-chrome: 11px;
+    --lh-tight: 1.25; --lh-body: 1.5;
+    --t-calm: 180ms ease;
+
+    /* --spark-* tri-state inks -- exact values from the #28 brief, shared with
+       #34 so the two features can never disagree on what "drifting" means.
+       AAA-checked against --calm-surface-raised #0c1118 for the TEXT read:
+         healthy #94a3b8 ~= 7.3:1   drift #f59e0b ~= 8.9:1   breach #f87171 ~= 6.0:1
+       breach falls just under AAA-small, so the read TEXT uses a darkened
+       --spark-breach-text token (the stroke keeps the lighter ink). */
+    --spark-healthy: #94a3b8;
+    --spark-drift:   #f59e0b;
+    --spark-breach:  #f87171;
+    --spark-breach-text: #fca5a5; /* lifted for >=7:1 small-text AAA on #0c1118 */
+    --spark-floor:   rgba(148, 163, 184, 0.16);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 480px at 78% -8%, rgba(245,158,11,0.05), transparent 60%),
+      var(--calm-surface);
+    color: var(--calm-ink);
+    font-family: var(--ff-system);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: var(--space-7) var(--space-5) var(--space-8);
+  }
+
+  /* ---- mockup chrome banner (NOT part of the shipping component) ---------- */
+  .mock-banner {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3);
+    padding: var(--space-3) 0 var(--space-5);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+    margin-bottom: var(--space-6);
+  }
+  .mock-banner__eyebrow {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .mock-banner__title {
+    flex: 1 1 320px; margin: 0;
+    font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--calm-ink-loud);
+  }
+  .mock-banner__note {
+    flex-basis: 100%; margin: var(--space-2) 0 0;
+    font-size: var(--fs-meta); color: var(--calm-ink-quiet);
+    max-width: 66ch;
+  }
+
+  /* ---- the BETA gating header strip (mirrors the in-app affordance) ------- */
+  .gatebar {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: var(--space-4); padding: var(--space-4) var(--space-5);
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    margin-bottom: var(--space-5);
+  }
+  .gatebar__id {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.08em; color: var(--calm-ink-chrome);
+  }
+  .gatebar__name { font-weight: 600; color: var(--calm-ink-loud); }
+  .pill {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border);
+    border-radius: 999px; padding: 2px 9px; white-space: nowrap;
+  }
+  .gatebar__spacer { flex: 1 1 auto; }
+
+  /* the wired on/off toggle (client-side) */
+  .toggle {
+    display: inline-flex; align-items: center; gap: var(--space-3);
+    cursor: pointer; user-select: none;
+  }
+  .toggle__label {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .toggle__track {
+    position: relative; width: 46px; height: 24px;
+    background: var(--calm-surface-alt);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: 999px; transition: background var(--t-calm), border-color var(--t-calm);
+  }
+  .toggle__knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--calm-ink-chrome);
+    transition: transform var(--t-calm), background var(--t-calm);
+  }
+  .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .toggle input:checked + .toggle__track {
+    background: var(--accent-dim); border-color: var(--calm-hairline-hi);
+  }
+  .toggle input:checked + .toggle__track .toggle__knob {
+    transform: translateX(22px); background: var(--accent);
+  }
+  .toggle input:focus-visible + .toggle__track {
+    outline: 2px solid var(--badge-ar-border); outline-offset: 2px;
+  }
+  .toggle__state {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    font-weight: 700; letter-spacing: 0.06em; min-width: 3ch;
+    color: var(--calm-ink-quiet);
+  }
+
+  /* ======================================================================
+     SIMULATED HeaderBar elastic middle column -- the mount context.
+     The native <select> SessionPicker is the keyboard/scope control; the
+     PickerSparkRail companion strip mounts DIRECTLY BENEATH it.
+     ====================================================================== */
+  .headerbar {
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    padding: var(--space-4) var(--space-5);
+  }
+  .headerbar__row {
+    display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
+  }
+  .hb-brand {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .hb-spacer { flex: 1 1 auto; }
+  .hb-cwd {
+    font-family: var(--ff-mono); font-size: var(--fs-meta);
+    color: var(--calm-ink-quiet); max-width: 22ch;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left;
+  }
+  .hb-live {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    color: var(--calm-ink-quiet);
+  }
+  .hb-live__dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--spark-healthy);
+  }
+
+  /* the native picker, styled to the still-water chrome (SessionPicker.svelte) */
+  .picker { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; }
+  .picker__label {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome); font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--calm-ink-chrome);
+    white-space: nowrap;
+  }
+  .picker__field { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+  .picker__select {
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+    max-width: 24ch; min-width: 11rem;
+    background: var(--calm-surface-raised); color: var(--calm-ink-loud);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+    font-family: var(--ff-system); font-size: var(--fs-meta); font-weight: 480;
+    letter-spacing: 0.01em; line-height: 1.2;
+    padding: 5px 1.7rem 5px 9px; cursor: pointer; text-overflow: ellipsis;
+    transition: border-color var(--t-calm), background var(--t-calm);
+  }
+  .picker__select:hover { border-color: var(--calm-hairline-hi); }
+  .picker__select:focus-visible {
+    outline: 2px solid var(--badge-ar-border); outline-offset: 2px;
+    border-color: var(--calm-accent);
+  }
+  .picker__chev {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-size: 0.7rem; line-height: 1; color: var(--calm-ink-chrome);
+    pointer-events: none;
+  }
+
+  /* ======================================================================
+     PickerSparkRail -- the BETA #28 companion strip-list. A single-line
+     horizontal rail mounted beneath the scope control. WHISPER-QUIET at rest:
+     no card grid, hairline top-rule only. One micro-row per governed session:
+       [name] -> [64x16 confidence sparkline] -> [paired text read]
+     read as ONE horizontal saccade.
+     ====================================================================== */
+  .psr {
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: var(--hairline) solid var(--calm-hairline);
+  }
+  .psr__head {
+    display: flex; align-items: baseline; gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .psr__title {
+    font-family: var(--ff-mono); font-size: var(--fs-chrome);
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--calm-ink-chrome);
+  }
+  .psr__beta {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border); border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .psr__hint {
+    font-family: var(--ff-mono); font-size: 10px; color: var(--calm-ink-quiet);
+    margin-left: auto;
+  }
+
+  .psr__list { list-style: none; margin: 0; padding: 0; }
+  .psr__row { display: block; }
+
+  /* each strip is a real <button> -- DOM order matches the select's option
+     order, so Tab walks name->name and Enter/Space scopes (full keyboard
+     parity with the picker; zero custom-listbox risk). */
+  .strip {
+    display: grid;
+    grid-template-columns: minmax(7rem, 1.1fr) 64px minmax(11rem, 1.4fr);
+    align-items: center;
+    gap: var(--space-4);
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sharp);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: background var(--t-calm);
+  }
+  .strip:hover { background: var(--calm-surface-hover); }
+  .strip:focus-visible {
+    outline: 2px solid var(--badge-ar-border);
+    outline-offset: 2px;
+  }
+  .strip[aria-current="true"] {
+    background: var(--accent-dim);
+    box-shadow: inset 2px 0 0 0 var(--accent);
+  }
+
+  .strip__name {
+    font-size: var(--fs-meta); font-weight: 460; letter-spacing: 0.01em;
+    color: var(--calm-ink-loud); line-height: var(--lh-tight);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    direction: rtl; text-align: left; /* rtl-clip like the CWD readout */
+  }
+  .strip__name span { direction: ltr; unicode-bidi: plaintext; }
+
+  .strip__spark {
+    position: relative; display: block; width: 64px; height: 16px;
+  }
+  .strip__spark svg { display: block; width: 64px; height: 16px; }
+  /* confidence = the load-bearing trace; color is the M4 SECOND channel only */
+  .strip__conf { fill: none; stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; opacity: 0.9; }
+  .strip--healthy .strip__conf { stroke: var(--spark-healthy); }
+  .strip--drift   .strip__conf { stroke: var(--spark-drift); }
+  .strip--breach  .strip__conf { stroke: var(--spark-breach); }
+  /* faint DASHED hitl_floor reference line -- dashed (not color-only) per M5 */
+  .strip__floor { fill: none; stroke: var(--calm-ink-quiet); stroke-width: 0.75; stroke-dasharray: 2 2; opacity: 0.55; }
+
+  /* the always-present paired text read (M4 -- the state is never color-alone) */
+  .strip__read {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+    color: var(--calm-ink-quiet);
+  }
+  .strip__word { font-weight: 700; }
+  .strip--healthy .strip__word { color: var(--spark-healthy); }
+  .strip--drift   .strip__word { color: var(--spark-drift); }
+  .strip--breach  .strip__word { color: var(--spark-breach-text); }
+  .strip__line { color: var(--calm-ink-quiet); }
+
+  .psr__foot {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3);
+    margin-top: var(--space-3); padding-top: var(--space-3);
+    border-top: var(--hairline) solid var(--calm-hairline);
+  }
+  .psr__foot-pill {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg);
+    border: 1px solid var(--badge-obs-border); border-radius: 999px;
+    padding: 2px 9px;
+  }
+  .psr__foot-mock {
+    font-family: var(--ff-mono); font-size: 10px; letter-spacing: 0.02em;
+    color: var(--spark-drift);
+  }
+
+  /* OFF state -- the whole rail (and the gate's subscriptions) renders nothing.
+     We show a calm placeholder so the operator SEES the default-OFF behavior. */
+  .psr-off {
+    margin-top: var(--space-4); padding: var(--space-4) var(--space-5);
+    border: 1px dashed var(--calm-hairline); border-radius: var(--radius-soft);
+    color: var(--calm-ink-quiet); font-size: var(--fs-meta);
+    background: var(--calm-surface);
+  }
+  .psr-off code {
+    font-family: var(--ff-mono); font-size: 12px; color: var(--calm-ink);
+  }
+
+  .hidden { display: none !important; }
+
+  /* ---- explainer caption beneath the demo ---- */
+  .caption {
+    margin-top: var(--space-6); padding: var(--space-5);
+    background: var(--calm-surface-raised);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-soft);
+  }
+  .caption h2 {
+    margin: 0 0 var(--space-3); font-size: var(--fs-body); font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--calm-ink-chrome); font-family: var(--ff-mono);
+  }
+  .caption ul { margin: 0; padding-left: 1.2em; }
+  .caption li { margin: var(--space-2) 0; font-size: var(--fs-meta); color: var(--calm-ink); }
+  .caption b { color: var(--calm-ink-loud); }
+  .kbd {
+    font-family: var(--ff-mono); font-size: 11px;
+    border: 1px solid var(--calm-hairline); border-radius: 3px;
+    padding: 0 4px; color: var(--calm-ink-loud); background: var(--calm-surface-alt);
+  }
+
+  /* visually-hidden a11y data table mirror (same pattern as #34) */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  /* ---- detail drawer (OPTIONAL deep view) -- never auto-foregrounds (M2) --- */
+  .scrim { position: fixed; inset: 0; z-index: 80; background: rgba(8,10,12,0.55); }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 81;
+    width: min(460px, 96vw); display: flex; flex-direction: column;
+    background: var(--calm-surface-raised);
+    border-left: 3px solid var(--calm-accent);
+    box-shadow: -18px 0 48px -24px rgba(0,0,0,0.7);
+    color: var(--calm-ink); font-family: var(--ff-system);
+  }
+  .drawer__head {
+    display: flex; align-items: flex-start; gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: var(--hairline) solid var(--calm-hairline);
+  }
+  .drawer__title { margin: 0; font-size: var(--fs-body); font-weight: 620; color: var(--calm-ink-loud); }
+  .drawer__sub {
+    margin: var(--space-2) 0 0; font-family: var(--ff-mono);
+    font-size: var(--fs-chrome); color: var(--calm-ink-quiet);
+  }
+  .drawer__close {
+    margin-left: auto; flex: 0 0 auto; width: 28px; height: 28px;
+    background: transparent; color: var(--calm-ink-quiet);
+    border: var(--hairline) solid var(--calm-hairline);
+    border-radius: var(--radius-sharp); cursor: pointer; font-size: 1rem; line-height: 1;
+  }
+  .drawer__close:hover { color: var(--calm-ink-loud); }
+  .drawer__close:focus-visible { outline: 2px solid var(--badge-ar-border); outline-offset: 2px; }
+  .drawer__body { padding: var(--space-5); overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-4); }
+  .drawer__chart {
+    width: 100%; height: 96px; background: var(--calm-surface-alt);
+    border: var(--hairline) solid var(--calm-hairline); border-radius: var(--radius-sharp);
+  }
+  .drawer__chart svg { display: block; width: 100%; height: 96px; }
+  .dc-conf { fill: none; stroke: var(--calm-accent); stroke-width: 1.5; opacity: 0.9; }
+  .dc-floor { stroke: var(--spark-breach); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+  .dc-axis { stroke: var(--calm-hairline); stroke-width: 1; }
+  .drawer__obs {
+    margin: 0; padding-top: var(--space-3);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    font-size: var(--fs-chrome); color: var(--calm-ink-quiet); line-height: var(--lh-body);
+  }
+  .drawer__foot {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3) var(--space-5);
+    border-top: var(--hairline) solid var(--calm-hairline);
+    background: var(--calm-surface-alt); font-size: 10px; color: var(--calm-ink-quiet);
+  }
+  .drawer__foot-pill {
+    font-family: var(--ff-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border); border-radius: 4px; padding: 1px 5px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- MOCKUP banner (chrome only; not the shipping component) -->
+  <div class="mock-banner">
+    <span class="mock-banner__eyebrow">KingMode mockup -- approval gate</span>
+    <h1 class="mock-banner__title">BETA #28 -- per-session confidence sparklines beside the SessionPicker</h1>
+    <p class="mock-banner__note">
+      Approach preview for the operator to confirm BEFORE code is written. The shipping leaf
+      is PickerSparkRail.svelte, gated on the beta flag, reusing the #34 HealthSparklines
+      helpers verbatim. This page is a static, client-side preview -- no live gov.db, no network.
+    </p>
+  </div>
+
+  <!-- BETA gate bar with the wired on/off toggle -->
+  <div class="gatebar">
+    <span class="gatebar__id">BETA #28</span>
+    <span class="gatebar__name">session-confidence-sparkline</span>
+    <span class="pill">BETA -- default OFF, toggled in Settings &gt; BETA features</span>
+    <span class="gatebar__spacer"></span>
+    <label class="toggle" for="betaToggle">
+      <span class="toggle__label">Feature</span>
+      <input id="betaToggle" type="checkbox" checked
+             aria-describedby="toggleState"
+             onchange="setEnabled(this.checked)">
+      <span class="toggle__track"><span class="toggle__knob"></span></span>
+      <span class="toggle__state" id="toggleState">ON</span>
+    </label>
+  </div>
+
+  <!-- the simulated HeaderBar elastic middle column -->
+  <section class="headerbar" aria-label="Header bar (simulated mount context)">
+    <div class="headerbar__row">
+      <span class="hb-brand">streamManager</span>
+
+      <div class="picker" title="Scope: drifting-pattern-audit">
+        <label class="picker__label" for="sm-session-picker">Scope</label>
+        <div class="picker__field">
+          <select id="sm-session-picker" class="picker__select"
+                  aria-label="Scope -- filter all panes by session"
+                  onchange="onPickerChange(this.value)">
+            <option value="__all__">All governed sessions</option>
+            <optgroup label="Sessions" id="pickerOptgroup"></optgroup>
+          </select>
+          <span class="picker__chev" aria-hidden="true">&#9662;</span>
+        </div>
+      </div>
+
+      <span class="hb-spacer"></span>
+      <span class="hb-cwd" title="working directory readout">~/work/governed-target-a</span>
+      <span class="hb-live"><span class="hb-live__dot"></span> LIVE</span>
+    </div>
+
+    <!-- ON: PickerSparkRail companion strip-list -->
+    <div id="railOn" class="psr" aria-label="Per-session confidence sparklines">
+      <div class="psr__head">
+        <span class="psr__title">Confidence by session</span>
+        <span class="psr__beta">BETA</span>
+        <span class="psr__hint">click a lane to scope -- hover for detail</span>
+      </div>
+      <ul class="psr__list" role="list" id="railList"></ul>
+      <div class="psr__foot">
+        <span class="psr__foot-pill">BETA -- default OFF, toggled in Settings</span>
+        <span class="psr__foot-mock" id="railMockNote">SAMPLE DATA -- no live decisions in scope yet</span>
+      </div>
+    </div>
+
+    <!-- OFF: the gate renders nothing; the rail (and its subscriptions) is absent -->
+    <div id="railOff" class="psr-off hidden">
+      Feature OFF. With <code>$betaFlags['session-confidence-sparkline']</code> false the
+      <code>{#if enabled}</code> block is unmounted -- no rail, no store subscriptions, no poller.
+      Flip it ON in Settings &gt; BETA features. (Toggle above to preview.)
+    </div>
+  </section>
+
+  <!-- explainer -->
+  <div class="caption">
+    <h2>What the operator sees + how to drive it</h2>
+    <ul>
+      <li><b>Glance:</b> three confidence traces sit under the scope control -- one reads
+        <b>healthy 0.91 steady</b> (slate), one <b>drifting 0.71 falling</b> (amber), one
+        <b>breach 0.55 below floor</b> (red). The worst-trending lane is readable in one
+        horizontal sweep, no dropdown cycling.</li>
+      <li><b>Paired label + color (ADR-18 M5):</b> every lane carries a literal state WORD plus a
+        <code>conf 0.NN -- trend</code> read. Color is the SECOND channel only -- the word and number
+        carry the meaning. The dashed line is each session's hitl_floor (dashed, not color-only).</li>
+      <li><b>Click to scope:</b> click any lane (or pick it in the native select) to call
+        <code>selectSession(sid)</code> and scope every pane to that session. The active lane shows an
+        accent edge. Try it -- the picker and the rail stay in sync.</li>
+      <li><b>Keyboard parity:</b> each lane is a real <span class="kbd">button</span> in the select's
+        option order. <span class="kbd">Tab</span> walks lane-to-lane, <span class="kbd">Enter</span> /
+        <span class="kbd">Space</span> scopes. Hover-dwell (or Enter on an active lane) opens the optional
+        observational drawer; <span class="kbd">Esc</span> closes it. It NEVER auto-foregrounds (M2).</li>
+      <li><b>Gated:</b> default OFF. Toggle the switch above to watch the rail (and all its
+        subscriptions) appear and disappear -- the load-bearing beta gate.</li>
+      <li><b>Twin of #34:</b> this is the picker-adjacent / narrow-layout twin of the shipped
+        #34 health-sparklines. Same tri-state semantics (FLOOR 0.6 / DRIFT 0.72), same mock seeds --
+        #28's only delta is PLACEMENT next to the picker for the operator driving by the dropdown.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- OPTIONAL detail drawer (hidden until a lane is dwelled/activated) -->
+<div id="scrim" class="scrim hidden" onclick="closeDrawer()" aria-hidden="true"></div>
+<div id="drawer" class="drawer hidden" role="dialog" aria-modal="true"
+     aria-labelledby="drawerTitle" tabindex="-1">
+  <div class="drawer__head">
+    <div>
+      <h2 id="drawerTitle" class="drawer__title">Session detail</h2>
+      <p class="drawer__sub" id="drawerSub">last 100 decisions -- SAMPLE DATA</p>
+    </div>
+    <button class="drawer__close" type="button" aria-label="Close session detail (Esc)"
+            onclick="closeDrawer()">x</button>
+  </div>
+  <div class="drawer__body">
+    <div class="drawer__chart">
+      <svg viewBox="0 0 420 96" preserveAspectRatio="none" role="img"
+           aria-label="Confidence over the last 100 decisions. A data table follows for assistive technology.">
+        <line class="dc-floor" x1="0" y1="62" x2="420" y2="62"></line>
+        <path class="dc-conf" id="drawerConf" d=""></path>
+        <line class="dc-axis" x1="0" y1="95" x2="420" y2="95"></line>
+      </svg>
+    </div>
+    <p class="drawer__obs">
+      Observational view -- this drawer does not foreground itself and does not attach to the
+      session. In the shipping leaf, deep detail delegates to the EXISTING additive
+      GET /api/sessions/{id}/sparkline-data (server-side polarity-filtered); #28 stays a pure
+      presentation leaf and leaves the rich drawer to #34.
+    </p>
+  </div>
+  <div class="drawer__foot">
+    <span class="drawer__foot-pill">BETA</span>
+    <span>Read-only. Default OFF, toggled in Settings &gt; BETA features. Never auto-foregrounds.</span>
+  </div>
+</div>
+
+<script>
+  // ======================================================================
+  // MOCK MODEL -- mirrors HealthSparklines.data.js (#34) so the mockup uses the
+  // EXACT tri-state semantics the shipping leaf reuses verbatim.
+  //   FLOOR=0.6  DRIFT=0.72  POINTS=10
+  //   classify(meanConf): <FLOOR breach, <DRIFT drift, else healthy
+  // The three lanes mirror HealthSparklines MOCK_SEEDS: healthy / drift / breach.
+  // ======================================================================
+  var FLOOR = 0.6, DRIFT = 0.72, POINTS = 10;
+  var W = 64, H = 16; // strip geometry from the brief (64x16)
+
+  function classify(m) { return m < FLOOR ? 'breach' : (m < DRIFT ? 'drift' : 'healthy'); }
+  function stateLabel(s) { return s === 'breach' ? 'breach' : (s === 'drift' ? 'drifting' : 'healthy'); }
+
+  // confPath() port -- confidence rides the top 70% of the band (1.0 near top,
+  // FLOOR ~70% down). Identical mapping to HealthSparklines.data.js confPath.
+  function confPath(conf, w, h) {
+    var n = conf.length; if (!n) return '';
+    var innerW = w - 2, top = 2, usable = h * 0.7 - top;
+    var stepX = n > 1 ? innerW / (n - 1) : 0;
+    var pts = conf.map(function (c, i) {
+      var x = 1 + i * stepX;
+      var y = top + usable * (1 - Math.max(0, Math.min(1, c)));
+      return x.toFixed(1) + ' ' + y.toFixed(1);
+    });
+    return 'M ' + pts.join(' L ');
+  }
+  // a horizontal reference line at the session's hitl_floor, mapped into the
+  // same top-70% band so it lines up with the confidence trace.
+  function floorPath(floorVal, w, h) {
+    var top = 2, usable = h * 0.7 - top;
+    var y = top + usable * (1 - Math.max(0, Math.min(1, floorVal)));
+    return 'M 0 ' + y.toFixed(1) + ' L ' + w + ' ' + y.toFixed(1);
+  }
+
+  // The three mock view-models -- the shape the component renders, one row per
+  // session. Confidence series + derived mean + state word + paired read,
+  // matching the brief's per-strip mock view-model exactly.
+  var STRIPS = [
+    {
+      sid: 'sess-2c91-mock', name: 'steady-coverage-run', floor: 0.60,
+      conf: [0.92, 0.91, 0.93, 0.90, 0.91, 0.92, 0.91, 0.90, 0.92, 0.91]
+    },
+    {
+      sid: 'sess-7f3a-mock', name: 'drifting-pattern-audit', floor: 0.60,
+      conf: [0.74, 0.73, 0.72, 0.71, 0.70, 0.69, 0.70, 0.71, 0.70, 0.71]
+    },
+    {
+      sid: 'sess-b048-mock', name: 'breach-soak-replay', floor: 0.60,
+      conf: [0.66, 0.64, 0.62, 0.60, 0.58, 0.57, 0.56, 0.55, 0.55, 0.55]
+    }
+  ];
+
+  // derive the view-model fields the same way buildView() does
+  function meanOf(a) { return a.reduce(function (x, y) { return x + y; }, 0) / a.length; }
+  function trendWord(a) {
+    var d = a[a.length - 1] - a[0];
+    if (d <= -0.04) return 'falling';
+    if (d >= 0.04) return 'rising';
+    return 'steady';
+  }
+  function readSuffix(state, trend) {
+    if (state === 'breach') return 'below floor';
+    if (state === 'drift') return trend === 'falling' ? 'falling' : 'drifting';
+    return trend === 'falling' ? 'easing' : 'steady';
+  }
+
+  STRIPS.forEach(function (s) {
+    s.meanConf = meanOf(s.conf);
+    s.state = classify(s.meanConf);
+    s.word = stateLabel(s.state);
+    s.trend = trendWord(s.conf);
+    s.suffix = readSuffix(s.state, s.trend);
+    s.readLine = 'conf ' + s.meanConf.toFixed(2) + ' -- ' + s.suffix;
+    s.confD = confPath(s.conf, W, H);
+    s.floorD = floorPath(s.floor, W, H);
+    s.aria = s.name + ' confidence ' + s.meanConf.toFixed(2) + ', ' + s.trend + '. ' +
+      (s.state === 'breach' ? 'confidence-floor breached -- review advised'
+        : s.state === 'drift' ? 'drifting -- review advised' : 'healthy') +
+      '. Activate to scope the dashboard to this session.';
+  });
+
+  var selectedSid = null;
+
+  // ---- render the rail (button per session, DOM order == option order) -----
+  function renderRail() {
+    var ul = document.getElementById('railList');
+    ul.innerHTML = '';
+    STRIPS.forEach(function (s) {
+      var li = document.createElement('li');
+      li.className = 'psr__row';
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'strip strip--' + s.state;
+      btn.setAttribute('aria-label', s.aria);
+      btn.setAttribute('data-session-id', s.sid);
+      btn.setAttribute('data-state', s.state);
+      if (selectedSid === s.sid) btn.setAttribute('aria-current', 'true');
+      btn.onclick = function () { selectSession(s.sid); };
+      btn.onmouseenter = function () { scheduleDrawer(s); };
+      btn.onmouseleave = cancelDrawer;
+      btn.onkeydown = function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectSession(s.sid); }
+      };
+
+      // name (rtl-clipped like the CWD readout)
+      var name = document.createElement('span');
+      name.className = 'strip__name';
+      name.title = s.name;
+      var nspan = document.createElement('span');
+      nspan.textContent = s.name;
+      name.appendChild(nspan);
+
+      // sparkline (decorative -- aria-hidden; the read + aria carry meaning)
+      var spark = document.createElement('span');
+      spark.className = 'strip__spark';
+      spark.innerHTML =
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true" focusable="false">' +
+          '<path class="strip__floor" d="' + s.floorD + '"></path>' +
+          '<path class="strip__conf" d="' + s.confD + '"></path>' +
+        '</svg>';
+
+      // paired text read (always present -- M4)
+      var read = document.createElement('span');
+      read.className = 'strip__read';
+      read.innerHTML =
+        '<b class="strip__word">' + s.word + '</b>' +
+        '<span class="strip__line">' + s.readLine + '</span>';
+
+      // visually-hidden data mirror for SR (same pattern as #34)
+      var sr = document.createElement('span');
+      sr.className = 'sr-only';
+      sr.textContent = 'confidence series: ' + s.conf.join(', ') + '; floor ' + s.floor.toFixed(2);
+
+      btn.appendChild(name);
+      btn.appendChild(spark);
+      btn.appendChild(read);
+      btn.appendChild(sr);
+      li.appendChild(btn);
+      ul.appendChild(li);
+    });
+  }
+
+  // ---- the native picker optgroup mirrors the rail order (scope control) ---
+  function renderPickerOptions() {
+    var og = document.getElementById('pickerOptgroup');
+    og.innerHTML = '';
+    STRIPS.forEach(function (s) {
+      var opt = document.createElement('option');
+      opt.value = s.sid;
+      opt.textContent = s.name;
+      og.appendChild(opt);
+    });
+  }
+
+  // selectSession(sid) -- scopes every pane (here: the picker + active lane).
+  function selectSession(sid) {
+    selectedSid = sid;
+    document.getElementById('sm-session-picker').value = sid;
+    renderRail();
+  }
+  function onPickerChange(v) {
+    selectedSid = (v === '__all__') ? null : v;
+    renderRail();
+  }
+
+  // ---- the BETA gate: ON renders the rail; OFF unmounts it entirely --------
+  function setEnabled(on) {
+    document.getElementById('railOn').classList.toggle('hidden', !on);
+    document.getElementById('railOff').classList.toggle('hidden', on);
+    document.getElementById('toggleState').textContent = on ? 'ON' : 'OFF';
+    if (!on) closeDrawer();
+  }
+
+  // ---- optional observational drawer (hover-dwell ~260ms; never auto-fg) ---
+  var dwellTimer = null;
+  function scheduleDrawer(s) {
+    cancelDrawer();
+    dwellTimer = setTimeout(function () { openDrawer(s); }, 260);
+  }
+  function cancelDrawer() {
+    if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = null; }
+  }
+  var lastFocus = null;
+  function openDrawer(s) {
+    lastFocus = document.activeElement;
+    document.getElementById('drawerTitle').textContent = s.name;
+    document.getElementById('drawerSub').textContent =
+      'last 100 decisions -- SAMPLE DATA -- ' + s.word + ' ' + s.meanConf.toFixed(2);
+    // big-chart path: reuse the same confidence series, mapped to 420x96
+    document.getElementById('drawerConf').setAttribute('d', confPath(s.conf, 420, 96));
+    document.getElementById('scrim').classList.remove('hidden');
+    var d = document.getElementById('drawer');
+    d.classList.remove('hidden');
+    d.focus();
+  }
+  function closeDrawer() {
+    document.getElementById('scrim').classList.add('hidden');
+    document.getElementById('drawer').classList.add('hidden');
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeDrawer();
+  });
+
+  // boot
+  renderPickerOptions();
+  renderRail();
+</script>
+</body>
+</html>

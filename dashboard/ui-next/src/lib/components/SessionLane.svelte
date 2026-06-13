@@ -474,4 +474,14 @@
     :global(html:not([data-motion='allow'])) .lane__expand,
     :global(html:not([data-motion='allow'])) .lane__chev { transition: none; }
   }
+
+  /* PAPER (light) theme color-contrast (WCAG AA): on an ended lane the
+     .lane--ended { opacity: 0.62 } recede dims the id text below AA on the
+     paper --bg-card (#f8f4ee) cream surface (was 3.26:1). Opacity caps the
+     achievable contrast, so a color override alone cannot reach AA -- raise the
+     paper ended-lane opacity (recede preserved, just lighter) AND darken the id
+     ink so the blended result clears 4.5:1. Paper + ended modifier ONLY; the
+     dark obsidian/phosphor themes pass and stay untouched. */
+  :global([data-theme='paper']) .lane--ended { opacity: 0.9; }
+  :global([data-theme='paper']) .lane--ended .lane__id { color: #3a2c1e; }
 </style>

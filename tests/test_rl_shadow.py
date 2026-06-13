@@ -59,14 +59,19 @@ def test_shadow_does_not_block_bus(tmp_path: Path) -> None:
 
 
 def test_shadow_records_disagreement(tmp_path: Path) -> None:
+    # A LEGITIMATE candidate<->production divergence lives ONLY in the
+    # ALLOW band: production ALLOWed a borderline-confidence row, and a
+    # stricter (higher) candidate threshold escalates it to AMBIGUOUS.
+    # (A safety verdict is never a divergence source -- the candidate
+    # inherits it; see test_candidate_decision_safety_verdict_never_flips.)
     db = tmp_path / "s.db"
-    rec = ShadowRecorder(_cand(), db, soak_run_id="r1")
-    rec.on_governance_decision(_env(verdict="INTERVENE", confidence=0.70))
+    rec = ShadowRecorder(_cand(thr=0.9), db, soak_run_id="r1")
+    rec.on_governance_decision(_env(verdict="ALLOW", confidence=0.70))
     rec.close()
     rows = _rows(db)
     assert len(rows) == 1
-    assert rows[0]["production_verdict"] == "INTERVENE"
-    assert rows[0]["candidate_verdict"] == "ALLOW"
+    assert rows[0]["production_verdict"] == "ALLOW"
+    assert rows[0]["candidate_verdict"] == "AMBIGUOUS"
     assert int(rows[0]["agree"]) == 0
 
 
@@ -185,3 +190,37 @@ def test_candidate_decision_action_equal_preserves_verdict() -> None:
         cand, _env(verdict="INTERVENE", action_taken=BASELINE_THR))
     assert action == pytest.approx(BASELINE_THR)
     assert verdict == "INTERVENE"
+
+
+def test_candidate_decision_safety_verdict_never_flips_to_allow() -> None:
+    # Regression (2026-06-13 v10.1 mis-pin): the old logic flipped any
+    # high-confidence row to ALLOW once conf >= cand_a, silently turning a
+    # safety-priority BLOCK/INTERVENE into a candidate ALLOW (FR-OG-7
+    # violation). A constant-L4-threshold candidate is subordinate to the
+    # precheck safety floor and must inherit non-ALLOW verdicts verbatim,
+    # at ANY candidate threshold and ANY confidence.
+    cand = _cand(thr=0.9)  # the best-arm value that was wrongly pinned
+    for v in ("BLOCK", "INTERVENE", "OBSERVE", "SUGGEST", "GUIDE"):
+        action, verdict = candidate_decision(
+            cand, _env(verdict=v, confidence=1.0, action_taken=1.0))
+        assert verdict == v, f"{v} must not flip to {verdict}"
+        assert action == pytest.approx(0.9)
+
+
+def test_candidate_decision_allow_escalates_below_threshold() -> None:
+    # The one band where candidate<->production may legitimately diverge:
+    # a stricter (higher) candidate threshold escalates a borderline ALLOW
+    # to AMBIGUOUS.
+    cand = _cand(thr=0.9)
+    action, verdict = candidate_decision(
+        cand, _env(verdict="ALLOW", confidence=0.8))
+    assert verdict == "AMBIGUOUS"
+    assert action == pytest.approx(0.9)
+
+
+def test_candidate_decision_allow_kept_above_threshold() -> None:
+    cand = _cand(thr=BASELINE_THR)
+    action, verdict = candidate_decision(
+        cand, _env(verdict="ALLOW", confidence=0.95))
+    assert verdict == "ALLOW"
+    assert action == pytest.approx(BASELINE_THR)

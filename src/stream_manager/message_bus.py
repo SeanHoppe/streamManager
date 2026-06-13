@@ -94,6 +94,21 @@ CREATE TABLE IF NOT EXISTS hitl_overrides (
 );
 CREATE INDEX IF NOT EXISTS idx_hitl_overrides_decision ON hitl_overrides(decision_id);
 
+-- ADR-18 Amendment F: operator-confirmed graduated ALLOW rules. Additive;
+-- no FROZEN table modified. `shape_hash` reuses the DecisionGraph
+-- shape hash (one canonicalization shared with corpus/graph). `active`
+-- flips to 0 on demote (reuses /api/patterns/{hash}/demote) so a demoted
+-- rule stops short-circuiting immediately. A row is written ONLY on an
+-- explicit operator confirm (M8 — never auto-graduate).
+CREATE TABLE IF NOT EXISTS graduated_rules (
+    shape_hash      TEXT PRIMARY KEY,
+    canonical_text  TEXT NOT NULL,
+    confirmed_ts    REAL NOT NULL,
+    n_allow_at_grad INTEGER NOT NULL,
+    active          INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_graduated_rules_active ON graduated_rules(active);
+
 CREATE TABLE IF NOT EXISTS desktop_commands (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -1379,6 +1394,88 @@ class MessageBus:
                 (hash,),
             )
             return (cur.rowcount or 0) > 0
+
+    # ── ADR-18 Amendment F: graduated_rules accessors ────────────────────
+    #
+    # Dedicated production accessors for the operator-confirmed graduated
+    # ALLOW table (additive — no FROZEN envelope schema touched). The hot
+    # path uses ``lookup_graduated_rule`` (single PRIMARY KEY read); the
+    # GraduatedRuleStore gates it behind the BRIDGE_GRADUATED_RULES env
+    # flag so the bus is never touched when the feature is OFF.
+
+    def lookup_graduated_rule(self, shape_hash: str) -> dict[str, object] | None:
+        """Return the ACTIVE graduated rule for ``shape_hash``, or None.
+
+        Single indexed PRIMARY KEY read. Returns None for an unknown hash
+        or a demoted (active=0) rule."""
+        if not shape_hash:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT shape_hash, canonical_text, confirmed_ts, "
+                "n_allow_at_grad, active FROM graduated_rules "
+                "WHERE shape_hash=? AND active=1",
+                (shape_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "shape_hash": row[0],
+            "canonical_text": row[1],
+            "confirmed_ts": float(row[2]),
+            "n_allow_at_grad": int(row[3]),
+            "active": int(row[4]),
+        }
+
+    def insert_graduated_rule(
+        self, shape_hash: str, canonical_text: str,
+        confirmed_ts: float, n_allow_at_grad: int,
+    ) -> None:
+        """Write (or re-activate) one operator-confirmed graduated rule.
+
+        Idempotent: a re-confirm of an existing/demoted shape upserts and
+        sets active=1."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO graduated_rules (shape_hash, canonical_text, "
+                "confirmed_ts, n_allow_at_grad, active) VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(shape_hash) DO UPDATE SET "
+                "canonical_text=excluded.canonical_text, "
+                "confirmed_ts=excluded.confirmed_ts, "
+                "n_allow_at_grad=excluded.n_allow_at_grad, active=1",
+                (str(shape_hash), str(canonical_text),
+                 float(confirmed_ts), int(n_allow_at_grad)),
+            )
+
+    def demote_graduated_rule(self, shape_hash: str) -> bool:
+        """Set graduated_rules.active=0 for ``shape_hash`` (reverses a
+        graduation). Returns True if an active row was demoted."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE graduated_rules SET active=0 "
+                "WHERE shape_hash=? AND active=1",
+                (str(shape_hash),),
+            )
+            return (cur.rowcount or 0) > 0
+
+    def list_graduated_rules(
+        self, *, active_only: bool = True,
+    ) -> list[dict[str, object]]:
+        """Return graduated rules, newest confirm first."""
+        sql = (
+            "SELECT shape_hash, canonical_text, confirmed_ts, "
+            "n_allow_at_grad, active FROM graduated_rules"
+        )
+        if active_only:
+            sql += " WHERE active=1"
+        sql += " ORDER BY confirmed_ts DESC"
+        with self._lock:
+            rows = self._conn.execute(sql).fetchall()
+        return [{
+            "shape_hash": r[0], "canonical_text": r[1],
+            "confirmed_ts": float(r[2]), "n_allow_at_grad": int(r[3]),
+            "active": int(r[4]),
+        } for r in rows]
 
     def get_cross_session_patterns(self) -> list[dict[str, object]]:
         """Return all patterns with cross_session=1, newest first by last_seen."""

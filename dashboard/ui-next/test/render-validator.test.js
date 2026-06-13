@@ -765,6 +765,157 @@ test('M16: no monitored-project vocabulary appears in any ui-next source file', 
 });
 
 // ===========================================================================
+// M11 / M12 -- FR-PPP PROVENANCE AUDIT SURFACE (oracle = the leaf contracts +
+//        the AuditDock composition seam). The probe/canary/hallucination leaves
+//        are presentational; AuditDock is the one host that subscribes to the
+//        audit.* bus events, correlates the audit_probe pending rows with their
+//        audit.probe envelopes, and renders the three leaves. These asserts pin
+//        BOTH the leaf MUSTs and the host wiring so the surface cannot silently
+//        un-mount or drop a layer.
+// ===========================================================================
+
+test('M11: AuditProbeRow renders a radio candidate list + explicit none-of-the-above', () => {
+  const src = strippedForRender(readComponent('AuditProbeRow.svelte'));
+  // The probe is a single attestation -> RADIOS, never checkboxes.
+  assert.ok(
+    /type="radio"/.test(src) && !/type="checkbox"/.test(src),
+    'M11 VIOLATION: the probe must be a radio candidate list (single attestation), never checkboxes.',
+  );
+  // An explicit "none of the above" choice (empty value => null provenance).
+  assert.ok(
+    /none of the above/i.test(src),
+    'M11 VIOLATION: the probe must render an explicit "none of the above" option.',
+  );
+  // Candidates are iterated FROM DATA (the envelope), never hard-coded (M16).
+  assert.ok(
+    /\{#each candidates as/.test(src),
+    'M11/M16: candidate streams must be iterated from the envelope data, not hard-coded.',
+  );
+});
+
+test('M11: AuditProbeRow validates session_id before signing + acks with envelope provenance', () => {
+  const src = strippedForRender(readComponent('AuditProbeRow.svelte'));
+  // M11: a probe with no session scope is meaningless -> validate before POST.
+  assert.ok(
+    /sessionMissing/.test(src),
+    'M11 VIOLATION: the probe must validate session_id is set before signing.',
+  );
+  // The ack POST flows through the api wrapper with brain_id + prompt_hash that
+  // were EXTRACTED FROM THE ENVELOPE (never invented client-side).
+  assert.ok(
+    /postProbeAck\s*\(/.test(src),
+    'M11: the probe must ack via postProbeAck (POST /api/sm-probe/ack).',
+  );
+  assert.ok(
+    /brain_id/.test(src) && /prompt_hash/.test(src),
+    'M11 VIOLATION: the ack must carry brain_id + prompt_hash extracted from the envelope.',
+  );
+  // M18 seam: the leaf must never reach the consumer-only command transport.
+  assert.ok(
+    !/\/api\/commands\/stream/.test(src),
+    'M18: the probe leaf must consume /events + the REST acks, never /api/commands/stream.',
+  );
+});
+
+test('M12: CanaryEchoRow renders the nonce + a shared countdown and runs the M12 state machine', () => {
+  const src = strippedForRender(readComponent('CanaryEchoRow.svelte'));
+  // The nonce is the hero of the row (rendered from data).
+  assert.ok(/\{nonce/.test(src), 'M12: the canary must render the nonce FROM DATA.');
+  // Countdown via the SHARED M9 primitive (not a re-implemented timer).
+  assert.ok(
+    /CountdownBar/.test(src),
+    'M12: the canary countdown must reuse the shared CountdownBar primitive (M9 contract).',
+  );
+  // The three M12 transitions must be present: pending -> observed (auto-clear
+  // after a 1.5s flash) and pending -> failed (with the reason).
+  assert.ok(
+    /observed/.test(src) && /1500/.test(src),
+    'M12 VIOLATION: pending -> observed must auto-clear after a 1.5s (1500ms) confirmation flash.',
+  );
+  assert.ok(
+    /failure_reason|failureReason/.test(src),
+    'M12 VIOLATION: pending -> failed must carry + render the failure reason.',
+  );
+  // M17: state transitions are announced (aria-live), not signalled by color alone.
+  assert.ok(/aria-live/.test(src), 'M12/M17: canary state changes must be announced via aria-live.');
+});
+
+test('M12: HallucinationAlert is an operator-dismiss alarm with NO auto-clear / NO countdown', () => {
+  const src = strippedForRender(readComponent('HallucinationAlert.svelte'));
+  // The literal load-bearing headline (M4 paired label, never color alone).
+  assert.ok(
+    /HALLUCINATION DETECTED/.test(src),
+    'M12/M4: the alarm must render the literal headline "HALLUCINATION DETECTED".',
+  );
+  // EXPLICIT operator-dismiss.
+  assert.ok(
+    /dispatch\('dismiss'|on:click=\{dismiss\}/.test(src),
+    'M12 VIOLATION: the hallucination alarm must have an explicit operator-dismiss.',
+  );
+  // M12: it is a correctness alarm -> NO auto-clear, NO countdown (unlike canary).
+  assert.ok(
+    !/CountdownBar/.test(src) && !/setTimeout/.test(src),
+    'M12 VIOLATION: the hallucination alarm must NOT auto-clear or run a countdown ' +
+      '-- it stays until the operator acknowledges it.',
+  );
+  // M17: announced assertively when it lands.
+  assert.ok(/role="alert"/.test(src), 'M12/M17: the alarm must carry role="alert".');
+});
+
+test('M11/M12: AuditDock subscribes to ALL FIVE audit.* bus events and renders the three leaves', () => {
+  const src = strippedForRender(readComponent('AuditDock.svelte'));
+  const events = [
+    'audit.probe',
+    'audit.canary_emit',
+    'audit.canary_observed',
+    'audit.probe_failure',
+    'audit.hallucination_detected',
+  ];
+  for (const ev of events) {
+    assert.ok(
+      new RegExp(`onBusEvent\\(\\s*['"]${ev.replace('.', '\\.')}['"]`).test(src),
+      `M11/M12 VIOLATION: AuditDock must subscribe to the "${ev}" named bus event.`,
+    );
+  }
+  for (const leaf of ['AuditProbeRow', 'CanaryEchoRow', 'HallucinationAlert']) {
+    assert.ok(
+      new RegExp(`<${leaf}\\b`).test(src),
+      `M11/M12 VIOLATION: AuditDock must render <${leaf}> (the surface cannot drop a layer).`,
+    );
+  }
+});
+
+test('M11/M12: AuditDock seeds the audit-probe pending rows post-hoc and never the command transport', () => {
+  const src = strippedForRender(readComponent('AuditDock.svelte'));
+  // It correlates the Layer-1 attestation rows by the audit_probe trigger.
+  assert.ok(
+    /audit_probe/.test(src) && /getHitlPending\s*\(/.test(src),
+    'M11: AuditDock must seed /api/hitl/pending and correlate the audit_probe-kind rows.',
+  );
+  // M15 self-exclude is applied to the seeded rows (defense-in-depth).
+  assert.ok(
+    /getOwnSessionId|isSelf/.test(src),
+    'M15: AuditDock must self-exclude the SM own session from the seeded probe rows.',
+  );
+  // M18: post-hoc only -- never the consumer-only command transport.
+  assert.ok(
+    !/\/api\/commands\/stream/.test(src),
+    'M18: AuditDock must be post-hoc (/events + REST), never /api/commands/stream.',
+  );
+});
+
+test('M11: HitlDock excludes audit_probe rows so the probe surface renders in exactly one place', () => {
+  const src = strippedForRender(readComponent('HitlDock.svelte'));
+  // The generic HITL dock must NOT also render the audit_probe rows (AuditDock
+  // owns them) -- otherwise a probe double-renders.
+  assert.ok(
+    /audit_probe/.test(src) && /trigger_reason\s*!==/.test(src),
+    'M11 VIOLATION: HitlDock must exclude trigger_reason==="audit_probe" rows ' +
+      '(AuditDock renders them as AuditProbeRow) to avoid a double-render.',
+  );
+});
+
+// ===========================================================================
 // SELF-CHECK -- the validator's own oracles must be wired correctly.
 // ===========================================================================
 

@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<!--
+  KINGMODE MOCKUP -- BETA feature "escalation-heatmap" (#14: Escalation Timeline heatmap).
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written (directive #2).
+  This previews dashboard/ui-next/src/lib/components/EscalationTimeline.svelte -- a 12px-wide
+  vertical heatmap gutter pinned to the LEFT margin of the Monitor frame (Frame A), parallel to
+  the decision stream. Glance => bursty-vs-steady + exactly-when. Click a bucket => scope the feed
+  to that 30s window. NOT a new pane; an ambient spine the eye drifts to.
+
+  Real obsidian/phosphor/paper tokens lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css (incl. the per-theme severity palette
+  --c-guide/--c-intervene/--c-block). No new color tokens introduced.
+
+  ADR-18 MUSTs honored in this mockup:
+    M2  ambient at rest (hairline gutter; no motion / no layout-steal; stable 12px slot)
+    M4  PAIRED label+color everywhere -- every dot has a text title/aria-label built FROM DATA;
+        severity also encoded as SIZE (BLOCK ring) + opacity, so color is never the sole signal
+    M15/G2 self-exclude: the SM-own session bucket array MUST render empty (shown + asserted)
+    M16 domain-agnostic: session identity + bucket text are rendered FROM DATA, no monitored-
+        project vocabulary baked in
+    M17 2px solid amber focus ring + 2px offset on the focused bucket (keyboard listbox)
+    M18 post-hoc read-only; no verdict-path work
+
+  Self-contained: inline <style> + inline <script>. No external assets / CDNs / fonts.
+  System font stack. ASCII-only (no smart quotes, no em-dashes -- written as "--", no box-drawing).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Escalation Timeline heatmap -- KingMode mockup (BETA)</title>
+<style>
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ff-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    /* fixed paired-badge tokens (theme-invariant per M4) */
+    --badge-ar-fg:#d97706; --badge-ar-bg:#fef3c7; --badge-ar-border:#d97706;
+    --badge-obs-fg:#475569; --badge-obs-bg:#f1f5f9; --badge-obs-border:#cbd5e1;
+  }
+  /* ---- THEME TOKENS (verbatim from theme.css, incl. per-theme severity palette) ---- */
+  [data-theme="obsidian"]{
+    --bg:#080a0c; --bg-card:#0c1118; --bg-row:#0e141e; --bg-row-alt:#0b1018; --bg-row-hover:#131c2a;
+    --border:#192030; --border-hi:rgba(245,158,11,.25);
+    --text:#b8b098; --text-dim:#948870; --text-ui:#8a8068; --text-bright:#e8e0cc;
+    --accent:#f59e0b; --accent-dim:rgba(245,158,11,.09); --accent-glow:rgba(245,158,11,.35);
+    --font-h:'Teko',var(--ff-system); --font-d:var(--ff-mono);
+    /* severity palette (shared :root default in theme.css) */
+    --c-allow:#22c55e; --c-suggest:#84cc16; --c-guide:#eab308; --c-intervene:#f97316; --c-block:#ef4444;
+  }
+  [data-theme="phosphor"]{
+    --bg:#010602; --bg-card:#010d03; --bg-row:#021005; --bg-row-alt:#010d03; --bg-row-hover:#031508;
+    --border:#082510; --border-hi:rgba(57,255,20,.3);
+    --text:#5aaa60; --text-dim:#429056; --text-ui:#4ea060; --text-bright:#9de89e;
+    --accent:#39ff14; --accent-dim:rgba(57,255,20,.07); --accent-glow:rgba(57,255,20,.3);
+    --font-h:var(--ff-mono); --font-d:var(--ff-mono);
+    /* phosphor severity palette (re-tuned for green-on-black, verbatim theme.css) */
+    --c-allow:#39ff14; --c-suggest:#7fff00; --c-guide:#ccff00; --c-intervene:#ffaa00; --c-block:#ff3333;
+  }
+  [data-theme="paper"]{
+    --bg:#ede8df; --bg-card:#f8f4ee; --bg-row:#fefefc; --bg-row-alt:#f5f1ea; --bg-row-hover:#f0eae0;
+    --border:#ccc4b4; --border-hi:rgba(192,57,43,.35);
+    --text:#2a2018; --text-dim:#6a5040; --text-ui:#5a4030; --text-bright:#140c04;
+    --accent:#c0392b; --accent-dim:rgba(192,57,43,.07); --accent-glow:rgba(192,57,43,.2);
+    --font-h:'Playfair Display',serif; --font-d:var(--ff-mono);
+    /* paper severity palette (darkened for AA on light, verbatim theme.css) */
+    --c-allow:#16a34a; --c-suggest:#65a30d; --c-guide:#ca8a04; --c-intervene:#ea580c; --c-block:#dc2626;
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 78% -12%, var(--accent-dim), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    display:flex; min-height:100%;
+    align-items:flex-start; justify-content:center;
+    padding: 36px 20px 80px;
+  }
+  .stage { width:100%; max-width: 1040px; }
+
+  /* ---- page chrome / header strip ---- */
+  .legend { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; flex-wrap:wrap; }
+  .legend h1 {
+    margin:0; font-family:var(--font-h); font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    font-size:25px; color:var(--text-bright); line-height:1.05;
+  }
+  .legend p { margin:6px 0 0; font-size:13px; color:var(--text-dim); max-width:62ch; line-height:1.55; }
+  .legend .lead-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+
+  /* BETA pill + inline ON/OFF master toggle */
+  .beta-pill {
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:var(--font-d); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--accent); border:1px solid var(--border-hi); border-radius:999px;
+    padding:4px 11px; background:var(--accent-dim); white-space:nowrap;
+  }
+  .beta-pill .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent-glow); }
+
+  .themes { display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
+  .themes button {
+    appearance:none; background:transparent; border:none; cursor:pointer;
+    color:var(--text-ui); font-family:var(--ff-system); font-size:12px; font-weight:600;
+    letter-spacing:.08em; text-transform:uppercase; padding:6px 12px; line-height:1;
+  }
+  .themes button + button { border-left:1px solid var(--border); }
+  .themes button.on { background:var(--accent); color:#fffbeb; font-weight:750; }
+  [data-theme="phosphor"] .themes button.on { color:#010602; }
+  [data-theme="paper"] .themes button.on { color:#fffbeb; }
+
+  /* the master on/off switch (the gated nature, wired client-side) */
+  .switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; flex:0 0 auto; }
+  .switch input { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); overflow:hidden; }
+  .switch__track {
+    position:relative; width:38px; height:20px; border-radius:999px;
+    background:var(--bg-row); border:1px solid var(--border); transition:background .18s, border-color .18s; flex:0 0 auto;
+  }
+  .switch__knob {
+    position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+    background:var(--text-ui); transition:transform .18s, background .18s;
+  }
+  .switch input:checked + .switch__track { background:var(--accent-dim); border-color:var(--border-hi); }
+  .switch input:checked + .switch__track .switch__knob { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .switch__track { outline:2px solid var(--badge-ar-border); outline-offset:2px; }
+  .switch__text {
+    min-width:3.2ch; font-family:var(--font-d); font-size:12px; letter-spacing:.06em; font-weight:600;
+    color:var(--text-dim);
+  }
+  .switch__text[data-on="true"] { color:var(--accent); }
+
+  /* ---------------------------------------------------------------------------
+     FRAME A FACSIMILE -- the Monitor frame. The heatmap gutter is the 12px left
+     margin column; the decision stream is the wide right column. A CSS grid so
+     the 12px slot is reserved whether or not the BETA is ON (M2 no-layout-steal).
+  --------------------------------------------------------------------------- */
+  .frame {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    box-shadow: -18px 24px 60px -30px rgba(0,0,0,.7);
+    overflow:hidden;
+  }
+  .frame__head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 18px; border-bottom:1px solid var(--border); gap:14px;
+  }
+  .frame__title {
+    margin:0; font-family:var(--font-h); font-size:17px; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-bright);
+  }
+  .frame__title .frame-tag {
+    font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.12em; margin-left:9px;
+  }
+  /* M3 ACTION count -- paired label + tabular number, color is a SECOND channel */
+  .fh-count {
+    display:inline-flex; align-items:baseline; gap:6px;
+    font-family:var(--font-d); font-size:12px; color:var(--text-dim);
+    border:1px solid var(--border); border-radius:4px; padding:3px 9px;
+  }
+  .fh-count .n { color:var(--accent); font-variant-numeric:tabular-nums; font-weight:700; }
+  .fh-count .lab { letter-spacing:.1em; text-transform:uppercase; font-size:10px; }
+
+  .fa-ctx {
+    display:flex; align-items:baseline; gap:8px; padding:9px 18px 4px;
+    font-size:.68rem; color:var(--text-dim); letter-spacing:.03em;
+  }
+  .fa-ctx .lbl { text-transform:uppercase; letter-spacing:.12em; font-size:.58rem; color:var(--text-ui); }
+  .fa-ctx .name { font-family:var(--font-d); color:var(--text-bright); font-weight:600; }
+  .fa-ctx .pid { font-family:var(--font-d); color:var(--text-dim); }
+
+  /* the two-column body: [12px gutter] [stream] */
+  .fa-body {
+    display:grid;
+    grid-template-columns: 12px 1fr;
+    gap: 14px;
+    padding: 6px 18px 18px;
+    align-items:start;
+  }
+
+  /* ---- the heatmap gutter (EscalationTimeline.svelte facsimile) ---- */
+  .etl {
+    position:relative;
+    width:12px;
+    /* reserve the slot even when OFF so toggling never reflows (M2). */
+    min-height: 520px;
+    display:flex; flex-direction:column;
+  }
+  /* faint slate baseline ("tide line") the dots sit on */
+  .etl__spine {
+    position:absolute; top:0; bottom:0; left:50%; width:1px; transform:translateX(-50%);
+    background:var(--border);
+  }
+  /* the focusable listbox of bucket rows; newest at TOP (matches feed) */
+  .etl__list {
+    position:relative; z-index:1;
+    list-style:none; margin:0; padding:0;
+    display:flex; flex-direction:column;
+    outline:none;
+  }
+  .etl__list:focus-visible { outline:none; }
+  .etl__bucket {
+    position:relative;
+    height:8px;            /* ~2px row scaled up for an at-rest readable mockup */
+    display:flex; align-items:center; justify-content:center;
+    cursor:default;
+  }
+  .etl__bucket[data-active="true"] { cursor:pointer; }
+  /* the dot: color = peak severity; size+opacity = density; BLOCK gets a ring */
+  .etl__dot {
+    width:6px; height:6px; border-radius:50%;
+    background:transparent;        /* quiet buckets transparent */
+    transition: box-shadow .15s ease;
+  }
+  .etl__bucket[data-peak="GUIDE"]     .etl__dot { background:var(--c-guide); }
+  .etl__bucket[data-peak="INTERVENE"] .etl__dot { background:var(--c-intervene); }
+  .etl__bucket[data-peak="BLOCK"]     .etl__dot {
+    background:var(--c-block);
+    width:8px; height:8px;         /* +1px radius: heaviest signal is heavier in INK */
+    box-shadow:0 0 0 1.5px var(--bg-card), 0 0 0 2.5px var(--c-block); /* faint outer ring */
+  }
+  /* the currently filtered bucket: 2px amber focus ring + offset (M17) */
+  .etl__bucket[data-selected="true"]::after {
+    content:""; position:absolute; inset:-3px -4px;
+    border:2px solid var(--accent); border-radius:4px;
+  }
+  /* keyboard focus on a bucket reuses the same M17 amber ring */
+  .etl__bucket:focus-visible {
+    outline:2px solid var(--accent); outline-offset:2px; border-radius:3px;
+  }
+
+  /* hover/focus flyout chip -- the SAME text in WORDS next to the colored swatch (M4) */
+  .etl__flyout {
+    position:absolute; left:18px; top:50%; transform:translateY(-50%);
+    z-index:5; white-space:nowrap;
+    display:none; align-items:center; gap:8px;
+    background:var(--bg-row); border:1px solid var(--border-hi); border-radius:5px;
+    padding:6px 10px; box-shadow:0 8px 24px -10px rgba(0,0,0,.7);
+    font-family:var(--font-d); font-size:11px; color:var(--text-bright);
+  }
+  .etl__bucket[data-active="true"]:hover .etl__flyout,
+  .etl__bucket:focus-visible .etl__flyout { display:inline-flex; }
+  .etl__flyout .swatch { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .etl__flyout .swatch[data-peak="GUIDE"]     { background:var(--c-guide); }
+  .etl__flyout .swatch[data-peak="INTERVENE"] { background:var(--c-intervene); }
+  .etl__flyout .swatch[data-peak="BLOCK"]     { background:var(--c-block); box-shadow:0 0 0 1.5px var(--bg-row),0 0 0 2.5px var(--c-block); }
+  @media (prefers-reduced-motion: reduce) {
+    .etl__dot { transition:none; }
+  }
+
+  /* legend + beta annotation beneath the strip */
+  .etl-foot { grid-column: 1 / -1; display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-top:6px; }
+  .legend-key { display:inline-flex; align-items:center; gap:12px; font-family:var(--font-d); font-size:11px; color:var(--text-dim); }
+  .legend-key .k { display:inline-flex; align-items:center; gap:5px; }
+  .legend-key .sw { width:8px; height:8px; border-radius:50%; }
+  .legend-key .sw.g { background:var(--c-guide); }
+  .legend-key .sw.i { background:var(--c-intervene); }
+  .legend-key .sw.b { background:var(--c-block); box-shadow:0 0 0 1px var(--bg-card),0 0 0 2px var(--c-block); width:9px; height:9px; }
+  .beta-anno {
+    font-family:var(--font-d); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--badge-ar-fg); background:var(--badge-ar-bg); border:1px solid var(--badge-ar-border);
+    border-radius:3px; padding:2px 8px;
+  }
+
+  /* ---- the decision stream (ReplStream facsimile) ---- */
+  .stream { min-width:0; }
+  .stream__tide {
+    display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+    border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:6px;
+  }
+  .stream__tide .label { font-size:11px; text-transform:uppercase; letter-spacing:.12em; color:var(--text-ui); }
+  .stream__tide .conn { font-family:var(--font-d); font-size:11px; color:var(--text-dim); }
+  .stream__tide .conn .live { color:var(--accent); }
+  /* the active time-window filter banner (what the tap opens) -- timestamp NAMES it, not a color */
+  .stream__filter {
+    display:none; align-items:center; justify-content:space-between; gap:10px;
+    background:var(--bg-row-alt); border:1px solid var(--border-hi); border-radius:5px;
+    padding:7px 11px; margin-bottom:8px; font-size:12px;
+  }
+  .stream__filter.on { display:flex; }
+  .stream__filter .ftxt { color:var(--text-bright); font-family:var(--font-d); }
+  .stream__filter .fclear {
+    appearance:none; background:transparent; border:1px solid var(--border); color:var(--text-ui);
+    border-radius:4px; font-size:11px; padding:3px 9px; cursor:pointer; letter-spacing:.04em;
+  }
+  .stream__filter .fclear:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .row {
+    display:grid; grid-template-columns: 64px 96px 1fr; gap:10px; align-items:center;
+    padding:8px 4px; border-top:1px solid var(--border); font-size:12px;
+  }
+  .row:first-child { border-top:none; }
+  .row.dim { opacity:.32; }   /* rows OUTSIDE the active window dim, never hide */
+  .row .ts { font-family:var(--font-d); color:var(--text-dim); font-variant-numeric:tabular-nums; }
+  .row .msg { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  /* paired action badge: text label ALWAYS present; color is the 2nd channel (M4) */
+  .badge {
+    display:inline-flex; align-items:center; gap:6px; justify-self:start;
+    font-family:var(--font-d); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+    border:1px solid var(--border); border-radius:3px; padding:2px 7px; color:var(--text-bright);
+  }
+  .badge .swatch { width:7px; height:7px; border-radius:50%; }
+  .badge[data-act="ALLOW"]     { border-color:var(--c-allow); }
+  .badge[data-act="ALLOW"] .swatch { background:var(--c-allow); }
+  .badge[data-act="SUGGEST"]   { border-color:var(--c-suggest); }
+  .badge[data-act="SUGGEST"] .swatch { background:var(--c-suggest); }
+  .badge[data-act="GUIDE"]     { border-color:var(--c-guide); }
+  .badge[data-act="GUIDE"] .swatch { background:var(--c-guide); }
+  .badge[data-act="INTERVENE"] { border-color:var(--c-intervene); }
+  .badge[data-act="INTERVENE"] .swatch { background:var(--c-intervene); }
+  .badge[data-act="BLOCK"]     { border-color:var(--c-block); }
+  .badge[data-act="BLOCK"] .swatch { background:var(--c-block); box-shadow:0 0 0 1px var(--bg-card),0 0 0 2px var(--c-block); }
+
+  /* OFF state: the gutter renders NOTHING (no-op gate). A ghost note explains. */
+  .frame[data-beta="off"] .etl__list,
+  .frame[data-beta="off"] .etl__spine,
+  .frame[data-beta="off"] .etl-foot { display:none; }
+  .etl__off {
+    display:none; grid-column:1 / -1; font-size:12px; color:var(--text-dim); font-style:italic;
+    border:1px dashed var(--border); border-radius:5px; padding:8px 12px; line-height:1.5;
+  }
+  .frame[data-beta="off"] .etl__off { display:block; }
+  .frame[data-beta="off"] .fa-body { grid-template-columns: 12px 1fr; } /* slot still reserved */
+
+  /* ---- secondary: Settings > BETA features row shown ON ---- */
+  .settings {
+    margin-top:22px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; overflow:hidden;
+  }
+  .settings__head { padding:12px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .settings__head h3 { margin:0; font-family:var(--font-h); font-size:15px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-bright); }
+  .settings__head .grp { font-family:var(--font-d); font-size:10px; color:var(--text-dim); letter-spacing:.1em; text-transform:uppercase; }
+  .settings__row { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:13px 18px; }
+  .settings__row .main { min-width:0; }
+  .settings__row .name { font-size:13px; font-weight:600; color:var(--text-bright); }
+  .settings__row .name .num { font-family:var(--font-d); font-size:11px; color:var(--text-dim); margin-left:7px; }
+  .settings__row .desc { font-size:12px; color:var(--text-dim); line-height:1.5; margin-top:3px; max-width:58ch; }
+
+  .footnote { margin-top:20px; font-size:11px; color:var(--text-dim); line-height:1.65; max-width:90ch; }
+  .footnote code { font-family:var(--font-d); color:var(--text-ui); }
+  .footnote strong { color:var(--text-bright); }
+  .self-note {
+    margin-top:12px; padding:10px 13px; border:1px solid var(--border); border-radius:5px;
+    background:var(--bg-row-alt); font-size:12px; color:var(--text-dim); line-height:1.55;
+  }
+  .self-note strong { color:var(--text-bright); }
+  .self-note code { font-family:var(--font-d); color:var(--accent); }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <!-- ===================== HEADER STRIP ===================== -->
+    <div class="legend">
+      <div>
+        <div class="lead-row">
+          <h1>Escalation Timeline heatmap</h1>
+          <span class="beta-pill"><span class="dot" aria-hidden="true"></span> BETA</span>
+        </div>
+        <p>Glance-readable density heatmap of governance escalation -- a 12px vertical gutter
+           pinned to the LEFT margin of the Monitor frame, parallel to the decision stream.
+           Bursty-vs-steady and exactly-WHEN in a 500ms parse, no scrolling the feed. Tap a
+           bucket to scope the stream to that 30s window. Switch theme to preview all three.</p>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:12px; align-items:flex-end;">
+        <label class="switch" title="Master ON/OFF -- BETA, default OFF">
+          <input type="checkbox" id="betaToggle" checked aria-label="Escalation Timeline heatmap BETA (currently ON)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="betaText" data-on="true">ON</span>
+        </label>
+        <div class="themes" role="group" aria-label="Theme preview">
+          <button class="on" data-theme-btn="obsidian" aria-pressed="true">Obsidian</button>
+          <button data-theme-btn="phosphor" aria-pressed="false">Phosphor</button>
+          <button data-theme-btn="paper" aria-pressed="false">Paper</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== FRAME A FACSIMILE ===================== -->
+    <div class="frame" id="frame" data-beta="on" role="region" aria-label="Monitor frame -- Interactive sessions">
+      <div class="frame__head">
+        <h2 class="frame__title">Interactive Sessions <span class="frame-tag">FRAME A</span></h2>
+        <span class="fh-count"><span class="n" id="arCount">0</span> <span class="lab">action required</span></span>
+      </div>
+
+      <div class="fa-ctx">
+        <span class="lbl">scope</span>
+        <span class="name" id="scopeName">s-4f7a2c91</span>
+        <span class="pid">pid 48217</span>
+      </div>
+
+      <div class="fa-body">
+        <!-- THE HEATMAP GUTTER (EscalationTimeline.svelte) -->
+        <nav class="etl" aria-label="Escalation timeline gutter">
+          <span class="etl__spine" aria-hidden="true"></span>
+          <ul
+            class="etl__list"
+            id="etlList"
+            role="listbox"
+            tabindex="0"
+            aria-label="Escalation timeline, newest first. Arrow keys move between escalation buckets, Enter applies a time-window filter, Escape clears it."
+            aria-activedescendant=""
+          ></ul>
+          <div class="etl-foot">
+            <span class="legend-key" aria-label="Severity legend">
+              <span class="k"><span class="sw g" aria-hidden="true"></span>G GUIDE</span>
+              <span class="k"><span class="sw i" aria-hidden="true"></span>I INTERVENE</span>
+              <span class="k"><span class="sw b" aria-hidden="true"></span>B BLOCK</span>
+            </span>
+            <span class="beta-anno">BETA -- default OFF, toggled in Settings</span>
+          </div>
+          <div class="etl__off">Heatmap OFF -- the gutter renders nothing and registers no poller / SSE handler
+            (no-op gate <code style="font-family:var(--font-d)">{#if $betaFlags['escalation-heatmap']}</code>). The 12px slot stays
+            reserved so toggling never reflows the feed. Flip the master switch above to ON.</div>
+        </nav>
+
+        <!-- THE DECISION STREAM (ReplStream facsimile) -->
+        <div class="stream">
+          <div class="stream__tide">
+            <span class="label">decision stream -- newest first</span>
+            <span class="conn"><span class="live">live</span> -- 30 min span</span>
+          </div>
+
+          <div class="stream__filter" id="filterBanner" role="status">
+            <span class="ftxt" id="filterText">Escalations in 13:48 -- 13:48:30</span>
+            <button class="fclear" id="filterClear">Clear window</button>
+          </div>
+
+          <div id="rows"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS > BETA FEATURES (row shown ON) ===================== -->
+    <div class="settings" role="region" aria-label="Settings -- BETA features">
+      <div class="settings__head">
+        <h3>Settings &gt; BETA features</h3>
+        <span class="grp">group: Monitor</span>
+      </div>
+      <div class="settings__row">
+        <div class="main">
+          <div class="name">Escalation Timeline heatmap <span class="num">#14</span></div>
+          <div class="desc">Glance-readable density heatmap of governance escalation over the session span.
+            Default OFF. When OFF the component renders nothing and registers no poller / SSE handler.</div>
+        </div>
+        <label class="switch" title="Toggle the BETA flag">
+          <input type="checkbox" id="settingsToggle" checked aria-label="Escalation Timeline heatmap (currently ON)">
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__text" id="settingsText" data-on="true">ON</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- G2 / M15 self-exclude proof -->
+    <div class="self-note">
+      <strong>Self-exclude proof (G2 polarity).</strong> SM monitors NON-SM sessions only. The
+      <code>/api/escalation-timeline</code> endpoint MUST return an empty bucket array for the
+      SM-own session (excluded at the SQL WHERE on <code>sessions.project_slug</code> + a client
+      backstop). Try the SM-own session from the scope picker -- the gutter goes blank with a
+      "self-monitored -- excluded" note, never a wall of dots.
+      <div style="margin-top:9px;">
+        <button id="selfBtn" class="fclear" style="font-family:var(--font-d)">Switch scope to SM-own session</button>
+        <button id="liveBtn" class="fclear" style="font-family:var(--font-d); margin-left:6px;">Back to governed session</button>
+      </div>
+    </div>
+
+    <p class="footnote">
+      <strong>Footprint.</strong> Additive <code>new-read-api</code>, no FROZEN touch, no new envelope, no new table.
+      One read endpoint <code>GET /api/escalation-timeline?session_id&amp;bucket_ms&amp;since&amp;until</code>
+      (server pre-aggregates contiguous wall-clock buckets so the 12px component does zero math), one new
+      component <code>EscalationTimeline.svelte</code>, registry key <code>escalation-heatmap</code> (group Monitor,
+      default OFF). Reuses the existing severity tokens <code>--c-guide / --c-intervene / --c-block</code> --
+      no new color tokens. Tapping a bucket emits a DOM <code>CustomEvent 'sm:filter-timewindow'</code> carrying
+      <code>{sessionId, t0, t1}</code> (file-disjoint, mirrors EscalationRail's <code>'sm:focus-session'</code>);
+      the shell scopes the stream via one additive <code>.filter(r =&gt; t0 &lt;= r.timestamp &lt; t1)</code>.
+      Every dot pairs color with a data-built text title + aria-label and encodes severity ALSO as size
+      (BLOCK ring) + opacity -- color is never the sole signal (ADR-18 M4). axe target: 0 serious,
+      color-contrast PASS.
+    </p>
+  </div>
+
+<script>
+  // ---------------------------------------------------------------------------
+  // MOCK DATA -- matches the endpoint shape in mockDataSpec. Server pre-aggregates
+  // a flat, render-ready bucket array; quiet buckets ARE present (total 0) so the
+  // Y-axis is true wall-clock, not a compacted list. 60 buckets = 30 min @ 30s.
+  // peak = highest-severity present (BLOCK>INTERVENE>GUIDE) or null when total==0.
+  // ONE deliberate BLOCK burst at buckets 16-18 + scattered single GUIDE dots.
+  // ---------------------------------------------------------------------------
+  var BUCKET_MS = 30000;
+  var T_START = 1749600000000; // wall-clock epoch ms of bucket 0
+  var SEV_RANK = { GUIDE:1, INTERVENE:2, BLOCK:3 };
+
+  function mkBucket(i, g, n, b) {
+    var counts = { GUIDE:g, INTERVENE:n, BLOCK:b };
+    var total = g + n + b;
+    var peak = null;
+    if (b > 0) peak = 'BLOCK';
+    else if (n > 0) peak = 'INTERVENE';
+    else if (g > 0) peak = 'GUIDE';
+    return { t: T_START + i * BUCKET_MS, counts: counts, total: total, peak: peak };
+  }
+
+  // governed (non-SM) session fixture -- the real timeline
+  var GOVERNED = (function(){
+    var arr = [];
+    for (var i = 0; i < 60; i++) arr.push(mkBucket(i, 0, 0, 0)); // all quiet baseline
+    // scattered steady GUIDE dots (early calm)
+    [3,7,11,24,29,41,52,57].forEach(function(i){ arr[i] = mkBucket(i,1,0,0); });
+    // a couple of INTERVENE blips
+    arr[9]  = mkBucket(9, 1,1,0);
+    arr[34] = mkBucket(34,0,1,0);
+    arr[47] = mkBucket(47,1,1,0);
+    // THE BLOCK BURST -- buckets 16,17,18 (a contiguous red clump)
+    arr[16] = mkBucket(16, 1,2,2);
+    arr[17] = mkBucket(17, 0,2,3); // peak density
+    arr[18] = mkBucket(18, 0,1,2);
+    return arr;
+  })();
+  var GOVERNED_MAXTOTAL = GOVERNED.reduce(function(m,b){ return Math.max(m,b.total); }, 0);
+
+  // SM-OWN session -- the endpoint MUST return this empty (G2 self-exclude proof)
+  var SELF = [];
+
+  var SESSIONS = {
+    'governed': { id:'s-4f7a2c91', label:'s-4f7a2c91', pid:'pid 48217', buckets:GOVERNED, max:GOVERNED_MAXTOTAL, self:false },
+    'self':     { id:'sm-self',    label:'streamManager (self)', pid:'',  buckets:SELF,     max:0,                self:true  }
+  };
+  var currentSessionKey = 'governed';
+
+  // sample decision-stream rows (ReplStream facsimile), each carries a timestamp
+  // so the time-window filter can scope them. Newest-first.
+  var ROWS = (function(){
+    var out = [];
+    // build a handful per non-empty bucket, plus ambient ALLOW/SUGGEST noise
+    function push(bucketIdx, act, msg){
+      out.push({ t: T_START + bucketIdx*BUCKET_MS + Math.floor(Math.random()*BUCKET_MS), act:act, msg:msg, bucket:bucketIdx });
+    }
+    push(57,'GUIDE','tightened a shell glob to a narrower path');
+    push(52,'ALLOW','read-only status check accepted');
+    push(47,'INTERVENE','rewrote a destructive flag to a dry-run');
+    push(47,'GUIDE','suggested a safer equivalent command');
+    push(41,'GUIDE','nudged toward an idempotent edit');
+    push(34,'INTERVENE','blocked an unscoped recursive delete proposal');
+    push(29,'ALLOW','file write within scope accepted');
+    push(24,'GUIDE','advised pinning a version before install');
+    // the burst window 16-18
+    push(18,'BLOCK','denied a force-push to a protected ref');
+    push(18,'INTERVENE','converted a wipe to a soft archive');
+    push(17,'BLOCK','denied an out-of-scope credential read');
+    push(17,'BLOCK','denied a second protected-ref overwrite');
+    push(17,'INTERVENE','downgraded a bulk operation to single-target');
+    push(17,'INTERVENE','required confirmation on a mass rename');
+    push(16,'BLOCK','denied a sandbox-escape path');
+    push(16,'INTERVENE','re-scoped a wildcard to an explicit list');
+    push(16,'BLOCK','denied an unbounded network fetch');
+    push(16,'GUIDE','flagged a noisy retry loop');
+    push(11,'GUIDE','suggested a smaller diff');
+    push(9,'INTERVENE','paused on an ambiguous overwrite');
+    push(9,'GUIDE','recommended a backup first');
+    push(7,'GUIDE','nudged toward a named branch');
+    push(5,'SUGGEST','offered a lint autofix');
+    push(3,'GUIDE','advised a scoped test run');
+    out.sort(function(a,b){ return b.t - a.t; }); // newest first
+    return out;
+  })();
+
+  // ---- helpers ----
+  function pad(n){ return n < 10 ? '0'+n : ''+n; }
+  function hhmm(ms){ var d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); }
+  function hhmmss(ms){ var d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  // build the per-bucket paired text (M4) FROM DATA -- domain-agnostic
+  function bucketText(b){
+    var parts = [];
+    if (b.counts.BLOCK)     parts.push(b.counts.BLOCK + ' BLOCK');
+    if (b.counts.INTERVENE) parts.push(b.counts.INTERVENE + ' INTERVENE');
+    if (b.counts.GUIDE)     parts.push(b.counts.GUIDE + ' GUIDE');
+    var when = hhmm(b.t);
+    if (!parts.length) return when + ' -- quiet (no escalations)';
+    return when + ' -- ' + parts.join(', ') + ' escalation' + (b.total === 1 ? '' : 's');
+  }
+
+  // ---- state ----
+  var activeWindow = null; // {t0, t1, label} when a bucket is selected
+  var navList = [];        // indexes of non-empty buckets (keyboard nav skips quiet)
+  var focusIdx = -1;       // index into navList of the keyboard-focused bucket
+
+  // ---- render the gutter ----
+  function renderGutter(){
+    var sess = SESSIONS[currentSessionKey];
+    var list = document.getElementById('etlList');
+    var scopeName = document.getElementById('scopeName');
+    scopeName.textContent = sess.label;
+
+    // G2: a self-monitored session returns an empty bucket array -> blank gutter
+    if (sess.self) {
+      list.innerHTML = '<li class="etl__bucket" data-active="false" aria-hidden="false" '
+        + 'style="height:auto"><span class="etl__dot" aria-hidden="true"></span></li>';
+      list.setAttribute('aria-label', 'Escalation timeline empty -- this is the SM-own session and is self-excluded (no governance of self).');
+      // a small inline note
+      list.innerHTML = '';
+      var note = document.createElement('li');
+      note.className = 'etl__bucket';
+      note.style.height = 'auto';
+      note.style.fontSize = '10px';
+      note.style.color = 'var(--text-dim)';
+      note.style.fontStyle = 'italic';
+      note.style.writingMode = 'vertical-rl';
+      note.style.transform = 'rotate(180deg)';
+      note.style.letterSpacing = '.08em';
+      note.textContent = 'self -- excluded (G2)';
+      list.appendChild(note);
+      navList = [];
+      focusIdx = -1;
+      return;
+    }
+
+    var buckets = sess.buckets;
+    var max = sess.max || 1;
+    // newest at TOP -> render in reverse index order
+    var html = '';
+    navList = [];
+    for (var i = buckets.length - 1; i >= 0; i--) {
+      var b = buckets[i];
+      var active = b.total > 0;
+      if (active) navList.push(i);
+      var dens = active ? (b.total / max) : 0;
+      var opacity = active ? (0.55 + 0.45 * dens) : 0; // density -> opacity (floor 0.55 so a 1-count dot never drops under contrast)
+      var selected = activeWindow && b.t === activeWindow.t0;
+      var txt = bucketText(b);
+      html += '<li class="etl__bucket"'
+        + ' id="etl-b-' + i + '"'
+        + ' role="option"'
+        + ' data-idx="' + i + '"'
+        + ' data-active="' + (active ? 'true' : 'false') + '"'
+        + ' data-peak="' + (b.peak || '') + '"'
+        + ' data-selected="' + (selected ? 'true' : 'false') + '"'
+        + ' aria-selected="' + (selected ? 'true' : 'false') + '"'
+        + (active ? ' tabindex="-1"' : ' aria-hidden="true"')
+        + ' title="' + esc(txt) + '"'
+        + ' aria-label="' + esc(txt) + '">'
+        + '<span class="etl__dot" aria-hidden="true" style="opacity:' + opacity.toFixed(2) + '"></span>';
+      if (active) {
+        html += '<span class="etl__flyout" aria-hidden="true">'
+          + '<span class="swatch" data-peak="' + (b.peak||'') + '"></span>'
+          + '<span>' + esc(txt) + '</span></span>';
+      }
+      html += '</li>';
+    }
+    list.innerHTML = html;
+    list.setAttribute('aria-label', 'Escalation timeline, newest first. ' + navList.length
+      + ' buckets with escalations. Arrow keys move between them, Enter applies a time-window filter, Escape clears it.');
+  }
+
+  // ---- render the stream + ACTION count ----
+  function renderStream(){
+    var sess = SESSIONS[currentSessionKey];
+    var rowsHost = document.getElementById('rows');
+    var arCount = document.getElementById('arCount');
+
+    if (sess.self) {
+      rowsHost.innerHTML = '<div class="row"><span class="ts"></span>'
+        + '<span class="badge" data-act="ALLOW"><span class="swatch" aria-hidden="true"></span>SELF</span>'
+        + '<span class="msg" style="color:var(--text-dim);font-style:italic">SM-own session is never governed by SM (G2). No rows.</span></div>';
+      arCount.textContent = '0';
+      return;
+    }
+
+    // ACTION-required count = escalation rows currently in the (optionally filtered) scope
+    var visible = ROWS.filter(function(r){
+      if (!activeWindow) return true;
+      return r.t >= activeWindow.t0 && r.t < activeWindow.t1;
+    });
+    // count escalations (GUIDE/INTERVENE/BLOCK) in view for the header number
+    var escCount = visible.filter(function(r){ return SEV_RANK[r.act]; }).length;
+    arCount.textContent = String(escCount);
+
+    rowsHost.innerHTML = ROWS.map(function(r){
+      var inWindow = !activeWindow || (r.t >= activeWindow.t0 && r.t < activeWindow.t1);
+      return '<div class="row' + (inWindow ? '' : ' dim') + '">'
+        + '<span class="ts">' + hhmmss(r.t) + '</span>'
+        + '<span class="badge" data-act="' + r.act + '"><span class="swatch" aria-hidden="true"></span>' + r.act + '</span>'
+        + '<span class="msg" title="' + esc(r.msg) + '">' + esc(r.msg) + '</span>'
+        + '</div>';
+    }).join('');
+  }
+
+  function renderFilterBanner(){
+    var banner = document.getElementById('filterBanner');
+    var ftext = document.getElementById('filterText');
+    if (activeWindow) {
+      banner.classList.add('on');
+      ftext.textContent = 'Escalations in ' + activeWindow.label; // timestamp NAMES the window, not a color
+    } else {
+      banner.classList.remove('on');
+    }
+  }
+
+  function renderAll(){ renderGutter(); renderStream(); renderFilterBanner(); }
+
+  // ---- the KEY interaction: tap a bucket -> emit sm:filter-timewindow, scope feed ----
+  function applyWindow(idx){
+    var sess = SESSIONS[currentSessionKey];
+    if (sess.self) return;
+    var b = sess.buckets[idx];
+    if (!b || b.total === 0) return;
+    var t0 = b.t, t1 = b.t + BUCKET_MS;
+    // toggle off if tapping the already-selected bucket
+    if (activeWindow && activeWindow.t0 === t0) { clearWindow(); return; }
+    activeWindow = { t0:t0, t1:t1, label: hhmm(t0) + ' -- ' + hhmmss(t1) };
+    // emit the DOM CustomEvent the real component dispatches (mirrors EscalationRail)
+    window.dispatchEvent(new CustomEvent('sm:filter-timewindow', {
+      detail: { sessionId: sess.id, t0:t0, t1:t1 }
+    }));
+    renderAll();
+  }
+
+  function clearWindow(){
+    activeWindow = null;
+    window.dispatchEvent(new CustomEvent('sm:filter-timewindow', { detail: { sessionId: SESSIONS[currentSessionKey].id, t0:null, t1:null } }));
+    renderAll();
+  }
+
+  // ---- wiring: click a bucket ----
+  document.getElementById('etlList').addEventListener('click', function(e){
+    var li = e.target.closest('.etl__bucket[data-active="true"]');
+    if (!li) return;
+    applyWindow(parseInt(li.getAttribute('data-idx'), 10));
+  });
+
+  // ---- KEYBOARD listbox path (Up/Down skip quiet, Enter/Space apply, Esc clear) ----
+  function focusNav(newPos){
+    if (!navList.length) return;
+    focusIdx = Math.max(0, Math.min(navList.length - 1, newPos));
+    var bucketIdx = navList[focusIdx];
+    var li = document.getElementById('etl-b-' + bucketIdx);
+    if (li) { li.setAttribute('tabindex','0'); li.focus(); }
+    document.getElementById('etlList').setAttribute('aria-activedescendant', 'etl-b-' + bucketIdx);
+  }
+  document.getElementById('etlList').addEventListener('keydown', function(e){
+    if (!navList.length) return;
+    if (e.key === 'ArrowUp')   { e.preventDefault(); focusNav(focusIdx <= 0 ? 0 : focusIdx - 1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); focusNav(focusIdx < 0 ? 0 : focusIdx + 1); }
+    else if (e.key === 'Home') { e.preventDefault(); focusNav(0); }
+    else if (e.key === 'End')  { e.preventDefault(); focusNav(navList.length - 1); }
+    else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (focusIdx < 0) focusNav(0);
+      else applyWindow(navList[focusIdx]);
+    }
+    else if (e.key === 'Escape') { e.preventDefault(); clearWindow(); }
+  });
+
+  // when the listbox itself gets focus, seed onto the newest non-empty bucket
+  document.getElementById('etlList').addEventListener('focus', function(){
+    if (focusIdx < 0 && navList.length) focusNav(0);
+  });
+
+  document.getElementById('filterClear').addEventListener('click', clearWindow);
+
+  // ---- master ON/OFF toggle (the gated nature, wired client-side) ----
+  function setBeta(on){
+    var frame = document.getElementById('frame');
+    frame.setAttribute('data-beta', on ? 'on' : 'off');
+    document.getElementById('betaToggle').checked = on;
+    document.getElementById('settingsToggle').checked = on;
+    document.getElementById('betaText').textContent = on ? 'ON' : 'OFF';
+    document.getElementById('betaText').setAttribute('data-on', on ? 'true' : 'false');
+    document.getElementById('settingsText').textContent = on ? 'ON' : 'OFF';
+    document.getElementById('settingsText').setAttribute('data-on', on ? 'true' : 'false');
+    if (!on) { activeWindow = null; renderFilterBanner(); }
+  }
+  document.getElementById('betaToggle').addEventListener('change', function(e){ setBeta(e.target.checked); });
+  document.getElementById('settingsToggle').addEventListener('change', function(e){ setBeta(e.target.checked); });
+
+  // ---- self-exclude proof buttons ----
+  document.getElementById('selfBtn').addEventListener('click', function(){
+    currentSessionKey = 'self'; activeWindow = null; focusIdx = -1; renderAll();
+  });
+  document.getElementById('liveBtn').addEventListener('click', function(){
+    currentSessionKey = 'governed'; activeWindow = null; focusIdx = -1; renderAll();
+  });
+
+  // ---- theme switcher ----
+  document.querySelectorAll('[data-theme-btn]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.documentElement.setAttribute('data-theme', b.getAttribute('data-theme-btn'));
+      document.querySelectorAll('[data-theme-btn]').forEach(function(x){
+        var on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+  });
+
+  // initial paint
+  renderAll();
+</script>
+</body>
+</html>

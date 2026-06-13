@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<!--
+  recorded-session-replay-forensics.html -- KingMode .html MOCKUP (approval gate).
+  BETA feature "recorded-session-replay-forensics" (#23): Recorded session replay
+  forensics -- side-by-side decision deltas.
+
+  PURPOSE: let the operator confirm the UI approach BEFORE any code is written
+  (directive #2). Self-contained: inline <style> + inline <script>, NO external
+  assets / CDNs / fonts. System font stack only.
+
+  This previews the REAL ui-next KingMode tokens (lifted verbatim from
+  dashboard/ui-next/src/styles/theme.css, obsidian theme) so the operator sees
+  the production palette: dark obsidian surface, amber accent, the M4 fixed
+  badge tokens, AAA-intent contrast.
+
+  ADR-18 MUST floor honoured in this mockup:
+    - M2/M3: it is a right-side DRAWER (role=dialog aria-modal), NEVER a fourth
+      frame, NEVER auto-foregrounds. The resting affordance is one header chip.
+    - M4 (paired label+color): every state renders its LITERAL text
+      (MATCH / VERDICT MOVED / ESCALATED) beside any color; color is never the
+      sole signal. The diff cells ALWAYS write the old->new text.
+    - M16 (domain-agnostic): NO monitored-project vocabulary. Generic governance
+      verbs only; project identity would arrive from server data, never here.
+    - M17 (a11y): chip is a real <button aria-haspopup="dialog">; drawer has a
+      labelled heading, Escape-to-close, focus moved in on open + restored on
+      close, a Tab focus-trap, an aria-live scrubber announcer, the 2px amber
+      focus ring, reduced-motion honoured.
+    - G2 (polarity): excluded_self_rows surfaced; recorded sessions are NON-SM
+      by construction.
+
+  GATING: this feature is NEEDS-AMENDMENT. The UI is approvable here, but the
+  BUILD is gated on an ADR-17 v1.4 cassette recorded_session_uuid amendment +
+  the ADR-18 frozen-touch sign-off. An amber footnote states this.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (rendered as "--"),
+  no box-drawing characters.
+-->
+<html lang="en" data-theme="obsidian" data-motion="allow">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Replay Forensics -- KingMode mockup (BETA)</title>
+<style>
+  /* ==========================================================================
+     TOKEN LAYER -- lifted verbatim from ui-next theme.css (obsidian theme) so
+     the mockup previews the REAL production custom-property values + the M4
+     fixed badge tokens. No new color is invented here.
+     ========================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    /* M4 fixed badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+
+    /* M17 focus ring */
+    --sm-focus: #d97706;
+  }
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+
+    --font-d:       var(--ff-mono);
+
+    --c-allow:     #22c55e;
+    --c-guide:     #eab308;
+    --c-block:     #ef4444;
+  }
+
+  /* ==========================================================================
+     PAGE FRAME -- a thin "dashboard backdrop" so the drawer reads as the
+     CoverageAnalyzer/DecisionOracle right-side drawer overlaying Frame-D, not
+     a standalone page. The backdrop is deliberately quiet; the drawer is the
+     subject.
+     ========================================================================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  .stage {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 1.4rem 1.6rem 5rem;
+  }
+
+  /* ---- mockup banner (NOT part of the feature -- the approval-gate framing) -- */
+  .mk-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    padding: 0.6rem 0.85rem;
+    margin-bottom: 1.4rem;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    background: var(--bg-card);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+  .mk-banner strong { color: var(--text-bright); }
+  .mk-banner .mk-kbd {
+    font-family: var(--font-d);
+    font-size: 0.7rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: var(--bg-row);
+    color: var(--text);
+  }
+
+  /* ---- the backdrop "Frame-D / soak card" header strip ---------------------- */
+  .backdrop-head {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    padding-bottom: 0.9rem;
+    margin-bottom: 1.1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .bd-title {
+    font-size: 0.78rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    font-weight: 700;
+    margin: 0;
+  }
+  .bd-meta {
+    font-family: var(--font-d);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+
+  /* ---- the resting chip + an inline gated on/off toggle --------------------- */
+  .chip-row {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+
+  /* HEADER CHIP -- the only resting affordance; present only when flag ON. */
+  .rf-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: inherit;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    padding: 0.3rem 0.65rem;
+    background: var(--accent-dim);
+    color: var(--text-bright);
+    border: 1px solid var(--border-hi);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .rf-chip:hover { border-color: var(--accent); }
+  .rf-chip[hidden] { display: none; }
+  .rf-chip__dot {
+    width: 0.5rem; height: 0.5rem; border-radius: 50%;
+    background: var(--accent); flex: 0 0 auto;
+  }
+  .rf-chip__beta {
+    font-family: var(--font-d);
+    font-size: 0.56rem; font-weight: 700; letter-spacing: 0.08em;
+    color: #92400e;
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 4px;
+    padding: 0 0.3rem;
+  }
+
+  /* GATED on/off toggle (client-side; mirrors the BetaToggles store) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-card);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .gate__label {
+    font-family: var(--font-d);
+    letter-spacing: 0.04em;
+  }
+  .switch {
+    position: relative;
+    width: 2.4rem; height: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-row);
+    cursor: pointer;
+    padding: 0;
+    flex: 0 0 auto;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 1px; left: 1px;
+    width: 1.05rem; height: 1.05rem;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: left 0.18s ease, background 0.18s ease;
+  }
+  .switch[aria-checked="true"] {
+    background: var(--accent-dim);
+    border-color: var(--border-hi);
+  }
+  .switch[aria-checked="true"] .switch__knob {
+    left: calc(100% - 1.05rem - 1px);
+    background: var(--accent);
+  }
+  .gate__state {
+    font-weight: 700;
+    color: var(--text-bright);
+    min-width: 2.1em;
+    text-align: left;
+  }
+
+  /* when the flag is OFF, a quiet "where to find it" note replaces the chip */
+  .rf-offnote {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+  .rf-offnote[hidden] { display: none; }
+
+  /* ==========================================================================
+     DRAWER -- the CoverageAnalyzer/DecisionOracle pattern: position:fixed,
+     width min(640px,96vw), role=dialog aria-modal, scrim, Escape, focus-trap.
+     ========================================================================== */
+  .rf-scrim {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(8, 10, 12, 0.55);
+    backdrop-filter: blur(1px);
+  }
+  .rf-scrim[hidden] { display: none; }
+
+  .rf-panel {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    z-index: 81;
+    width: min(640px, 96vw);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border-hi);
+    box-shadow: -18px 0 48px -24px rgba(0, 0, 0, 0.7);
+    color: var(--text);
+    font-family: var(--ff-system);
+    overflow: hidden;
+  }
+  .rf-panel[hidden] { display: none; }
+
+  .rf-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem 1.15rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .rf-head__grow { flex: 1 1 auto; min-width: 0; }
+  .rf-title {
+    margin: 0;
+    font-size: 1.02rem;
+    letter-spacing: 0.01em;
+    color: var(--text-bright);
+    font-weight: 700;
+    line-height: 1.25;
+  }
+  .rf-sub {
+    margin: 0.2rem 0 0;
+    font-size: 0.76rem;
+    color: var(--text-dim);
+    font-family: var(--font-d);
+  }
+  .rf-close {
+    flex: 0 0 auto;
+    font: inherit; line-height: 1; font-size: 1rem;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 2rem; height: 2rem;
+    cursor: pointer;
+  }
+  .rf-close:hover { color: var(--text-bright); }
+
+  .rf-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 1rem 1.15rem 1.4rem;
+    overscroll-behavior: contain;
+  }
+
+  /* ---- BETA strip ---------------------------------------------------------- */
+  .rf-betastrip {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.55rem 0.7rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-row-alt);
+  }
+  .rf-pill {
+    display: inline-flex; align-items: center;
+    font-size: 0.66rem; letter-spacing: 0.05em;
+    text-transform: uppercase; font-weight: 700;
+    padding: 0.22rem 0.55rem;
+    border-radius: 6px;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 2px solid var(--badge-ar-border);
+  }
+  .rf-pill--sm { font-size: 0.6rem; padding: 0.16rem 0.45rem; border-width: 1px; }
+  .rf-pill__note {
+    flex: 1 1 auto;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  /* ---- GATED-BUILD footnote (amber) -- this feature is NEEDS-AMENDMENT ------ */
+  .rf-gatenote {
+    display: flex; align-items: flex-start; gap: 0.5rem;
+    padding: 0.55rem 0.7rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--badge-warn-border);
+    border-left-width: 3px;
+    border-radius: 8px;
+    background: rgba(234, 88, 12, 0.08);
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .rf-gatenote__badge {
+    flex: 0 0 auto;
+    font-family: var(--font-d);
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 0.16rem 0.45rem;
+    border-radius: 5px;
+    color: var(--badge-warn-fg);
+    background: var(--badge-warn-bg);
+    border: 1px solid var(--badge-warn-border);
+    margin-top: 0.05rem;
+  }
+  .rf-gatenote strong { color: var(--text-bright); }
+
+  /* ---- TOP STRIP: session metadata + the BOLD delta-count headline ---------- */
+  .rf-meta {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.3rem 0.9rem;
+    margin-bottom: 0.7rem;
+    font-size: 0.74rem;
+  }
+  .rf-meta dt {
+    font-family: var(--font-d);
+    font-size: 0.62rem; letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    align-self: center;
+  }
+  .rf-meta dd {
+    margin: 0;
+    font-family: var(--font-d);
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  /* the data-source label is ALWAYS literal text (mock vs live), never silent */
+  .rf-source {
+    margin: 0 0 0.7rem;
+    font-size: 0.7rem;
+    font-family: var(--font-d);
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+  }
+  .rf-source[data-mock="true"] { color: var(--badge-warn-fg); }
+
+  /* the headline: delta_count is the whole point */
+  .rf-headline {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.7rem 0.8rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--badge-warn-fg);
+    border-radius: 8px;
+    background: var(--bg-card);
+  }
+  .rf-headline__dot {
+    width: 0.65rem; height: 0.65rem; border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--badge-warn-fg);
+  }
+  .rf-headline__text {
+    font-size: 0.96rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: 0.01em;
+  }
+  .rf-headline__num {
+    font-family: var(--font-d);
+    color: var(--badge-warn-fg);
+  }
+
+  /* ---- LAYOUT: the bespoke asymmetric left FRAME RAIL + right TRIPLE GRID ---- */
+  .rf-split {
+    display: grid;
+    grid-template-columns: 3.1rem 1fr;
+    gap: 0.9rem;
+    align-items: start;
+  }
+
+  /* the film-strip scrubber: one tick per frame down the left inner edge */
+  .rf-rail {
+    position: relative;
+    border-left: 1px solid var(--border);
+    padding: 0.1rem 0 0.1rem 0.55rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+  }
+  .rf-rail__cap {
+    font-family: var(--font-d);
+    font-size: 0.54rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin-bottom: 0.15rem;
+  }
+  .rf-tick {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    font: inherit;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0.2rem 0.25rem;
+    cursor: pointer;
+    color: var(--text-dim);
+  }
+  .rf-tick:hover { background: var(--bg-row-hover); }
+  .rf-tick.is-current {
+    background: var(--bg-row-hover);
+    border-color: var(--border-hi);
+  }
+  .rf-tick__notch {
+    width: 0.55rem; height: 0.55rem;
+    border-radius: 2px;
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid var(--text-ui); /* hairline = a MATCHING frame */
+  }
+  /* a frame WITH a delta is a filled notch (amber = moved, red = escalated) */
+  .rf-tick[data-sev="moved"] .rf-tick__notch {
+    background: var(--badge-warn-fg);
+    border-color: var(--badge-warn-fg);
+  }
+  .rf-tick[data-sev="escalated"] .rf-tick__notch {
+    background: var(--badge-blocked-fg);
+    border-color: var(--badge-blocked-fg);
+  }
+  .rf-tick__idx {
+    font-family: var(--font-d);
+    font-size: 0.64rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .rf-tick.is-current .rf-tick__idx { color: var(--text-bright); }
+
+  /* ---- the right column ----------------------------------------------------- */
+  .rf-rightcol { min-width: 0; }
+
+  /* scrubber controls: next/prev delta + deltas-only toggle */
+  .rf-scrubctl {
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  .rf-btn {
+    font: inherit;
+    font-size: 0.72rem;
+    padding: 0.34rem 0.6rem;
+    background: var(--bg-row-alt);
+    color: var(--text-bright);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+  }
+  .rf-btn:hover { border-color: var(--border-hi); }
+  .rf-btn.is-active {
+    color: var(--accent);
+    border-color: var(--border-hi);
+    background: var(--accent-dim);
+  }
+  .rf-btn__kbd {
+    font-family: var(--font-d);
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 0.22rem;
+  }
+  .rf-scrubctl__pos {
+    margin-left: auto;
+    font-family: var(--font-d);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* the selected frame's content fingerprint + kind */
+  .rf-framehead {
+    display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-row-alt);
+  }
+  .rf-kindtag {
+    font-family: var(--font-d);
+    font-size: 0.6rem; letter-spacing: 0.05em; text-transform: uppercase;
+    font-weight: 700;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.06rem 0.34rem;
+  }
+  .rf-fingerprint {
+    font-family: var(--font-d);
+    font-size: 0.74rem;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  /* the frame-level paired label+color status badge */
+  .rf-statusbadge {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-family: var(--font-d);
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 0.12rem 0.45rem;
+    border-radius: 5px;
+  }
+  .rf-statusbadge__dot {
+    width: 0.42rem; height: 0.42rem; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+  .rf-statusbadge[data-sev="match"] {
+    color: var(--text-dim);
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+  }
+  .rf-statusbadge[data-sev="moved"] {
+    color: var(--badge-warn-fg);
+    background: rgba(234, 88, 12, 0.1);
+    border: 1px solid var(--badge-warn-border);
+  }
+  .rf-statusbadge[data-sev="escalated"] {
+    color: var(--badge-blocked-fg);
+    background: rgba(220, 38, 38, 0.1);
+    border: 1px solid var(--badge-blocked-border);
+  }
+
+  /* ---- THE TRIPLE GRID: ORIGINAL | REPLAYED | DELTA ------------------------- */
+  .rf-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.6rem;
+  }
+  .rf-col {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    overflow: hidden;
+  }
+  .rf-col__head {
+    padding: 0.4rem 0.55rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-row-alt);
+  }
+  .rf-col__title {
+    font-family: var(--font-d);
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-bright);
+    margin: 0;
+  }
+  .rf-col__cap {
+    display: block;
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    font-family: var(--font-d);
+    margin-top: 0.12rem;
+  }
+  .rf-col--delta .rf-col__title { color: var(--accent); }
+
+  .rf-field {
+    padding: 0.42rem 0.55rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .rf-field:last-child { border-bottom: none; }
+  .rf-field__k {
+    font-family: var(--font-d);
+    font-size: 0.56rem; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-ui);
+    margin-bottom: 0.18rem;
+  }
+  .rf-field__v {
+    font-size: 0.76rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+  .rf-field__v.mono { font-family: var(--font-d); }
+
+  /* a CHANGED field gets a 2px left accent border + the literal old->new text */
+  .rf-field.is-changed {
+    border-left: 2px solid var(--badge-warn-fg);
+    background: rgba(234, 88, 12, 0.05);
+  }
+  .rf-field.is-escalated {
+    border-left: 2px solid var(--badge-blocked-fg);
+    background: rgba(220, 38, 38, 0.05);
+  }
+  /* unchanged fields are dimmed + carry the literal word "(same)" */
+  .rf-field.is-same .rf-field__v { color: var(--text-dim); }
+  .rf-same {
+    font-style: italic;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+  }
+  .rf-arrow {
+    color: var(--text-bright);
+    font-weight: 700;
+    font-family: var(--font-d);
+    padding: 0 0.15rem;
+  }
+  .rf-from { color: var(--text-dim); }
+  .rf-to-moved { color: var(--badge-warn-fg); font-weight: 700; }
+  .rf-to-escalated { color: var(--badge-blocked-fg); font-weight: 700; }
+  .rf-mag {
+    font-family: var(--font-d);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+  .rf-mag.neg { color: var(--badge-warn-fg); }
+
+  /* the DELTA column's summary line for a changed frame */
+  .rf-deltasummary {
+    margin: 0;
+    font-size: 0.74rem;
+    line-height: 1.4;
+    color: var(--text);
+  }
+  .rf-deltasummary code {
+    font-family: var(--font-d);
+    color: var(--text-bright);
+  }
+  .rf-deltamatch {
+    font-size: 0.74rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* the live announcer (visually present for the mockup, role=status) */
+  .rf-announce {
+    margin-top: 0.85rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px dashed var(--border);
+    border-radius: 7px;
+    background: var(--bg-row-alt);
+    font-family: var(--font-d);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+  .rf-announce strong { color: var(--text); font-weight: 700; }
+
+  /* ---- session picker ------------------------------------------------------- */
+  .rf-pickerrow {
+    display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+  .rf-pickerrow label {
+    font-family: var(--font-d);
+    font-size: 0.62rem; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .rf-select {
+    font: inherit;
+    font-family: var(--font-d);
+    font-size: 0.74rem;
+    padding: 0.32rem 0.5rem;
+    background: var(--bg-row);
+    color: var(--text-bright);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  .rf-select:hover { border-color: var(--border-hi); }
+  .rf-picker__note {
+    margin-left: auto;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+
+  /* ---- footer -------------------------------------------------------------- */
+  .rf-foot {
+    flex: 0 0 auto;
+    padding: 0.55rem 1.15rem;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    background: var(--bg-row-alt);
+  }
+
+  /* ---- focus ring (M17): 2px amber on EVERY interactive element ------------- */
+  .rf-chip:focus-visible,
+  .rf-close:focus-visible,
+  .rf-tick:focus-visible,
+  .rf-btn:focus-visible,
+  .rf-select:focus-visible,
+  .switch:focus-visible {
+    outline: 2px solid var(--sm-focus);
+    outline-offset: 2px;
+  }
+
+  /* ---- reduced motion (M17) ------------------------------------------------- */
+  :global { }
+  html[data-motion="reduce"] .switch,
+  html[data-motion="reduce"] .switch__knob,
+  html[data-motion="reduce"] .rf-tick { transition: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .switch, .switch__knob { transition: none; }
+  }
+
+  /* ---- narrow-viewport: rail stays, grid stacks ---------------------------- */
+  @media (max-width: 560px) {
+    .rf-grid { grid-template-columns: 1fr; }
+  }
+
+  .visually-hidden {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+  <main class="stage">
+    <!-- approval-gate framing banner (not part of the shipped feature) -->
+    <div class="mk-banner">
+      <strong>KingMode mockup</strong>
+      <span>Feature #23 -- Recorded Session Replay Forensics. Approval gate: confirm the UI BEFORE code.</span>
+      <span>Try it: toggle the gate, open the drawer, press
+        <span class="mk-kbd">n</span> / <span class="mk-kbd">p</span> to jump deltas,
+        <span class="mk-kbd">Esc</span> to close.</span>
+    </div>
+
+    <!-- the backdrop soak/Frame-D header strip where the chip lives -->
+    <div class="backdrop-head">
+      <div>
+        <p class="bd-title">Frame D -- Soak / Replay region</p>
+        <span class="bd-meta">dashboard backdrop (quiet) -- the drawer is the subject</span>
+      </div>
+
+      <div class="chip-row">
+        <!-- GATED on/off toggle: shows the default-OFF beta-flag behaviour -->
+        <span class="gate">
+          <span class="gate__label">replay-forensics</span>
+          <button
+            id="gate-switch"
+            class="switch"
+            type="button"
+            role="switch"
+            aria-checked="true"
+            aria-label="Replay Forensics beta flag. Default OFF. Toggle on or off."
+          >
+            <span class="switch__knob" aria-hidden="true"></span>
+          </button>
+          <span id="gate-state" class="gate__state">ON</span>
+        </span>
+
+        <!-- the resting affordance: a single chip, present only when flag ON -->
+        <button
+          id="rf-chip"
+          class="rf-chip"
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          aria-controls="rf-panel"
+        >
+          <span class="rf-chip__dot" aria-hidden="true"></span>
+          Replay Forensics
+          <span class="rf-chip__beta">BETA</span>
+        </button>
+
+        <!-- when OFF: the chip is gone; this quiet note shows where to find it -->
+        <span id="rf-offnote" class="rf-offnote" hidden>
+          OFF -- enable in Settings &gt; BETA features to surface the chip.
+        </span>
+      </div>
+    </div>
+
+    <p style="font-size:0.78rem;color:var(--text-dim);max-width:62ch;line-height:1.55;">
+      The feature is a right-side <strong style="color:var(--text-bright)">drawer</strong>, never a
+      fourth frame, and never auto-foregrounds (ADR-18 M2/M3). Its only resting trace is the chip above.
+      Flip the gate OFF to confirm the chip and all runtime cost disappear; flip it ON and click the chip
+      to open the forensics drawer below.
+    </p>
+  </main>
+
+  <!-- ====================================================================== -->
+  <!-- DRAWER (role=dialog aria-modal). Hidden until the chip is clicked.      -->
+  <!-- ====================================================================== -->
+  <div id="rf-scrim" class="rf-scrim" hidden></div>
+
+  <div
+    id="rf-panel"
+    class="rf-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="rf-title"
+    tabindex="-1"
+    hidden
+  >
+    <header class="rf-head">
+      <div class="rf-head__grow">
+        <h2 id="rf-title" class="rf-title">Replay Forensics</h2>
+        <p class="rf-sub">recorded session -- side-by-side decision deltas</p>
+      </div>
+      <button id="rf-close" class="rf-close" type="button" aria-label="Close replay forensics">
+        <span aria-hidden="true">x</span>
+      </button>
+    </header>
+
+    <div class="rf-body">
+      <!-- BETA strip -->
+      <div class="rf-betastrip">
+        <span class="rf-pill">BETA</span>
+        <span class="rf-pill__note">
+          default OFF -- toggled in Settings &gt; BETA features. Reads are a single
+          post-hoc GET on open; no poller, no SSE, zero model quota.
+        </span>
+      </div>
+
+      <!-- GATED-BUILD amber footnote: feature is NEEDS-AMENDMENT -->
+      <div class="rf-gatenote">
+        <span class="rf-gatenote__badge">Build gated</span>
+        <span>
+          UI <strong>approvable now</strong>, but the build is gated on an
+          <strong>ADR-18 amendment</strong>: it needs an ADR-17 v1.4 cassette
+          <code style="font-family:var(--font-d)">recorded_session_uuid</code>
+          field (mirrors the v1.3 learn_dialogue precedent; same-PR cassette_record.py +
+          soak_driver.py coverage required) plus the frozen-touch sign-off. Mockup confirms the approach;
+          no code lands until the amendment is filed.
+        </span>
+      </div>
+
+      <!-- TOP STRIP: session metadata (tabular mono) -->
+      <dl class="rf-meta">
+        <dt>session</dt>
+        <dd id="m-uuid">rs-2026-06-09-sample</dd>
+        <dt>engine</dt>
+        <dd id="m-engine">v2.7.1 (current at replay)</dd>
+        <dt>recorded</dt>
+        <dd id="m-recorded">2026-06-09T14:22:10Z</dd>
+      </dl>
+
+      <!-- data-source label: ALWAYS literal text, mock state never silent -->
+      <p id="rf-source" class="rf-source" data-mock="true">
+        SAMPLE DATA -- no live cassette / gov.db rows at view time; rendering a
+        deterministic representative triple set (mockReplay()).
+      </p>
+
+      <!-- HEADLINE: delta_count is THE point -->
+      <div class="rf-headline">
+        <span class="rf-headline__dot" aria-hidden="true"></span>
+        <span class="rf-headline__text">
+          <span id="h-delta" class="rf-headline__num">2</span> of
+          <span id="h-frames" class="rf-headline__num">6</span> frames diverge from the current engine
+        </span>
+      </div>
+
+      <!-- SESSION PICKER -->
+      <div class="rf-pickerrow">
+        <label for="rf-select">Recorded session</label>
+        <select id="rf-select" class="rf-select">
+          <option value="rs-2026-06-09-sample" selected>rs-2026-06-09-sample (6 frames -- live cassette)</option>
+          <option value="rs-2026-06-08-nightly">rs-2026-06-08-nightly (6 frames)</option>
+          <option value="rs-2026-06-07-adhoc">rs-2026-06-07-adhoc (6 frames)</option>
+        </select>
+        <span class="rf-picker__note">
+          <span id="m-excluded">0</span> SM-self row(s) excluded (polarity filter, G2)
+        </span>
+      </div>
+
+      <!-- THE SPLIT: left film-strip rail + right triple grid -->
+      <div class="rf-split">
+        <!-- FRAME RAIL: one tick per frame; delta frames = filled notch -->
+        <nav class="rf-rail" aria-label="Frame scrubber, 6 frames">
+          <span class="rf-rail__cap">frame</span>
+          <!-- ticks injected by script -->
+          <div id="rf-ticks" style="display:flex;flex-direction:column;gap:0.32rem;"></div>
+        </nav>
+
+        <!-- RIGHT COLUMN -->
+        <div class="rf-rightcol">
+          <!-- scrubber controls -->
+          <div class="rf-scrubctl">
+            <button id="rf-prevdelta" class="rf-btn" type="button">
+              prev delta <span class="rf-btn__kbd">p</span>
+            </button>
+            <button id="rf-nextdelta" class="rf-btn" type="button">
+              next delta <span class="rf-btn__kbd">n</span>
+            </button>
+            <button id="rf-deltasonly" class="rf-btn" type="button" aria-pressed="false">
+              deltas only
+            </button>
+            <span id="rf-pos" class="rf-scrubctl__pos">frame 1 of 6</span>
+          </div>
+
+          <!-- selected frame head -->
+          <div class="rf-framehead">
+            <span id="f-kind" class="rf-kindtag">routine</span>
+            <span id="f-fingerprint" class="rf-fingerprint">pytest tests/test_hitl.py -q</span>
+            <span id="f-status" class="rf-statusbadge" data-sev="match">
+              <span class="rf-statusbadge__dot" aria-hidden="true"></span>
+              <span id="f-statustext">MATCH</span>
+            </span>
+          </div>
+
+          <!-- THE TRIPLE GRID -->
+          <div class="rf-grid">
+            <!-- ORIGINAL -->
+            <section class="rf-col rf-col--original" aria-label="Original decision, captured at record time">
+              <div class="rf-col__head">
+                <h3 class="rf-col__title">Original</h3>
+                <span class="rf-col__cap">record-time</span>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">action</div>
+                <div id="o-action" class="rf-field__v mono">ALLOW</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">confidence</div>
+                <div id="o-conf" class="rf-field__v mono">0.95</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">layer</div>
+                <div id="o-layer" class="rf-field__v mono">L0</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">matched_hash</div>
+                <div id="o-hash" class="rf-field__v mono">(none)</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">reasoning</div>
+                <div id="o-reason" class="rf-field__v">observed: pytest listed routine; no destructive ops.</div>
+              </div>
+            </section>
+
+            <!-- REPLAYED -->
+            <section class="rf-col rf-col--replayed" aria-label="Replayed decision, current engine">
+              <div class="rf-col__head">
+                <h3 class="rf-col__title">Replayed</h3>
+                <span class="rf-col__cap">current engine</span>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">action</div>
+                <div id="r-action" class="rf-field__v mono">ALLOW</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">confidence</div>
+                <div id="r-conf" class="rf-field__v mono">0.95</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">layer</div>
+                <div id="r-layer" class="rf-field__v mono">L0</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">matched_hash</div>
+                <div id="r-hash" class="rf-field__v mono">(none)</div>
+              </div>
+              <div class="rf-field">
+                <div class="rf-field__k">reasoning</div>
+                <div id="r-reason" class="rf-field__v">observed: pytest listed routine; no destructive ops.</div>
+              </div>
+            </section>
+
+            <!-- DELTA -->
+            <section class="rf-col rf-col--delta" aria-label="Field-level delta, original versus replayed">
+              <div class="rf-col__head">
+                <h3 class="rf-col__title">Delta</h3>
+                <span class="rf-col__cap">field-level diff</span>
+              </div>
+              <div id="d-action" class="rf-field is-same">
+                <div class="rf-field__k">action</div>
+                <div class="rf-field__v"><span class="rf-same">(same)</span></div>
+              </div>
+              <div id="d-conf" class="rf-field is-same">
+                <div class="rf-field__k">confidence</div>
+                <div class="rf-field__v"><span class="rf-same">(same)</span></div>
+              </div>
+              <div id="d-layer" class="rf-field is-same">
+                <div class="rf-field__k">layer</div>
+                <div class="rf-field__v"><span class="rf-same">(same)</span></div>
+              </div>
+              <div id="d-hash" class="rf-field is-same">
+                <div class="rf-field__k">matched_hash</div>
+                <div class="rf-field__v"><span class="rf-same">(same)</span></div>
+              </div>
+              <div id="d-summary" class="rf-field">
+                <div class="rf-field__k">summary</div>
+                <div class="rf-field__v">
+                  <span class="rf-deltamatch">No field moved -- replay reproduces the record-time verdict.</span>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- the polite aria-live announcer (visible in the mockup) -->
+          <div id="rf-announce" class="rf-announce" role="status" aria-live="polite">
+            <strong>frame 1 of 6</strong>, MATCH -- no field changed.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="rf-foot">
+      <span class="rf-pill rf-pill--sm">BETA</span>
+      <span>
+        Read-only, offline, zero model quota. Default OFF, toggled in Settings &gt; BETA features.
+        Never auto-foregrounds; never a fourth frame.
+      </span>
+    </footer>
+  </div>
+
+  <script>
+  /* ==========================================================================
+     mockReplay() -- the FULL endpoint shape (mirrors ReplayForensics-data.js).
+     Domain-agnostic, generic governance vocab only -- NO monitored-project
+     identity. Project identity would arrive only from real server data.
+     ========================================================================== */
+  function mockReplay() {
+    return {
+      recorded_session_uuid: "rs-2026-06-09-sample",
+      engine_version: "v2.7.1",
+      recorded_at: "2026-06-09T14:22:10Z",
+      frame_count: 6,
+      delta_count: 2,
+      polarity_filtered: true,
+      excluded_self_rows: 0,
+      mock: true,
+      frames: [
+        { idx: 0, kind: "routine", content_fingerprint: "pytest tests/test_hitl.py -q",
+          original: { action: "ALLOW", confidence: 0.95, layer: 0, matched_hash: "", reasoning: "observed: pytest listed routine; no destructive ops." },
+          replayed: { action: "ALLOW", confidence: 0.95, layer: 0, matched_hash: "", reasoning: "observed: pytest listed routine; no destructive ops." },
+          delta: { changed: false, action_changed: false, confidence_delta: 0.0, layer_delta: 0, matched_hash_changed: false, reasoning_changed: false } },
+
+        { idx: 1, kind: "routine", content_fingerprint: "ls -la build/",
+          original: { action: "ALLOW", confidence: 0.98, layer: 0, matched_hash: "", reasoning: "read-only listing; no side effects." },
+          replayed: { action: "ALLOW", confidence: 0.98, layer: 0, matched_hash: "", reasoning: "read-only listing; no side effects." },
+          delta: { changed: false, action_changed: false, confidence_delta: 0.0, layer_delta: 0, matched_hash_changed: false, reasoning_changed: false } },
+
+        { idx: 2, kind: "l2_l3", content_fingerprint: "rm -rf node_modules/",
+          original: { action: "SUGGEST", confidence: 0.71, layer: 0, matched_hash: "", reasoning: "scoped recursive delete inside project tree; advisory." },
+          replayed: { action: "SUGGEST", confidence: 0.71, layer: 0, matched_hash: "", reasoning: "scoped recursive delete inside project tree; advisory." },
+          delta: { changed: false, action_changed: false, confidence_delta: 0.0, layer_delta: 0, matched_hash_changed: false, reasoning_changed: false } },
+
+        { idx: 3, kind: "l2_l3", content_fingerprint: "git push origin feature/x",
+          original: { action: "ALLOW", confidence: 0.82, layer: 0, matched_hash: "", reasoning: "non-protected branch push; advisory only." },
+          replayed: { action: "GUIDE", confidence: 0.61, layer: 2, matched_hash: "h-2f9c", reasoning: "Learn-Mode bias raised branch-push scrutiny; escalated to L2 GUIDE." },
+          delta: { changed: true, action_changed: true, confidence_delta: -0.21, layer_delta: 2, matched_hash_changed: true, reasoning_changed: true,
+                   summary: "action ALLOW->GUIDE; layer 0->2; new pattern match h-2f9c" } },
+
+        { idx: 4, kind: "routine", content_fingerprint: "npm run build",
+          original: { action: "ALLOW", confidence: 0.9, layer: 0, matched_hash: "", reasoning: "standard build invocation; no destructive ops." },
+          replayed: { action: "ALLOW", confidence: 0.9, layer: 0, matched_hash: "", reasoning: "standard build invocation; no destructive ops." },
+          delta: { changed: false, action_changed: false, confidence_delta: 0.0, layer_delta: 0, matched_hash_changed: false, reasoning_changed: false } },
+
+        { idx: 5, kind: "l4", content_fingerprint: "curl -X POST https://api.internal/deploy",
+          original: { action: "INTERVENE", confidence: 0.66, layer: 4, matched_hash: "h-91ab", reasoning: "external POST to a deploy endpoint; L4 alignment review." },
+          replayed: { action: "BLOCK", confidence: 0.88, layer: 4, matched_hash: "h-91ab", reasoning: "code iteration hardened deploy-endpoint policy; ALLOW->BLOCK on external deploy POST." },
+          delta: { changed: true, action_changed: true, confidence_delta: 0.22, layer_delta: 0, matched_hash_changed: false, reasoning_changed: true,
+                   summary: "action INTERVENE->BLOCK; layer held at L4; stricter policy on deploy POST" } }
+      ]
+    };
+  }
+
+  /* ==========================================================================
+     SEVERITY/LABEL RULE (M4) -- paired with color, color NEVER alone.
+       - changed=false                        -> "MATCH"          (slate)
+       - action_changed (no escalation)       -> "VERDICT MOVED"  (amber)
+       - layer rose OR action got stricter    -> "ESCALATED"      (red)
+     ========================================================================== */
+  var STRICTNESS = { ALLOW: 0, SUGGEST: 1, GUIDE: 2, INTERVENE: 3, BLOCK: 4 };
+
+  function frameSeverity(f) {
+    var d = f.delta;
+    if (!d.changed) return "match";
+    var rose = (d.layer_delta || 0) > 0;
+    var stricter = (STRICTNESS[f.replayed.action] || 0) > (STRICTNESS[f.original.action] || 0);
+    if (rose || stricter) return "escalated";
+    return "moved";
+  }
+  function sevLabel(sev) {
+    if (sev === "match") return "MATCH";
+    if (sev === "moved") return "VERDICT MOVED";
+    return "ESCALATED";
+  }
+  function layerStr(n) { return "L" + (Number(n) || 0); }
+  function hashStr(h) { return h ? h : "(none)"; }
+  function confStr(c) { return (Number(c)).toFixed(2); }
+  function signed(n) {
+    var v = Number(n) || 0;
+    return (v > 0 ? "+" : "") + v.toFixed(2);
+  }
+
+  /* ==========================================================================
+     STATE + RENDER
+     ========================================================================== */
+  var DATA = mockReplay();
+  var current = 0;
+  var deltasOnly = false;
+
+  function deltaIndices() {
+    return DATA.frames.filter(function (f) { return f.delta.changed; }).map(function (f) { return f.idx; });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function el(id) { return document.getElementById(id); }
+
+  function renderTicks() {
+    var wrap = el("rf-ticks");
+    wrap.innerHTML = "";
+    DATA.frames.forEach(function (f) {
+      if (deltasOnly && !f.delta.changed) return;
+      var sev = frameSeverity(f);
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "rf-tick" + (f.idx === current ? " is-current" : "");
+      b.setAttribute("data-sev", sev);
+      b.setAttribute("data-idx", String(f.idx));
+      b.setAttribute("aria-current", f.idx === current ? "true" : "false");
+      b.setAttribute("aria-label",
+        "Frame " + f.idx + ", " + sevLabel(sev).toLowerCase() + ". Activate to inspect.");
+      b.innerHTML =
+        '<span class="rf-tick__notch" aria-hidden="true"></span>' +
+        '<span class="rf-tick__idx">' + f.idx + '</span>';
+      b.addEventListener("click", function () { goTo(f.idx); });
+      wrap.appendChild(b);
+    });
+  }
+
+  function setDeltaField(fieldId, changed, escalated, innerHtml) {
+    var node = el(fieldId);
+    node.classList.remove("is-same", "is-changed", "is-escalated");
+    if (!changed) {
+      node.classList.add("is-same");
+    } else if (escalated) {
+      node.classList.add("is-escalated");
+    } else {
+      node.classList.add("is-changed");
+    }
+    // keep the field key (first child) and replace the value div (second child)
+    var k = node.querySelector(".rf-field__k").outerHTML;
+    node.innerHTML = k + '<div class="rf-field__v">' + innerHtml + '</div>';
+  }
+
+  function arrowFromTo(from, to, escalated) {
+    var toClass = escalated ? "rf-to-escalated" : "rf-to-moved";
+    return '<span class="rf-from">' + escapeHtml(from) + '</span>' +
+           '<span class="rf-arrow"> -&gt; </span>' +
+           '<span class="' + toClass + '">' + escapeHtml(to) + '</span>';
+  }
+
+  function renderFrame() {
+    var f = DATA.frames[current];
+    var sev = frameSeverity(f);
+    var escalated = (sev === "escalated");
+    var o = f.original, r = f.replayed, d = f.delta;
+
+    // frame head
+    el("f-kind").textContent = f.kind;
+    el("f-fingerprint").textContent = f.content_fingerprint;
+    var sb = el("f-status");
+    sb.setAttribute("data-sev", sev);
+    el("f-statustext").textContent = sevLabel(sev);
+
+    // ORIGINAL column
+    el("o-action").textContent = o.action;
+    el("o-conf").textContent = confStr(o.confidence);
+    el("o-layer").textContent = layerStr(o.layer);
+    el("o-hash").textContent = hashStr(o.matched_hash);
+    el("o-reason").textContent = o.reasoning;
+
+    // REPLAYED column
+    el("r-action").textContent = r.action;
+    el("r-conf").textContent = confStr(r.confidence);
+    el("r-layer").textContent = layerStr(r.layer);
+    el("r-hash").textContent = hashStr(r.matched_hash);
+    el("r-reason").textContent = r.reasoning;
+
+    // DELTA column -- literal old->new text, never color alone
+    if (d.action_changed) {
+      setDeltaField("d-action", true, escalated, arrowFromTo(o.action, r.action, escalated));
+    } else {
+      setDeltaField("d-action", false, false, '<span class="rf-same">(same)</span>');
+    }
+
+    if (Math.abs(d.confidence_delta || 0) > 0) {
+      var magClass = (d.confidence_delta < 0) ? "rf-mag neg" : "rf-mag";
+      setDeltaField("d-conf", true, escalated,
+        arrowFromTo(confStr(o.confidence), confStr(r.confidence), escalated) +
+        ' <span class="' + magClass + '">(' + signed(d.confidence_delta) + ')</span>');
+    } else {
+      setDeltaField("d-conf", false, false, '<span class="rf-same">(same)</span>');
+    }
+
+    if ((d.layer_delta || 0) !== 0) {
+      setDeltaField("d-layer", true, escalated,
+        arrowFromTo(layerStr(o.layer), layerStr(r.layer), escalated) +
+        ' <span class="rf-mag">(' + (d.layer_delta > 0 ? "+" : "") + d.layer_delta + ')</span>');
+    } else {
+      setDeltaField("d-layer", false, false, '<span class="rf-same">(same)</span>');
+    }
+
+    if (d.matched_hash_changed) {
+      setDeltaField("d-hash", true, escalated,
+        arrowFromTo(hashStr(o.matched_hash), hashStr(r.matched_hash), escalated));
+    } else {
+      setDeltaField("d-hash", false, false, '<span class="rf-same">(same)</span>');
+    }
+
+    // DELTA summary line
+    var summaryNode = el("d-summary");
+    var k = summaryNode.querySelector(".rf-field__k").outerHTML;
+    if (d.changed && d.summary) {
+      summaryNode.innerHTML = k +
+        '<div class="rf-field__v"><p class="rf-deltasummary"><code>' +
+        escapeHtml(d.summary) + '</code></p></div>';
+    } else {
+      summaryNode.innerHTML = k +
+        '<div class="rf-field__v"><span class="rf-deltamatch">No field moved -- replay reproduces the record-time verdict.</span></div>';
+    }
+
+    // position + tick state
+    el("rf-pos").textContent = "frame " + (current + 1) + " of " + DATA.frame_count;
+    renderTicks();
+
+    // aria-live announcement
+    announce(f, sev);
+  }
+
+  function announce(f, sev) {
+    var node = el("rf-announce");
+    var msg = "<strong>frame " + (f.idx + 1) + " of " + DATA.frame_count + "</strong>, " + sevLabel(sev);
+    if (f.delta.changed && f.delta.action_changed) {
+      msg += " -- action " + f.original.action + " to " + f.replayed.action;
+    } else if (!f.delta.changed) {
+      msg += " -- no field changed.";
+    } else {
+      msg += " -- fields changed.";
+    }
+    node.innerHTML = msg;
+  }
+
+  function goTo(idx) {
+    if (idx < 0) idx = 0;
+    if (idx > DATA.frame_count - 1) idx = DATA.frame_count - 1;
+    current = idx;
+    renderFrame();
+  }
+
+  function nextDelta() {
+    var ds = deltaIndices();
+    for (var i = 0; i < ds.length; i++) { if (ds[i] > current) { goTo(ds[i]); return; } }
+    if (ds.length) goTo(ds[0]); // wrap
+  }
+  function prevDelta() {
+    var ds = deltaIndices();
+    for (var i = ds.length - 1; i >= 0; i--) { if (ds[i] < current) { goTo(ds[i]); return; } }
+    if (ds.length) goTo(ds[ds.length - 1]); // wrap
+  }
+
+  /* ==========================================================================
+     HEADER STRIP + PICKER population
+     ========================================================================== */
+  function renderMeta() {
+    el("m-uuid").textContent = DATA.recorded_session_uuid;
+    el("m-engine").textContent = DATA.engine_version + " (current at replay)";
+    el("m-recorded").textContent = DATA.recorded_at;
+    el("m-excluded").textContent = String(DATA.excluded_self_rows);
+    el("h-delta").textContent = String(DATA.delta_count);
+    el("h-frames").textContent = String(DATA.frame_count);
+    var src = el("rf-source");
+    if (DATA.mock) {
+      src.setAttribute("data-mock", "true");
+      src.textContent = "SAMPLE DATA -- no live cassette / gov.db rows at view time; rendering a deterministic representative triple set (mockReplay()).";
+    } else {
+      src.setAttribute("data-mock", "false");
+      src.textContent = "LIVE -- re-streamed from the recorded cassette through a fresh in-memory engine (polarity-filtered).";
+    }
+  }
+
+  /* ==========================================================================
+     DRAWER open/close + focus contract (CoverageAnalyzer pattern)
+     ========================================================================== */
+  var panel = el("rf-panel");
+  var scrim = el("rf-scrim");
+  var chip = el("rf-chip");
+  var prevFocus = null;
+
+  function focusables() {
+    return Array.prototype.slice.call(
+      panel.querySelectorAll('button:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')
+    ).filter(function (n) { return n.offsetParent !== null; });
+  }
+
+  function openDrawer() {
+    if (chip.hasAttribute("hidden")) return; // flag OFF guard
+    prevFocus = document.activeElement;
+    panel.hidden = false;
+    scrim.hidden = false;
+    chip.setAttribute("aria-expanded", "true");
+    current = 0;
+    renderMeta();
+    renderFrame();
+    panel.focus();
+  }
+  function closeDrawer() {
+    panel.hidden = true;
+    scrim.hidden = true;
+    chip.setAttribute("aria-expanded", "false");
+    var t = (prevFocus && prevFocus.focus) ? prevFocus : chip;
+    if (t && t.focus) t.focus();
+    prevFocus = null;
+  }
+
+  chip.addEventListener("click", openDrawer);
+  el("rf-close").addEventListener("click", closeDrawer);
+  scrim.addEventListener("click", closeDrawer);
+
+  el("rf-nextdelta").addEventListener("click", nextDelta);
+  el("rf-prevdelta").addEventListener("click", prevDelta);
+  el("rf-deltasonly").addEventListener("click", function () {
+    deltasOnly = !deltasOnly;
+    this.setAttribute("aria-pressed", deltasOnly ? "true" : "false");
+    this.classList.toggle("is-active", deltasOnly);
+    // if deltas-only and current is a match, jump to first delta
+    if (deltasOnly && !DATA.frames[current].delta.changed) {
+      var ds = deltaIndices();
+      if (ds.length) current = ds[0];
+    }
+    renderFrame();
+  });
+
+  el("rf-select").addEventListener("change", function () {
+    // mockup: all three options resolve to the same sample triple set, but the
+    // header re-renders to show the picker is live. In the real component each
+    // value would fetch GET /api/soak/replay/{uuid}.
+    DATA.recorded_session_uuid = this.value;
+    current = 0;
+    renderMeta();
+    renderFrame();
+  });
+
+  // keyboard path (M17): Escape close, Tab trap, arrows/.,, n/p jumps
+  document.addEventListener("keydown", function (e) {
+    if (panel.hidden) return;
+    if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+    if (e.key === "n") { e.preventDefault(); nextDelta(); return; }
+    if (e.key === "p") { e.preventDefault(); prevDelta(); return; }
+    if (e.key === "ArrowDown" || e.key === ".") { e.preventDefault(); goTo(current + 1); return; }
+    if (e.key === "ArrowUp" || e.key === ",") { e.preventDefault(); goTo(current - 1); return; }
+    if (e.key === "Tab") {
+      var f = focusables();
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1], a = document.activeElement;
+      if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  /* ==========================================================================
+     GATED on/off toggle -- the default-OFF beta-flag behaviour, client-side.
+     Flag ON  -> chip visible, drawer openable.
+     Flag OFF -> chip hidden, off-note shown, drawer force-closed (zero cost).
+     ========================================================================== */
+  var gateSwitch = el("gate-switch");
+  var gateState = el("gate-state");
+  var offnote = el("rf-offnote");
+
+  function setFlag(on) {
+    gateSwitch.setAttribute("aria-checked", on ? "true" : "false");
+    gateState.textContent = on ? "ON" : "OFF";
+    if (on) {
+      chip.hidden = false;
+      offnote.hidden = true;
+    } else {
+      chip.hidden = true;
+      offnote.hidden = false;
+      if (!panel.hidden) closeDrawer(); // defense-in-depth: nothing lingers
+    }
+  }
+  gateSwitch.addEventListener("click", function () {
+    setFlag(gateSwitch.getAttribute("aria-checked") !== "true");
+  });
+
+  // initial paint (flag defaults ON in the mockup so the operator sees the feature)
+  renderMeta();
+  renderFrame();
+  </script>
+</body>
+</html>

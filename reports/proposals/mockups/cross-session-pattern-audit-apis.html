@@ -1,0 +1,1447 @@
+<!DOCTYPE html>
+<!--
+  cross-session-pattern-audit-apis.html -- KingMode mockup for BETA feature
+  "cross-session-pattern-audit-apis" (#11: Cross-session pattern audit &
+  applicability inspector).
+
+  PURPOSE: a static, self-contained preview the operator clicks through to
+  confirm the UI approach BEFORE any Svelte/backend code is written. Not a
+  build artefact -- a design gate (directive #2).
+
+  REUSES THE REAL TOKENS: the :root + [data-theme="obsidian"] block below is
+  lifted verbatim from dashboard/ui-next/src/styles/theme.css so this previews
+  the actual obsidian palette (amber accent #f59e0b, AA-documented dim values),
+  the M4 fixed badge tokens, and the --sm-* compatibility bridge.
+
+  ASCII-only (cp1252-safe): no smart quotes, no em-dashes (-- written as two
+  hyphens), no box-drawing. System font stack only -- no external assets.
+
+  WHAT THE OPERATOR SEES (vs real build):
+    - A SessionRail-scoped picker: choosing a governed (non-SM) session scopes
+      the AUDIT rail to "what hydrated INTO this session". The SM-self entry is
+      present but DISABLED (G2 polarity) -- it never exposes hydrated rules.
+    - A thin fixed right-edge AUDIT rail of hydrated-rule chips, sourced from
+      the mock for GET /api/patterns/cross-session/{session_id}/hydrated.
+    - An expandable drawer (role=dialog, aria-modal, Escape-to-close, focus
+      trap, focus restore) showing each hydrated rule as a bespoke ledger card
+      (decay left-rule, mono short-hash anchor, success-rate hairline meter,
+      reach tally for matched_decision_count_this_session) + provenance.
+    - The "Would this fire?" probe: paste a candidate message, get
+      {applies, match_confidence, rationale} from the mock for
+      GET /api/patterns/{hash}/would-apply -- announced in an aria-live region.
+      No verdict is ever emitted. Long text (>20 chars) -> WOULD FIRE conf 0.81;
+      short -> WOULD NOT FIRE conf 0.41; an "engine unavailable" toggle shows
+      the 500ms-timeout degraded shape.
+    - The BETA toggle is wired client-side so the operator SEES the gated
+      default-OFF -> ON behaviour (the whole audit body appears/disappears,
+      no pollers/SSE/fetch when OFF).
+-->
+<html lang="en" data-theme="obsidian">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cross-session pattern audit -- KingMode mockup (BETA)</title>
+<style>
+  /* ===================================================================
+     TOKEN LAYER -- lifted from dashboard/ui-next/src/styles/theme.css
+     (obsidian theme + M4 fixed badge tokens + --sm-* bridge). Verbatim
+     values so this mockup previews the REAL palette.
+     =================================================================== */
+  :root {
+    --ff-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    --ff-mono:   ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+
+    --c-allow:     #22c55e;
+    --c-suggest:   #84cc16;
+    --c-guide:     #eab308;
+    --c-intervene: #f97316;
+    --c-block:     #ef4444;
+
+    /* M4 fixed badge tokens (theme-invariant) */
+    --badge-ar-fg:      #d97706;
+    --badge-ar-bg:      #fef3c7;
+    --badge-ar-border:  #d97706;
+    --badge-obs-fg:     #475569;
+    --badge-obs-bg:     #f1f5f9;
+    --badge-obs-border: #cbd5e1;
+    --badge-decided-fg:     #16a34a;
+    --badge-decided-bg:     #dcfce7;
+    --badge-decided-border: #86efac;
+    --badge-blocked-fg:     #dc2626;
+    --badge-blocked-bg:     #fee2e2;
+    --badge-blocked-border: #dc2626;
+    --badge-warn-fg:     #ea580c;
+    --badge-warn-bg:     #ffedd5;
+    --badge-warn-border: #ea580c;
+  }
+
+  [data-theme="obsidian"] {
+    --bg:           #080a0c;
+    --bg-card:      #0c1118;
+    --bg-row:       #0e141e;
+    --bg-row-alt:   #0b1018;
+    --bg-row-hover: #131c2a;
+    --bg-row-flash: rgba(245, 158, 11, 0.09);
+
+    --border:       #192030;
+    --border-hi:    rgba(245, 158, 11, 0.25);
+
+    --text:         #b8b098;
+    --text-dim:     #948870;   /* AA 5.37:1 on #0c1118 */
+    --text-ui:      #8a8068;
+    --text-bright:  #e8e0cc;
+
+    --accent:       #f59e0b;
+    --accent-dim:   rgba(245, 158, 11, 0.09);
+    --accent-glow:  rgba(245, 158, 11, 0.35);
+  }
+
+  /* --sm-* compatibility bridge (one place, resolves at active theme) */
+  :root {
+    --sm-bg:          var(--bg);
+    --sm-bg-card:     var(--bg-card);
+    --sm-text:        var(--text-bright);
+    --sm-text-dim:    var(--text-dim);
+    --sm-text-bright: var(--text-bright);
+    --sm-border:      var(--border);
+    --sm-accent:      var(--accent);
+    --sm-font-mono:   var(--ff-mono);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ff-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* M17: global 2px solid amber focus ring at 2px offset on every focusable. */
+  :focus-visible {
+    outline: 2px solid #d97706;
+    outline-offset: 2px;
+  }
+
+  /* ===================================================================
+     PAGE SHELL
+     =================================================================== */
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 4rem;
+  }
+
+  /* --- compact feature header strip --- */
+  .hdr {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.1rem;
+    padding-bottom: 1.1rem;
+    margin-bottom: 1.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .hdr__id {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.25rem;
+  }
+  .hdr__title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-bright);
+    margin: 0;
+    line-height: 1.15;
+  }
+  .hdr__sub {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    margin: 0.4rem 0 0;
+    max-width: 60ch;
+    line-height: 1.45;
+  }
+  .hdr__right {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.6rem;
+  }
+
+  /* BETA pill -- paired text + tint, never tint alone. */
+  .beta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--ff-mono);
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-ar-fg);
+    background: var(--badge-ar-bg);
+    border: 1px solid var(--badge-ar-border);
+    border-radius: 999px;
+    padding: 0.22rem 0.6rem;
+    white-space: nowrap;
+  }
+  .beta-pill__dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex: 0 0 auto;
+  }
+
+  /* inline on/off toggle (client-wired -- shows the gate) */
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .gate__label {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+  .switch__track {
+    width: 40px; height: 22px;
+    border-radius: 999px;
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .switch__knob {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--text-ui);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch[aria-pressed="true"] .switch__track {
+    background: var(--accent-dim);
+    border-color: var(--badge-ar-border);
+  }
+  .switch[aria-pressed="true"] .switch__knob {
+    transform: translateX(18px);
+    background: var(--accent);
+  }
+  .switch__state {
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    min-width: 3ch;
+    color: var(--text-dim);
+  }
+  .switch[aria-pressed="true"] .switch__state { color: var(--accent); }
+
+  /* amber gating footnote -- build is gated on the polarity-floor addendum. */
+  .amendment {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    margin: 0 0 1.4rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px dashed var(--badge-warn-border);
+    border-radius: 6px;
+    background: rgba(234, 88, 12, 0.06);
+  }
+  .amendment__tag {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--badge-warn-fg);
+    border: 1px solid var(--badge-warn-border);
+    border-radius: 3px;
+    padding: 0.12rem 0.4rem;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .amendment__txt {
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--text-dim);
+    margin: 0;
+  }
+
+  /* ===================================================================
+     GATED BODY: when the BETA flag is OFF, everything below the header
+     collapses to a single calm "OFF" note -- demonstrating zero pollers /
+     SSE / fetch when default-OFF (DecisionOracle precedent).
+     =================================================================== */
+  .audit-off {
+    display: none;
+    padding: 1.4rem 1.2rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  body[data-audit="off"] .audit-off { display: block; }
+  body[data-audit="off"] .audit-on  { display: none; }
+  body[data-audit="off"] .audit-rail { display: none; }
+
+  /* ===================================================================
+     SESSION SCOPE PICKER -- which governed (non-SM) session the audit rail
+     is scoped to. Mirrors the SessionRail selection contract. The SM-self
+     entry is present but DISABLED (G2 polarity).
+     =================================================================== */
+  .scope {
+    margin-bottom: 1.3rem;
+  }
+  .scope__cap {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin: 0 0 0.6rem;
+  }
+  .scope__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .scope__hint { font-size: 0.72rem; color: var(--text-dim); }
+  .scope__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .sess-chip {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    background: var(--bg-row-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
+    cursor: pointer;
+    transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+  }
+  .sess-chip:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--text-bright);
+  }
+  .sess-chip[aria-pressed="true"] {
+    border-color: var(--accent);
+    color: var(--text-bright);
+    background: var(--accent-dim);
+  }
+  .sess-chip__dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-ui); flex: 0 0 auto;
+  }
+  .sess-chip[aria-pressed="true"] .sess-chip__dot { background: var(--accent); }
+  .sess-chip__count {
+    font-size: 0.6rem;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.02rem 0.4rem;
+  }
+  .sess-chip:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    border-style: dashed;
+  }
+  .sess-chip__self {
+    font-style: italic;
+    font-size: 0.6rem;
+    color: var(--text-ui);
+  }
+
+  /* ===================================================================
+     LAYOUT: a left "context" column (what the operator already has -- the
+     existing flat Cross-session patterns list, shown muted) and the thin
+     fixed right-edge AUDIT rail of hydrated-rule chips scoped to the session.
+     =================================================================== */
+  .context-cap {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin: 0 0 0.7rem;
+  }
+  .context-cap__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .context-cap__hint { font-size: 0.72rem; color: var(--text-dim); }
+
+  .flatlist { display: flex; flex-direction: column; gap: 0.4rem; max-width: 640px; }
+  .flatrow {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-row);
+    color: var(--text-dim);
+  }
+  .flatrow__hash {
+    font-family: var(--ff-mono);
+    font-size: 0.78rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .flatrow__meta { font-family: var(--ff-mono); font-size: 0.66rem; color: var(--text-ui); }
+  .flatrow__note {
+    margin-left: auto;
+    font-size: 0.66rem;
+    font-style: italic;
+    color: var(--text-ui);
+  }
+
+  /* ----- the AUDIT rail: thin, fixed, right edge ----- */
+  .audit-rail {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(15.5rem, 46vw);
+    z-index: 35;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border-hi);
+    box-shadow: -10px 0 28px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+  .audit-rail__cap {
+    padding: 0.85rem 0.85rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .audit-rail__eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+  .audit-rail__scope {
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    color: var(--text-bright);
+    margin: 0.3rem 0 0;
+  }
+  .audit-rail__count {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    margin: 0.2rem 0 0;
+  }
+  .audit-rail__meta {
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    color: var(--text-ui);
+    margin: 0.3rem 0 0;
+    font-style: italic;
+  }
+  .audit-rail__list {
+    list-style: none;
+    margin: 0;
+    padding: 0.6rem 0.65rem 1rem;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* a hydrated-rule chip: a still hairline card with a 2px left rule whose
+     color encodes decay_status, the monospace short-hash as anchor, and a
+     compact reach tally. The whole card is a real <button>. */
+  .hyd {
+    appearance: none;
+    width: 100%;
+    text-align: left;
+    display: block;
+    padding: 0.55rem 0.6rem 0.6rem;
+    border: 1px solid var(--border);
+    border-left-width: 2px;
+    border-left-color: var(--text-ui);
+    border-radius: 6px;
+    background: var(--bg-row);
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease;
+  }
+  .hyd:hover { background: var(--bg-row-hover); }
+  .hyd[data-decay="stable"]   { border-left-color: #64748b; }     /* slate */
+  .hyd[data-decay="decaying"] { border-left-color: var(--badge-warn-fg); } /* amber */
+  .hyd[data-decay="unknown"]  { border-left-color: var(--border); border-left-style: dashed; }
+
+  .hyd__top {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .hyd__hash {
+    font-family: var(--ff-mono);
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .hyd__level {
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    color: var(--text-ui);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.02rem 0.3rem;
+    margin-left: auto;
+  }
+
+  /* paired decay badge: COLOR + literal word, color never alone (M4). */
+  .decay {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--ff-mono);
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.36rem;
+    border-radius: 2px;
+    margin-top: 0.4rem;
+  }
+  .decay .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .decay--stable   { color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border); }
+  .decay--decaying { color: var(--badge-warn-fg); background: var(--badge-warn-bg); border: 1px solid var(--badge-warn-border); }
+  .decay--unknown  { color: var(--text-dim); background: transparent; border: 1px dashed var(--border); }
+
+  /* success_rate hairline meter -- a bar with a paired TEXT percentage. */
+  .srate { margin-top: 0.5rem; }
+  .srate__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.2rem;
+  }
+  .srate__lbl { font-family: var(--ff-mono); font-size: 0.54rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-ui); }
+  .srate__num { font-family: var(--ff-mono); font-size: 0.64rem; font-weight: 700; color: var(--text-bright); font-variant-numeric: tabular-nums; }
+  .srate__bar { height: 0.28rem; border-radius: 999px; background: var(--border); overflow: hidden; }
+  .srate__fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+
+  /* reach tally: matched_decision_count_this_session rendered as segments.
+     0 -> a single hollow tick + the words "0 here"; >0 -> filled segments. */
+  .reach { margin-top: 0.55rem; }
+  .reach__lbl {
+    font-family: var(--ff-mono);
+    font-size: 0.54rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    display: block;
+    margin-bottom: 0.28rem;
+  }
+  .reach__tally { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+  .reach__seg {
+    width: 9px; height: 12px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex: 0 0 auto;
+  }
+  .reach__seg--hollow {
+    background: transparent;
+    border: 1px dashed var(--border);
+  }
+  .reach__count {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-left: 0.4rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .reach__count--zero { color: var(--text-dim); font-weight: 400; }
+
+  /* ===================================================================
+     THIN SCRIM + AUDIT DRAWER (role=dialog, aria-modal, focus trap).
+     A modal drawer for the deep inspect + probe -- it DOES dim, because the
+     probe is a focused task (unlike the calm whisper). Escape + close button
+     + scrim dismiss, focus restored to the originating chip.
+     =================================================================== */
+  .ad-scrim {
+    position: fixed; inset: 0;
+    background: rgba(4, 6, 9, 0.55);
+    z-index: 60;
+    display: none;
+  }
+  .ad-scrim.is-open { display: block; }
+
+  .drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(420px, 94vw);
+    z-index: 70;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border-hi);
+    box-shadow: -22px 0 56px rgba(0, 0, 0, 0.5);
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .drawer.is-open { transform: translateX(0); }
+
+  .dr-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem 1.1rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .dr-eyebrow {
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin: 0 0 0.3rem;
+  }
+  .dr-hash-row { display: flex; align-items: center; gap: 0.5rem; }
+  .dr-hash {
+    font-family: var(--ff-mono);
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: 0.02em;
+  }
+  .dr-close {
+    appearance: none;
+    margin-left: auto;
+    width: 1.8rem; height: 1.8rem;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .dr-close:hover { color: var(--accent); border-color: var(--accent); }
+
+  .dr-body { padding: 1rem 1.1rem 1.2rem; overflow-y: auto; flex: 1 1 auto; }
+
+  .dr-mock {
+    margin: 0 0 0.9rem;
+    font-size: 0.66rem;
+    line-height: 1.4;
+    color: var(--text-dim);
+    border: 1px dashed var(--border-hi);
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+    display: none;
+  }
+  .dr-mock.is-on { display: block; }
+
+  .dr-section + .dr-section { margin-top: 1.3rem; }
+  .dr-section__title {
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.7rem;
+  }
+
+  /* provenance: a small definition grid (label -> value). */
+  .prov { display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 0.8rem; }
+  .prov__k {
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+  }
+  .prov__v {
+    font-family: var(--ff-mono);
+    font-size: 0.72rem;
+    color: var(--text-bright);
+    word-break: break-all;
+  }
+  .prov__v--dim { color: var(--text-dim); }
+
+  /* drawer stat strip mirrors the card metrics at fuller size. */
+  .dr-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-top: 0.2rem; }
+  .dr-stat {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.5rem 0.55rem;
+    background: var(--bg-row-alt);
+    min-width: 0;
+  }
+  .dr-stat__k {
+    display: block;
+    font-family: var(--ff-mono);
+    font-size: 0.52rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-ui);
+    margin-bottom: 0.25rem;
+  }
+  .dr-stat__v {
+    font-family: var(--ff-mono);
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .dr-stat__sub {
+    display: block;
+    font-family: var(--ff-mono);
+    font-size: 0.54rem;
+    color: var(--text-dim);
+    margin-top: 0.15rem;
+  }
+
+  /* ----- the "Would this fire?" probe ----- */
+  .probe__hint {
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--text-dim);
+    margin: 0 0 0.6rem;
+  }
+  .probe__box {
+    width: 100%;
+    min-height: 3.6rem;
+    resize: vertical;
+    font-family: var(--ff-mono);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text-bright);
+    background: var(--bg-row);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.55rem 0.6rem;
+  }
+  .probe__box:focus-visible { outline: 2px solid #d97706; outline-offset: 2px; }
+  .probe__controls {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 0.55rem;
+  }
+  .probe__btn {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--bg);
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    padding: 0.4rem 0.85rem;
+    cursor: pointer;
+  }
+  .probe__btn:hover { filter: brightness(1.08); }
+  .probe__altbtn {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    padding: 0.3rem 0.5rem;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  .probe__altbtn:hover { color: var(--text-bright); border-color: var(--accent); }
+  .probe__note {
+    margin: 0.5rem 0 0;
+    font-size: 0.62rem;
+    font-style: italic;
+    color: var(--text-ui);
+    line-height: 1.4;
+  }
+
+  /* probe verdict -- paired badge (label + color) + the rationale verbatim. */
+  .verdict {
+    margin-top: 0.85rem;
+    padding: 0.65rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-row);
+    display: none;
+  }
+  .verdict.is-shown { display: block; }
+  .verdict__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 0.18rem 0.5rem;
+    border-radius: 2px;
+    line-height: 1;
+  }
+  .verdict__badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .verdict--fire .verdict__badge {
+    color: var(--badge-ar-fg); background: var(--badge-ar-bg); border: 1px solid var(--badge-ar-border);
+  }
+  .verdict--nofire .verdict__badge {
+    color: var(--badge-obs-fg); background: var(--badge-obs-bg); border: 1px solid var(--badge-obs-border);
+  }
+  .verdict--degraded .verdict__badge {
+    color: var(--text-dim); background: transparent; border: 1px dashed var(--border);
+  }
+  .verdict__rationale {
+    margin: 0.5rem 0 0;
+    font-family: var(--ff-mono);
+    font-size: 0.7rem;
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .verdict__src {
+    margin: 0.4rem 0 0;
+    font-family: var(--ff-mono);
+    font-size: 0.58rem;
+    color: var(--text-ui);
+  }
+
+  /* the demote affordance (already wired in CrossSessionPatterns.svelte) -- a
+     deliberately quiet secondary action; the audit FEEDS it, never auto-acts. */
+  .demote {
+    margin-top: 1.1rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border);
+  }
+  .demote__btn {
+    appearance: none;
+    font-family: var(--ff-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--badge-blocked-fg);
+    background: transparent;
+    border: 1px solid var(--badge-blocked-border);
+    border-radius: 5px;
+    padding: 0.35rem 0.7rem;
+    cursor: pointer;
+  }
+  .demote__btn:hover { background: var(--badge-blocked-bg); }
+  .demote__hint { display: block; margin-top: 0.4rem; font-size: 0.62rem; color: var(--text-ui); line-height: 1.4; }
+
+  /* beta annotation footer inside the drawer */
+  .dr-foot {
+    padding: 0.7rem 1.1rem;
+    border-top: 1px solid var(--border);
+    font-family: var(--ff-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    color: var(--text-ui);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .dr-foot__dot { width: 5px; height: 5px; border-radius: 50%; background: var(--badge-ar-fg); }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
+  }
+
+  /* reduced motion: kill the slide transitions (cross-session is glance-worthy,
+     never an alarm -- M2). */
+  @media (prefers-reduced-motion: reduce) {
+    .drawer, .sess-chip, .hyd, .switch__track, .switch__knob { transition: none; }
+  }
+</style>
+</head>
+<body data-audit="on">
+<div class="page">
+
+  <!-- ============ FEATURE HEADER STRIP ============ -->
+  <header class="hdr">
+    <div>
+      <p class="hdr__id">BETA feature #11</p>
+      <h1 class="hdr__title">Cross-session pattern audit &amp; applicability inspector</h1>
+      <p class="hdr__sub">
+        Which learned rules from your last soak are silently governing THIS new
+        session -- and would a rule you are worried about actually fire? Turn an
+        un-answerable guess into a one-glance, one-probe answer. Closes the
+        FR-HITL-7 audit loop without ever touching the verdict path.
+      </p>
+    </div>
+    <div class="hdr__right">
+      <span class="beta-pill">
+        <span class="beta-pill__dot" aria-hidden="true"></span>
+        BETA -- default OFF, toggled in Settings &gt; BETA features
+      </span>
+      <span class="gate">
+        <span class="gate__label" id="gate-lbl">Cross-session audit</span>
+        <button
+          id="audit-toggle"
+          class="switch"
+          type="button"
+          role="switch"
+          aria-pressed="true"
+          aria-labelledby="gate-lbl"
+        >
+          <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+          <span class="switch__state" id="gate-state">ON</span>
+        </button>
+      </span>
+    </div>
+  </header>
+
+  <!-- ============ AMBER BUILD-GATING FOOTNOTE ============ -->
+  <div class="amendment" role="note">
+    <span class="amendment__tag">Build gated</span>
+    <p class="amendment__txt">
+      UI is approvable now. Build proceeds additively (two new read-only GET
+      endpoints in dashboard/server.py, no message_bus.py edit, no schema
+      migration) but BOTH endpoints MUST carry the polarity floor verbatim from
+      the pedigree/coverage join -- project_slug NOT IN {streamManager} AND
+      session_id != SM-own -- and 404 any SM-self session (G2).
+    </p>
+  </div>
+
+  <!-- ============ GATED-OFF NOTE (shown only when toggle is OFF) ============ -->
+  <div class="audit-off" role="status">
+    Cross-session audit is OFF (default). With the flag off the component renders
+    nothing and registers NO poller, SSE, or fetch -- zero runtime cost. Flip it
+    ON above (or in Settings &gt; BETA features) to scope a session and inspect
+    its hydrated rules.
+  </div>
+
+  <!-- ============ AUDIT BODY (shown only when toggle is ON) ============ -->
+  <div class="audit-on">
+
+    <!-- SESSION SCOPE PICKER (SessionRail selection) -->
+    <section class="scope" aria-label="Scope the audit to a governed session">
+      <div class="scope__cap">
+        <span class="scope__eyebrow">Scope -- governed session</span>
+        <span class="scope__hint">Pick the freshly-booted session you are watching. The AUDIT rail scopes to what hydrated INTO it.</span>
+      </div>
+      <div class="scope__list" role="group" aria-label="Session selection">
+        <button class="sess-chip" type="button" aria-pressed="true" data-session="sess-fresh-now-07">
+          <span class="sess-chip__dot" aria-hidden="true"></span>
+          sess-fresh-now-07
+          <span class="sess-chip__count">4 hydrated</span>
+        </button>
+        <button class="sess-chip" type="button" aria-pressed="false" data-session="sess-fresh-now-12">
+          <span class="sess-chip__dot" aria-hidden="true"></span>
+          sess-fresh-now-12
+          <span class="sess-chip__count">2 hydrated</span>
+        </button>
+        <button class="sess-chip" type="button" disabled aria-disabled="true" title="G2 polarity: SM never audits its own session">
+          <span class="sess-chip__dot" aria-hidden="true"></span>
+          streamManager-self
+          <span class="sess-chip__self">self -- audit suppressed (G2)</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- LEFT CONTEXT: the EXISTING flat Cross-session patterns list (muted) --
+         what the operator has TODAY: global occurrences / success_rate, but NOT
+         which session hydrated them or how many of THIS session they govern. -->
+    <div class="context-cap">
+      <span class="context-cap__eyebrow">Today -- flat cross-session list</span>
+      <span class="context-cap__hint">Global stats only. No "into THIS session" reach. The AUDIT rail (right) adds that.</span>
+    </div>
+    <div class="flatlist" aria-label="Existing flat cross-session patterns (context)">
+      <div class="flatrow">
+        <span class="flatrow__hash">a1b2c3d4</span>
+        <span class="flatrow__meta">L2 -- 17 occ -- 88% ok</span>
+        <span class="flatrow__note">reach into this session: unknown</span>
+      </div>
+      <div class="flatrow">
+        <span class="flatrow__hash">9f8e7d6c</span>
+        <span class="flatrow__meta">L1 -- 6 occ -- 50% ok</span>
+        <span class="flatrow__note">reach into this session: unknown</span>
+      </div>
+      <div class="flatrow">
+        <span class="flatrow__hash">11223344</span>
+        <span class="flatrow__meta">L3 -- 31 occ -- 97% ok</span>
+        <span class="flatrow__note">reach into this session: unknown</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============ THE AUDIT RAIL (fixed, right edge) ============ -->
+  <aside class="audit-rail" id="audit-rail" aria-label="Cross-session pattern audit -- hydrated rules">
+    <div class="audit-rail__cap">
+      <p class="audit-rail__eyebrow">Audit -- hydrated rules</p>
+      <p class="audit-rail__scope" id="rail-scope">sess-fresh-now-07</p>
+      <p class="audit-rail__count" id="rail-count">4 learned rules injected at engine init</p>
+      <p class="audit-rail__meta" id="rail-meta">sample data -- soak to populate</p>
+    </div>
+    <ul class="audit-rail__list" id="rail-list">
+      <!-- rows are rendered by JS from the mock so the scope picker re-scopes -->
+    </ul>
+  </aside>
+
+  <!-- ============ THIN SCRIM + AUDIT DRAWER ============ -->
+  <div class="ad-scrim" id="ad-scrim" aria-hidden="true"></div>
+
+  <aside
+    class="drawer"
+    id="drawer"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="dr-eyebrow"
+    aria-hidden="true"
+  >
+    <header class="dr-head">
+      <div>
+        <p class="dr-eyebrow" id="dr-eyebrow">Hydrated rule -- provenance &amp; probe</p>
+        <div class="dr-hash-row">
+          <span class="dr-hash" id="dr-hash">--------</span>
+          <span class="hyd__level" id="dr-level">L?</span>
+        </div>
+      </div>
+      <button class="dr-close" id="dr-close" type="button" aria-label="Close pattern audit drawer">&times;</button>
+    </header>
+
+    <div class="dr-body">
+      <p class="dr-mock is-on" id="dr-mock" role="note">
+        Sample data -- no live graph_patterns / decisions rows for this hash in
+        this session yet. Soak a non-SM session to populate.
+      </p>
+
+      <!-- ===== reach + success stats ===== -->
+      <section class="dr-section">
+        <h3 class="dr-section__title">Reach into this session</h3>
+        <div class="dr-stats">
+          <div class="dr-stat">
+            <span class="dr-stat__k">Touched here</span>
+            <span class="dr-stat__v" id="dr-touched">4</span>
+            <span class="dr-stat__sub">decisions this session</span>
+          </div>
+          <div class="dr-stat">
+            <span class="dr-stat__k">Success rate</span>
+            <span class="dr-stat__v" id="dr-srate">88%</span>
+            <span class="dr-stat__sub" id="dr-srate-sub">15 / 17 hits</span>
+          </div>
+          <div class="dr-stat">
+            <span class="dr-stat__k">Level</span>
+            <span class="dr-stat__v" id="dr-level2">L2</span>
+            <span class="dr-stat__sub" id="dr-decay-sub">decay: stable</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== provenance ===== -->
+      <section class="dr-section">
+        <h3 class="dr-section__title">Provenance</h3>
+        <div class="prov">
+          <span class="prov__k">Last seen session</span>
+          <span class="prov__v" id="dr-lastseen">sess-prior-soak-01</span>
+          <span class="prov__k">Last seen</span>
+          <span class="prov__v prov__v--dim" id="dr-lastts">Jun 11, 2025 -- 02:40 UTC</span>
+          <span class="prov__k">Occurrences</span>
+          <span class="prov__v" id="dr-occ">17</span>
+          <span class="prov__k">Sourced from</span>
+          <span class="prov__v" id="dr-sourced">cross_session_hydrator</span>
+        </div>
+      </section>
+
+      <!-- ===== THE "Would this fire?" PROBE ===== -->
+      <section class="dr-section">
+        <h3 class="dr-section__title">Would this fire?</h3>
+        <p class="probe__hint">
+          Paste a candidate message. This runs decision_graph.match() post-hoc
+          against the rule's vector -- it returns an applicability score, it does
+          NOT emit a verdict and never touches the governance path.
+        </p>
+        <textarea
+          class="probe__box"
+          id="probe-box"
+          placeholder="e.g. running the integration suite before the release tag as usual"
+          aria-label="Candidate message to test against this rule"
+        ></textarea>
+        <div class="probe__controls">
+          <button class="probe__btn" id="probe-run" type="button">Probe</button>
+          <button class="probe__altbtn" id="probe-degraded" type="button" aria-pressed="false">
+            Simulate engine timeout
+          </button>
+        </div>
+        <p class="probe__note">
+          Client 500ms guard mirrors the server cap (SIMILARITY_THRESHOLD 0.72).
+          Short text (&lt;=20 chars) lands below threshold; longer text clears it.
+        </p>
+
+        <!-- verdict -- paired badge + rationale verbatim (M16). -->
+        <div class="verdict" id="verdict" role="status">
+          <span class="verdict__badge" id="verdict-badge">
+            <span class="dot" aria-hidden="true"></span><span id="verdict-label">--</span>
+          </span>
+          <p class="verdict__rationale" id="verdict-rationale"></p>
+          <p class="verdict__src" id="verdict-src"></p>
+        </div>
+      </section>
+
+      <!-- ===== DEMOTE (the existing wired action this audit feeds) ===== -->
+      <div class="demote">
+        <button class="demote__btn" id="demote-btn" type="button">Demote this rule</button>
+        <span class="demote__hint" id="demote-hint">
+          Feeds the existing POST /api/patterns/{hash}/demote (already wired in
+          CrossSessionPatterns). The audit informs the call -- it never auto-acts.
+        </span>
+      </div>
+    </div>
+
+    <!-- BETA annotation footer (required) -->
+    <footer class="dr-foot">
+      <span class="dr-foot__dot" aria-hidden="true"></span>
+      BETA -- default OFF, toggled in Settings &gt; BETA features
+    </footer>
+  </aside>
+
+  <!-- live region for probe / demote announcements -->
+  <div class="sr-only" id="live" role="status" aria-live="polite"></div>
+
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    // ---- mock data: mirrors PatternAudit-data.js from the vetted brief. ----
+    // mockHydrated(sessionId) -> array of hydrated-rule rows.
+    var HYDRATED = {
+      "sess-fresh-now-07": [
+        { pattern_hash: "a1b2c3d4e5f60718", level: 2, last_seen_session_id: "sess-prior-soak-01", last_seen_ts: 1749600000, occurrence_count: 17, success_rate: 0.88, matched_decision_count_this_session: 4, sourced_from: "cross_session_hydrator", decay_status: "stable" },
+        { pattern_hash: "9f8e7d6c5b4a3021", level: 1, last_seen_session_id: "sess-prior-soak-01", last_seen_ts: 1749590000, occurrence_count: 6, success_rate: 0.5, matched_decision_count_this_session: 0, sourced_from: "cross_session_hydrator", decay_status: "decaying" },
+        { pattern_hash: "1122334455667788", level: 3, last_seen_session_id: "sess-prior-soak-02", last_seen_ts: 1749610000, occurrence_count: 31, success_rate: 0.97, matched_decision_count_this_session: 9, sourced_from: "cross_session_hydrator", decay_status: "stable" },
+        { pattern_hash: "aabbccddeeff0011", level: 1, last_seen_session_id: null, last_seen_ts: 1749580000, occurrence_count: 3, success_rate: 0.33, matched_decision_count_this_session: 1, sourced_from: "unknown", decay_status: "unknown" }
+      ],
+      "sess-fresh-now-12": [
+        { pattern_hash: "1122334455667788", level: 3, last_seen_session_id: "sess-prior-soak-02", last_seen_ts: 1749610000, occurrence_count: 31, success_rate: 0.97, matched_decision_count_this_session: 2, sourced_from: "cross_session_hydrator", decay_status: "stable" },
+        { pattern_hash: "77665544332211ff", level: 2, last_seen_session_id: "sess-prior-soak-03", last_seen_ts: 1749605000, occurrence_count: 12, success_rate: 0.75, matched_decision_count_this_session: 0, sourced_from: "cross_session_hydrator", decay_status: "decaying" }
+      ]
+    };
+
+    // mockWouldApply(hash, text): length>20 -> applies, 0.81; else 0.41.
+    function mockWouldApply(text) {
+      var longish = (text || "").length > 20;
+      return {
+        applies: longish,
+        match_confidence: longish ? 0.81 : 0.41,
+        sourced_from: ["graph_match"],
+        rationale: longish
+          ? "cosine 0.81 >= threshold 0.72"
+          : "cosine 0.41 below threshold 0.72"
+      };
+    }
+    // mockUnavailable(): the 500ms-timeout / error degraded shape.
+    function mockUnavailable() {
+      return {
+        applies: false,
+        match_confidence: 0.0,
+        sourced_from: [],
+        rationale: "matching engine unavailable"
+      };
+    }
+
+    function tsLabel(ts) {
+      // deterministic UTC label so the mockup is reproducible (no Date.now).
+      var d = new Date(ts * 1000);
+      var mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()];
+      function p(n){ return (n < 10 ? "0" : "") + n; }
+      return mo + " " + d.getUTCDate() + ", " + d.getUTCFullYear() +
+             " -- " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + " UTC";
+    }
+
+    var DECAY_WORD = { stable: "STABLE", decaying: "DECAYING", unknown: "UNKNOWN" };
+
+    // ---- element refs ----
+    var body        = document.body;
+    var toggle      = document.getElementById("audit-toggle");
+    var gateState   = document.getElementById("gate-state");
+    var railList    = document.getElementById("rail-list");
+    var railScope   = document.getElementById("rail-scope");
+    var railCount   = document.getElementById("rail-count");
+    var scopeChips  = Array.prototype.slice.call(document.querySelectorAll(".sess-chip"));
+    var scrim       = document.getElementById("ad-scrim");
+    var drawer      = document.getElementById("drawer");
+    var drClose     = document.getElementById("dr-close");
+    var live        = document.getElementById("live");
+
+    var drHash      = document.getElementById("dr-hash");
+    var drLevel     = document.getElementById("dr-level");
+    var drLevel2    = document.getElementById("dr-level2");
+    var drTouched   = document.getElementById("dr-touched");
+    var drSrate     = document.getElementById("dr-srate");
+    var drSrateSub  = document.getElementById("dr-srate-sub");
+    var drDecaySub  = document.getElementById("dr-decay-sub");
+    var drLastseen  = document.getElementById("dr-lastseen");
+    var drLastts    = document.getElementById("dr-lastts");
+    var drOcc       = document.getElementById("dr-occ");
+    var drSourced   = document.getElementById("dr-sourced");
+
+    var probeBox    = document.getElementById("probe-box");
+    var probeRun    = document.getElementById("probe-run");
+    var probeDegr   = document.getElementById("probe-degraded");
+    var verdict     = document.getElementById("verdict");
+    var verdictBadge= document.getElementById("verdict-badge");
+    var verdictLabel= document.getElementById("verdict-label");
+    var verdictRat  = document.getElementById("verdict-rationale");
+    var verdictSrc  = document.getElementById("verdict-src");
+    var demoteBtn   = document.getElementById("demote-btn");
+    var demoteHint  = document.getElementById("demote-hint");
+
+    var currentSession = "sess-fresh-now-07";
+    var lastTrigger = null; // restore focus here on close (M17)
+    var degraded = false;   // simulate-timeout state
+
+    // ---- render the rail from the mock for the scoped session ----
+    function reachTally(n) {
+      if (n <= 0) {
+        return '<div class="reach__tally">' +
+               '<span class="reach__seg reach__seg--hollow" aria-hidden="true"></span>' +
+               '<span class="reach__count reach__count--zero">0 here</span></div>';
+      }
+      var segs = "";
+      var cap = Math.min(n, 12);
+      for (var i = 0; i < cap; i++) {
+        segs += '<span class="reach__seg" aria-hidden="true"></span>';
+      }
+      var more = n > 12 ? " (" + n + ")" : "";
+      return '<div class="reach__tally">' + segs +
+             '<span class="reach__count">' + n + " here" + more + "</span></div>";
+    }
+
+    function renderRail() {
+      var rows = HYDRATED[currentSession] || [];
+      railScope.textContent = currentSession;
+      railCount.textContent = rows.length + " learned rule" + (rows.length === 1 ? "" : "s") +
+                              " injected at engine init";
+      railList.innerHTML = "";
+      rows.forEach(function (r) {
+        var short = r.pattern_hash.slice(0, 8);
+        var pct = Math.round(r.success_rate * 100);
+        var li = document.createElement("li");
+        var html =
+          '<button class="hyd" type="button" data-decay="' + r.decay_status + '"' +
+            ' data-hash="' + r.pattern_hash + '"' +
+            ' aria-label="Hydrated rule ' + short + ', level ' + r.level +
+              ', decay ' + DECAY_WORD[r.decay_status] +
+              ', touched ' + r.matched_decision_count_this_session + ' decisions this session. Open for provenance and probe.">' +
+            '<span class="hyd__top">' +
+              '<span class="hyd__hash">' + short + '</span>' +
+              '<span class="hyd__level">L' + r.level + '</span>' +
+            '</span>' +
+            '<span class="decay decay--' + r.decay_status + '">' +
+              '<span class="dot" aria-hidden="true"></span>' + DECAY_WORD[r.decay_status] +
+            '</span>' +
+            '<span class="srate">' +
+              '<span class="srate__row">' +
+                '<span class="srate__lbl">success</span>' +
+                '<span class="srate__num">' + pct + '%</span>' +
+              '</span>' +
+              '<span class="srate__bar"><span class="srate__fill" style="width:' + pct + '%"></span></span>' +
+            '</span>' +
+            '<span class="reach">' +
+              '<span class="reach__lbl">reach into this session</span>' +
+              reachTally(r.matched_decision_count_this_session) +
+            '</span>' +
+          '</button>';
+        li.innerHTML = html;
+        li.querySelector(".hyd").addEventListener("click", function (e) {
+          openDrawer(r, e.currentTarget);
+        });
+        railList.appendChild(li);
+      });
+    }
+
+    // ---- scope picker ----
+    scopeChips.forEach(function (chip) {
+      if (chip.disabled) return; // SM-self (G2): never selectable
+      chip.addEventListener("click", function () {
+        scopeChips.forEach(function (c) {
+          if (!c.disabled) c.setAttribute("aria-pressed", "false");
+        });
+        chip.setAttribute("aria-pressed", "true");
+        currentSession = chip.getAttribute("data-session");
+        renderRail();
+        live.textContent = "Audit scoped to " + currentSession + ".";
+      });
+    });
+
+    // ---- BETA gate ----
+    function setGate(on) {
+      toggle.setAttribute("aria-pressed", on ? "true" : "false");
+      gateState.textContent = on ? "ON" : "OFF";
+      body.setAttribute("data-audit", on ? "on" : "off");
+      if (!on) closeDrawer();
+    }
+    toggle.addEventListener("click", function () {
+      setGate(toggle.getAttribute("aria-pressed") !== "true");
+    });
+
+    // ---- drawer open/close + focus trap (M17) ----
+    function populateDrawer(r) {
+      var short = r.pattern_hash.slice(0, 8);
+      drHash.textContent = short;
+      drHash.setAttribute("title", r.pattern_hash);
+      drLevel.textContent = "L" + r.level;
+      drLevel2.textContent = "L" + r.level;
+      drTouched.textContent = r.matched_decision_count_this_session;
+      var pct = Math.round(r.success_rate * 100);
+      var successes = Math.round(r.success_rate * r.occurrence_count);
+      drSrate.textContent = pct + "%";
+      drSrateSub.textContent = successes + " / " + r.occurrence_count + " hits";
+      drDecaySub.textContent = "decay: " + r.decay_status;
+      drLastseen.textContent = r.last_seen_session_id || "(none recorded)";
+      drLastts.textContent = tsLabel(r.last_seen_ts);
+      drOcc.textContent = r.occurrence_count;
+      drSourced.textContent = r.sourced_from;
+      // reset probe
+      probeBox.value = "";
+      verdict.className = "verdict";
+      degraded = false;
+      probeDegr.setAttribute("aria-pressed", "false");
+      probeDegr.textContent = "Simulate engine timeout";
+      demoteBtn.disabled = false;
+      demoteBtn.textContent = "Demote this rule";
+      demoteHint.textContent = "Feeds the existing POST /api/patterns/{hash}/demote (already wired in CrossSessionPatterns). The audit informs the call -- it never auto-acts.";
+    }
+
+    function openDrawer(r, trigger) {
+      lastTrigger = trigger || null;
+      populateDrawer(r);
+      scrim.classList.add("is-open");
+      drawer.classList.add("is-open");
+      drawer.setAttribute("aria-hidden", "false");
+      scrim.setAttribute("aria-hidden", "false");
+      drClose.focus();
+    }
+    function closeDrawer() {
+      if (!drawer.classList.contains("is-open")) return;
+      scrim.classList.remove("is-open");
+      drawer.classList.remove("is-open");
+      drawer.setAttribute("aria-hidden", "true");
+      scrim.setAttribute("aria-hidden", "true");
+      if (lastTrigger && typeof lastTrigger.focus === "function") lastTrigger.focus();
+      lastTrigger = null;
+    }
+    drClose.addEventListener("click", closeDrawer);
+    scrim.addEventListener("click", closeDrawer);
+
+    // Escape closes + restores focus; Tab is trapped within the drawer (M17).
+    document.addEventListener("keydown", function (e) {
+      if (!drawer.classList.contains("is-open")) return;
+      if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+      if (e.key === "Tab") {
+        var focusables = drawer.querySelectorAll(
+          'button:not([disabled]), textarea, [href], input, [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusables.length) return;
+        var first = focusables[0];
+        var last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault(); first.focus();
+        }
+      }
+    });
+
+    // ---- the "Would this fire?" probe ----
+    function showVerdict(res) {
+      var fire = res.applies && res.match_confidence >= 0.72;
+      var unavailable = res.rationale === "matching engine unavailable";
+      var label, kind;
+      if (unavailable) {
+        kind = "degraded";
+        label = "ENGINE UNAVAILABLE";
+      } else if (fire) {
+        kind = "fire";
+        label = "WOULD FIRE -- conf " + res.match_confidence.toFixed(2);
+      } else {
+        kind = "nofire";
+        label = "WOULD NOT FIRE -- conf " + res.match_confidence.toFixed(2);
+      }
+      verdict.className = "verdict is-shown verdict--" + kind;
+      verdictLabel.textContent = label;
+      verdictRat.textContent = "rationale: " + res.rationale;
+      verdictSrc.textContent = res.sourced_from.length
+        ? "sourced_from: [" + res.sourced_from.join(", ") + "]"
+        : "sourced_from: []";
+      live.textContent = label + ". " + res.rationale;
+    }
+
+    probeRun.addEventListener("click", function () {
+      // 500ms client guard mirrors the server cap; in degraded mode the engine
+      // "times out" and returns the unavailable shape.
+      probeRun.disabled = true;
+      var prev = probeRun.textContent;
+      probeRun.textContent = "Probing...";
+      setTimeout(function () {
+        var res = degraded ? mockUnavailable() : mockWouldApply(probeBox.value);
+        showVerdict(res);
+        probeRun.disabled = false;
+        probeRun.textContent = prev;
+      }, 240);
+    });
+
+    probeDegr.addEventListener("click", function () {
+      degraded = probeDegr.getAttribute("aria-pressed") !== "true";
+      probeDegr.setAttribute("aria-pressed", degraded ? "true" : "false");
+      probeDegr.textContent = degraded ? "Engine timeout: ON" : "Simulate engine timeout";
+    });
+
+    // ---- demote (feeds the existing wired endpoint; here it just confirms) ----
+    demoteBtn.addEventListener("click", function () {
+      demoteBtn.disabled = true;
+      demoteBtn.textContent = "Demoted";
+      demoteHint.textContent = "Demote queued -- POST /api/patterns/{hash}/demote would carry this hash. (Mockup: no live call.)";
+      live.textContent = "Pattern demote queued for " + drHash.textContent + ".";
+    });
+
+    // initial render
+    renderRail();
+  })();
+</script>
+</body>
+</html>

@@ -224,6 +224,16 @@
     font-weight: 500;
   }
 
+  /* PAPER theme: the calm/watch role inks (#93a4bd / #c9a227) are AA on the dark
+     themes but fall below AA on the paper light chip. Darken on paper only; the
+     paired role text label is unchanged. */
+  :global([data-theme='paper']) .role-badge--calm {
+    color: #475569;
+  }
+  :global([data-theme='paper']) .role-badge--watch {
+    color: #92620a;
+  }
+
   /* An unrecognised token is rendered verbatim but visually marked as outside
      the known schema with a dashed edge -- the TEXT still carries the signal. */
   .role-badge--unmatched {
