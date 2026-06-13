@@ -1,6 +1,8 @@
 # BETA Proposals -- RESTART / RESUME doc
 
-**Milestone: 42 / 46 feature proposals shipped. Paused 2026-06-11.**
+**Milestone: 45 / 46 feature proposals shipped (batch-3 closed 2026-06-13).**
+**1 HELD: allow-pattern-auto-graduation -- needs a real ADR-18 FROZEN amendment.**
+**(Earlier checkpoint: 42 / 46, paused 2026-06-11.)**
 **Branch: `feat/beta-proposals`** (commit of the 29-feature working tree; operator
 theme-in-flight work -- `theme.css` / `ThemeToggle.svelte` / `theme.js` /
 `AppShell.svelte` / `HeaderBar.svelte` -- deliberately EXCLUDED, left in the
@@ -36,15 +38,28 @@ Two workflows drive it (Rosetta-Stone adaptation of `Claude-ResearchFixWorkflow.
 | Batch-1 (SHIP-PROPOSAL) | 15 | **DONE** -- built + backend + polarity-verified + axe 0-serious + all 15 `--headed` |
 | Batch-2 NEW (CONSTRAIN) | 14 | **DONE** -- built + 21 additive endpoints + axe 0-serious + 13/14 `--headed` |
 | Batch-2 overlaps | 13 | **COVERED BY BATCH-1** (no re-build; see `reports/proposals/BETA-DEFERRAL-LEDGER.md`) |
-| **Batch-3 (gap-fill)** | **4** | **NOT STARTED** <- resume here |
+| **Batch-3 (gap-fill)** | **4** | **3 DONE + 1 HELD** (closed 2026-06-13) |
 
-**Batch-3 remaining (the 4):** `allow-pattern-auto-graduation` (#1),
-`confidence-calibration-loop` (#8), `policy-preview-chip` (#21),
-`regret-mining-override-loop` (#24). Each needs an adversarial refute pass
-(they were hand-authored gap-fills with no verdict). Files:
+**Batch-3 outcome (2026-06-13):** unanimous 2-refuter verdicts (recovered from the
+stopped Jun-11 research run journal -- mockups + verdicts already existed, no
+re-run). **3 PASS built + integrated + all gates green:** `policy-preview-chip`
+(#21, `GET /api/governance/predict`, chip under the HITL SYNC/ASYNC toggle),
+`confidence-calibration-loop` (#8, `GET /api/governance/calibration`, root-sibling
+reliability-diagram drawer), `regret-mining-override-loop` (#24,
+`GET /api/governance/regret`, Frame-A regret-ledger card). All CONSTRAINED-ADDITIVE
+(additive read-only GET, no DDL, no FROZEN, no envelope; polarity dual-key +
+`excluded_self`). **1 HELD:** `allow-pattern-auto-graduation` (#1) -- NEEDS-AMENDMENT
+(the one batch-3 proposal that genuinely needs a real ADR-18 FROZEN amendment: a
+new `pattern_graduated` bus envelope + same-PR cassette/soak coverage + a
+verdict-path short-circuit). Artifacts: `reports/_research_b3.json` (verdicts),
+`reports/_build_b3.json` (build data), `reports/proposals/mockups/INDEX-batch3.html`
+(gate gallery). Gates: build exit 0 (199 mod), npm test 35/35, pytest 13/13
+(`tests/test_dashboard_{policy_preview_chip,confidence_calibration,regret_mining}.py`),
+axe 0 serious flags-ON, puppeteer smoke 12/12 (`dashboard/ui-next/test/beta-headed/`).
+Proposal files:
 `reports/proposals/2026-06-11-{allow-pattern-auto-graduation,confidence-calibration-loop,policy-preview-chip,regret-mining-override-loop}.proposal.md`.
 
-**29 BETA features are LIVE** in `dashboard/ui-next/` (default-OFF). Component
+**32 BETA features are LIVE** in `dashboard/ui-next/` (default-OFF; 29 + the 3 batch-3 PASS). Component
 files: `dashboard/ui-next/src/lib/components/beta/*.svelte`. Registry (the toggle
 panel source): `dashboard/ui-next/src/lib/beta/registry.js`. Backend: ~32 additive
 read endpoints in `dashboard/server.py` (all polarity-guarded, SM-self excluded).
@@ -171,7 +186,10 @@ button). Flags hydrate from the backend at app boot (`hydrateBetaFlags()` in
 
 ## 7. Outstanding / known-incomplete
 
-- **Batch-3 (4)** -- not researched/built (resume per section 3).
+- **Batch-3 (4)** -- DONE 2026-06-13: 3 PASS built + integrated + gated green;
+  `allow-pattern-auto-graduation` HELD pending an ADR-18 FROZEN amendment (new
+  `pattern_graduated` envelope + cassette/soak + verdict short-circuit). To ship
+  the held one, author the amendment first, then build it (not constrained-additive).
 - **spatial-session-sidebar** -- built + wired + axe-clean, but its resting root
   element didn't render in the `--headed` smoke (selector `.ssb-spine` count 0);
   confirm its resting affordance renders (may need a session selected / hover).

@@ -9,6 +9,7 @@ with caller-supplied seed. Self-monitor episodes are filtered per
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ import sqlite3
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from rl.episode_logger import _sm_slug_set
+from rl.episode_logger import _sm_slug_set, ensure_project_slug_column
 from rl.sources import VALID_VERDICTS, Episode
 from rl.sources import cassette as cassette_src
 from rl.sources import probe as probe_src
@@ -57,6 +58,18 @@ def _load_real_from_db(db_path: Path) -> list[Episode]:
     )
     conn = sqlite3.connect(str(db_path))
     try:
+        if conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='episodes'"
+        ).fetchone() is None:
+            return []
+        # Legacy-schema migration (idempotent): a pre-`project_slug`
+        # episodes db (created before rl/schema.sql added the column) would
+        # raise "no such column: project_slug" on the WHERE below, defeating
+        # the SQL-WHERE polarity key (CLAUDE.md L42). Add the nullable
+        # column so the durable read key ALWAYS applies; legacy rows get
+        # NULL slug -> retained by the WHERE -> caught by the session
+        # backstop (_filter_self_monitor).
+        ensure_project_slug_column(conn)
         rows = conn.execute(
             "SELECT ts_utc, session_id, trace_id, state_features_json,"
             " action_taken, action_propensity, verdict, confidence,"

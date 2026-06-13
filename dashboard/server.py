@@ -1452,19 +1452,312 @@ async def api_patterns_cross_session():
 
 @app.post("/api/patterns/{hash}/demote")
 async def api_patterns_demote(hash: str):
-    """Set patterns.cross_session=0 for the given hash. 404 if not found."""
+    """Set patterns.cross_session=0 for the given hash. 404 if not found.
+
+    ADR-18 Amendment F (invariant #5): ALSO deactivates any graduated_rules
+    row for the same shape_hash so a demote reverses a graduation and the
+    rule stops short-circuiting immediately. The graduated demote is a
+    best-effort additive side-effect; a graduated row with no pattern row
+    still counts as "found" so the operator can revoke a graduation whose
+    probabilistic pattern has since decayed away.
+    """
     try:
         bus = _get_bus()
         if bus is None:
             raise HTTPException(status_code=503, detail="bus unavailable")
         existed = bus.unflag_pattern_cross_session(hash)
+        grad_demoted = False
+        try:
+            grad_demoted = bus.demote_graduated_rule(hash)
+        except Exception:
+            log.exception("demote: graduated_rules demote failed")
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    if not existed:
+    if not existed and not grad_demoted:
         raise HTTPException(status_code=404, detail="pattern not found")
     return {"hash": hash, "cross_session": 0}
+
+
+# -- ADR-18 Amendment F: allow-pattern auto-graduation candidate scan -------
+# Read-only candidate scan over the decision corpus + an operator-confirm
+# POST that writes one graduated_rules row. The verdict short-circuit lives
+# in governance._evaluate_inner_core (env-gated, default OFF); these
+# endpoints surface candidates and let the operator confirm/reverse. M8:
+# graduation is NEVER automatic — only the confirm POST writes a rule, and
+# it re-verifies eligibility server-side. Polarity dual-key excludes SM-self.
+
+
+def _graduation_polarity_where(
+    sm_slugs: list[str], sm_own: str, has_sessions: bool,
+) -> tuple[list[str], list]:
+    """Shared polarity WHERE for the candidate scan: durable read key
+    (project_slug NOT IN STREAM_MANAGER_PROJECT_SLUGS) + session_id
+    backstop. Also fixes matched_hash != '' (only graph-anchored shapes
+    can graduate)."""
+    where = ["d.matched_hash != ''"]
+    params: list = []
+    if has_sessions and sm_slugs:
+        ph = ",".join("?" for _ in sm_slugs)
+        where.append(
+            "(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN (" + ph + "))")
+        params.extend(sm_slugs)
+    if sm_own:
+        where.append("m.session_id != ?")
+        params.append(sm_own)
+    return where, params
+
+
+def _graduation_override_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Per-shape operator-override counts (a shape with any override is
+    ineligible). Counted in a SEPARATE query so the LEFT JOIN cannot
+    multiply the per-shape ALLOW/BLOCK sums."""
+    if not _has_table(conn, "hitl_overrides"):
+        return {}
+    rows = conn.execute(
+        "SELECT d.matched_hash AS shape_hash, COUNT(ho.id) AS n "
+        "FROM hitl_overrides ho JOIN decisions d ON ho.decision_id = d.id "
+        "WHERE d.matched_hash != '' GROUP BY d.matched_hash"
+    ).fetchall()
+    return {str(r["shape_hash"]): int(r["n"] or 0) for r in rows}
+
+
+def _graduation_excluded_self(
+    conn: sqlite3.Connection, sm_slugs: list[str], sm_own: str,
+    has_sessions: bool,
+) -> int:
+    """Tally of decision rows DROPPED by the polarity filter (SM-self), for
+    the visible polarity readout."""
+    if not has_sessions or not (sm_slugs or sm_own):
+        return 0
+    ors: list[str] = []
+    params: list = []
+    if sm_slugs:
+        ph = ",".join("?" for _ in sm_slugs)
+        ors.append("LOWER(s.project_slug) IN (" + ph + ")")
+        params.extend(sm_slugs)
+    if sm_own:
+        ors.append("m.session_id = ?")
+        params.append(sm_own)
+    sql = (
+        "SELECT COUNT(*) AS c FROM decisions d "
+        "JOIN messages m ON d.message_id = m.id "
+        "LEFT JOIN sessions s ON m.session_id = s.id "
+        "WHERE d.matched_hash != '' AND (" + " OR ".join(ors) + ")"
+    )
+    r = conn.execute(sql, tuple(params)).fetchone()
+    return int(r["c"] or 0) if r else 0
+
+
+def _graduation_stats_for_hash(
+    conn: sqlite3.Connection, shape_hash: str,
+    sm_slugs: list[str], sm_own: str, has_sessions: bool,
+):
+    """Single-shape CandidateStats for the confirm re-verify, or None.
+
+    Applies the SAME polarity dual-key as the scan, so a shape that lives
+    only on SM-self sessions yields None (cannot be confirmed)."""
+    from stream_manager.governance import is_safety_priority_content
+    from stream_manager.graduated_rules import CandidateStats
+    join_sql = "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+    where, params = _graduation_polarity_where(sm_slugs, sm_own, has_sessions)
+    where.append("d.matched_hash = ?")
+    params.append(shape_hash)
+    sql = (
+        "SELECT d.matched_hash AS shape_hash, "
+        "SUM(CASE WHEN UPPER(d.action)='ALLOW' THEN 1 ELSE 0 END) AS n_allow, "
+        "AVG(d.confidence) AS mean_confidence, "
+        "SUM(CASE WHEN UPPER(d.action)='BLOCK' THEN 1 ELSE 0 END) AS n_block_ever, "
+        "MAX(m.content) AS sample_content, COUNT(*) AS n_total "
+        "FROM decisions d JOIN messages m ON d.message_id = m.id "
+        + join_sql
+        + "WHERE " + " AND ".join(where)
+        + " GROUP BY d.matched_hash"
+    )
+    row = conn.execute(sql, tuple(params)).fetchone()
+    if row is None or not row["shape_hash"] or int(row["n_total"] or 0) == 0:
+        return None
+    overrides = _graduation_override_counts(conn)
+    text = str(row["sample_content"] or "")
+    return CandidateStats(
+        shape_hash=str(row["shape_hash"]),
+        canonical_text=text[:200],
+        n_allow=int(row["n_allow"] or 0),
+        mean_confidence=float(row["mean_confidence"] or 0.0),
+        n_override=int(overrides.get(str(row["shape_hash"]), 0)),
+        n_block_ever=int(row["n_block_ever"] or 0),
+        safety_floor=is_safety_priority_content(text),
+    )
+
+
+@app.get("/api/graduation/candidates")
+async def api_graduation_candidates(limit: int = 50):
+    """ADR-18 Amendment F: propose graduation CANDIDATES (read-only).
+
+    Aggregates the decision corpus per DecisionGraph shape_hash and surfaces
+    shapes that are proven-routine AND have never touched the safety floor
+    (invariants #2 + #6): n_allow >= 30, mean_confidence >= 0.95,
+    n_override == 0, n_block_ever == 0, canonical text not safety-priority.
+
+    POLARITY (G2/M15): SM-self excluded BEFORE aggregation by project_slug
+    NOT IN (STREAM_MANAGER_PROJECT_SLUGS) + session_id != SM_OWN_SESSION_ID;
+    {excluded_self} surfaces the dropped tally. M8: PROPOSES only — writes
+    nothing. Degrades to an empty shape on error (never a 500)."""
+    try:
+        from stream_manager.governance import is_safety_priority_content
+        from stream_manager.graduated_rules import CandidateStats, is_eligible
+        bus = _get_bus()
+        conn = _open()
+        try:
+            if not _has_table(conn, "decisions") or not _has_table(conn, "messages"):
+                return {"candidates": [], "excluded_self": 0,
+                        "polarity_filtered": True}
+            sm_slugs = sorted(_sm_own_slugs())
+            sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+            has_sessions = _has_table(conn, "sessions")
+            join_sql = (
+                "LEFT JOIN sessions s ON m.session_id = s.id "
+                if has_sessions else "")
+            where, params = _graduation_polarity_where(
+                sm_slugs, sm_own, has_sessions)
+            sql = (
+                "SELECT d.matched_hash AS shape_hash, "
+                "SUM(CASE WHEN UPPER(d.action)='ALLOW' THEN 1 ELSE 0 END)"
+                " AS n_allow, "
+                "AVG(d.confidence) AS mean_confidence, "
+                "SUM(CASE WHEN UPPER(d.action)='BLOCK' THEN 1 ELSE 0 END)"
+                " AS n_block_ever, "
+                "MAX(m.content) AS sample_content "
+                "FROM decisions d JOIN messages m ON d.message_id = m.id "
+                + join_sql
+                + "WHERE " + " AND ".join(where)
+                + " GROUP BY d.matched_hash"
+            )
+            stats_rows = conn.execute(sql, tuple(params)).fetchall()
+            override_counts = _graduation_override_counts(conn)
+            excluded_self = _graduation_excluded_self(
+                conn, sm_slugs, sm_own, has_sessions)
+        finally:
+            conn.close()
+        candidates: list[dict] = []
+        for row in stats_rows:
+            sh = str(row["shape_hash"] or "")
+            if not sh:
+                continue
+            text = str(row["sample_content"] or "")
+            stats = CandidateStats(
+                shape_hash=sh,
+                canonical_text=text[:200],
+                n_allow=int(row["n_allow"] or 0),
+                mean_confidence=float(row["mean_confidence"] or 0.0),
+                n_override=int(override_counts.get(sh, 0)),
+                n_block_ever=int(row["n_block_ever"] or 0),
+                safety_floor=is_safety_priority_content(text),
+            )
+            if not is_eligible(stats):
+                continue
+            if bus is not None and bus.lookup_graduated_rule(sh) is not None:
+                continue  # already graduated (active)
+            candidates.append({
+                "shape_hash": stats.shape_hash,
+                "canonical_text": stats.canonical_text,
+                "n_allow": stats.n_allow,
+                "mean_confidence": round(stats.mean_confidence, 4),
+                "n_override": stats.n_override,
+                "n_block_ever": stats.n_block_ever,
+            })
+        candidates.sort(key=lambda c: c["n_allow"], reverse=True)
+        return {
+            "candidates": candidates[: max(1, min(int(limit), 200))],
+            "excluded_self": excluded_self,
+            "polarity_filtered": True,
+        }
+    except Exception:
+        log.exception("graduation/candidates: scan failed; degrading to empty")
+        return {"candidates": [], "excluded_self": 0, "polarity_filtered": True}
+
+
+@app.post("/api/graduation/confirm")
+async def api_graduation_confirm(request: Request):
+    """ADR-18 Amendment F: operator-confirm graduation of one shape (M8).
+
+    Writes a graduated_rules row ONLY on this explicit operator request —
+    never auto. Re-verifies eligibility server-side (defense-in-depth: the
+    candidate gate is enforced again here, NOT trusted from the client) and
+    refuses any shape that is SM-self, safety-floor, or not proven-routine.
+    Emits one cold-path `pattern_graduated` audit envelope. Idempotent —
+    re-confirming re-activates."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json body") from None
+    shape_hash = body.get("shape_hash") if isinstance(body, dict) else None
+    if not isinstance(shape_hash, str) or not shape_hash:
+        raise HTTPException(status_code=400, detail="shape_hash required")
+    bus = _get_bus()
+    if bus is None:
+        raise HTTPException(status_code=503, detail="bus unavailable")
+    from stream_manager.graduated_rules import GraduatedRuleStore, is_eligible
+    conn = _open()
+    try:
+        sm_slugs = sorted(_sm_own_slugs())
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        has_sessions = _has_table(conn, "sessions")
+        stats = _graduation_stats_for_hash(
+            conn, shape_hash, sm_slugs, sm_own, has_sessions)
+    finally:
+        conn.close()
+    if stats is None:
+        raise HTTPException(
+            status_code=404, detail="shape not found in governed corpus")
+    if not is_eligible(stats):
+        raise HTTPException(
+            status_code=409, detail="shape not eligible for graduation")
+    confirmed_ts = time.time()
+    try:
+        # Route the write through the store (M8: this is the only code path
+        # that writes a graduated_rules row, and only on explicit confirm).
+        GraduatedRuleStore(bus=bus).graduate(
+            stats.shape_hash, stats.canonical_text, confirmed_ts, stats.n_allow)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    try:
+        bus.write_envelope("pattern_graduated", {
+            "shape_hash": stats.shape_hash,
+            "canonical_text": stats.canonical_text,
+            "n_allow": stats.n_allow,
+            "mean_confidence": round(stats.mean_confidence, 4),
+            "n_override": stats.n_override,
+            "n_block_ever": stats.n_block_ever,
+            "excluded_self": 0,
+            "confirmed_by": "operator",
+            "graduated_ts": confirmed_ts,
+        })
+    except Exception:
+        log.exception("graduation/confirm: pattern_graduated emit failed")
+    return {
+        "shape_hash": stats.shape_hash,
+        "graduated": True,
+        "n_allow_at_grad": stats.n_allow,
+        "confirmed_ts": confirmed_ts,
+    }
+
+
+@app.get("/api/graduation/active")
+async def api_graduation_active():
+    """ADR-18 Amendment F: list ACTIVE graduated rules (powers the demote /
+    reverse affordance in the UI). Read-only. The table only ever holds
+    operator-confirmed non-SM-self shapes (confirm refuses SM-self), so no
+    polarity filter is needed here. Degrades to empty on error."""
+    try:
+        bus = _get_bus()
+        if bus is None:
+            return {"rules": []}
+        return {"rules": bus.list_graduated_rules(active_only=True)}
+    except Exception:
+        log.exception("graduation/active: read failed; degrading to empty")
+        return {"rules": []}
 
 
 # -- BETA feature-flag registry (2026-06-11 BETA proposals initiative) -------
@@ -2222,7 +2515,10 @@ async def api_sessions_health_digest(limit: int = 20):
                     "SELECT d.action, d.confidence, d.timestamp "
                     "FROM decisions d JOIN messages m ON d.message_id = m.id "
                     "WHERE m.session_id = ? "
-                    "ORDER BY d.timestamp DESC LIMIT 1",
+                    # rowid DESC breaks ties when several decisions share a
+                    # coarse time.time() stamp (Windows ~15ms resolution); the
+                    # most-recently-inserted row is the true latest.
+                    "ORDER BY d.timestamp DESC, d.rowid DESC LIMIT 1",
                     (sid,),
                 ).fetchone()
                 if ld is not None:
@@ -6068,6 +6364,763 @@ async def api_time_machine_replay(body: dict | None = None):
         "excluded_self": excluded_self,
         "mock": False,
         "rows": out_rows,
+    }
+
+
+# --- policy-preview-chip endpoint (#21) ---
+# READ-ONLY corpus retrieval for the BETA "policy-preview-chip". DERIVES a
+# per-shape verdict distribution from the EXISTING decision rows. It NEVER calls
+# governance.evaluate / the live engine (M18: off the verdict hot path) -- it is
+# pure post-hoc retrieval. Additive read endpoint; touches NO FROZEN surface (no
+# governance.py, no message_bus schema, no new bus envelope). Polarity (G2): the
+# corpus is filtered at the SQL WHERE on sessions.project_slug (durable read key:
+# project_slug NOT IN the SM exclusion set, BRIDGE_SM_PROJECT_SLUGS default
+# {streamManager}) AND on m.session_id != SM_OWN_SESSION_ID (session backstop) --
+# SM-self NEVER enters the predictive corpus -- and the dropped self tally is
+# surfaced as excluded_self.
+@app.get("/api/governance/predict")
+async def api_governance_predict(
+    session_id: str | None = None, shape: str | None = None, limit: int = 400
+):
+    """Return the corpus action distribution for the command-shapes of the
+    SELECTED session (or an explicit ``shape`` hash). Retrieval is exact-shape
+    first (decisions.matched_hash), then a cheap normalized-content nearest
+    neighbor over recent rows when no exact match exists. Read-only, post-hoc
+    (M18). NEVER invokes the engine.
+
+    Shape:
+      { shape, session_id, n, match_kind ('exact'|'knn'|'none'),
+        action_hist:{ALLOW,SUGGEST,GUIDE,INTERVENE,BLOCK},
+        dominant_action, dominant_share, mean_conf, dominant_layer,
+        excluded_self, mock }
+
+    Polarity (G2): the corpus EXCLUDES SM-self (project_slug NOT IN the SM slug
+    set AND session_id != SM_OWN_SESSION_ID); excluded_self surfaces the dropped
+    tally. Degrades to a SAFE n:0 / mock:true shape on any error / empty DB so
+    the chip falls back to deterministic mock (never reads as live when down).
+    """
+    empty = {
+        "shape": (shape or ""),
+        "session_id": (session_id or ""),
+        "n": 0,
+        "match_kind": "none",
+        "action_hist": {},
+        "dominant_action": None,
+        "dominant_share": 0.0,
+        "mean_conf": None,
+        "dominant_layer": None,
+        "excluded_self": 0,
+        "mock": True,
+    }
+    _ACTIONS = ("ALLOW", "SUGGEST", "GUIDE", "INTERVENE", "BLOCK")
+    try:
+        cap = min(max(int(limit or 400), 1), 2000)
+        sm_slugs = list(_sm_own_slugs())
+        sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+        conn = _open()
+
+        # Polarity WHERE shared by every query below. LEFT JOIN keeps decisions
+        # whose session row is absent (not self); an SM project_slug OR the SM
+        # own session id is excluded.
+        polarity = []
+        pol_params: list = []
+        if sm_own:
+            polarity.append("m.session_id != ?")
+            pol_params.append(sm_own)
+        if sm_slugs:
+            ph = ",".join("?" for _ in sm_slugs)
+            polarity.append(
+                f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({ph}))"
+            )
+            pol_params.extend(sm_slugs)
+        pol_sql = (" AND " + " AND ".join(polarity)) if polarity else ""
+
+        has_layer = _has_decision_routing_cols(conn)
+        layer_sel = "COALESCE(d.layer, 0) AS layer" if has_layer else "0 AS layer"
+
+        # excluded_self: count rows that the polarity WHERE drops (self leak
+        # surface), so suppression is a visible feature.
+        excluded_self = 0
+        try:
+            if sm_slugs or sm_own:
+                self_where = []
+                self_params: list = []
+                if sm_own:
+                    self_where.append("m.session_id = ?")
+                    self_params.append(sm_own)
+                if sm_slugs:
+                    ph2 = ",".join("?" for _ in sm_slugs)
+                    self_where.append(
+                        f"LOWER(s.project_slug) IN ({ph2})"
+                    )
+                    self_params.extend(sm_slugs)
+                joiner = " OR " if self_where else ""
+                row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    f"WHERE {joiner.join(self_where)}",
+                    tuple(self_params),
+                ).fetchone()
+                excluded_self = int(row["c"]) if row and row["c"] is not None else 0
+        except Exception:
+            excluded_self = 0
+
+        # 1) Resolve the target shape. An explicit ?shape wins; else read the
+        #    newest matched_hash for the selected session (the shape the operator
+        #    is most likely eyeballing). When neither resolves we fall to k-NN.
+        target_shape = (shape or "").strip()
+        if not target_shape and session_id:
+            try:
+                r = conn.execute(
+                    "SELECT d.matched_hash AS h FROM decisions d "
+                    "JOIN messages m ON d.message_id = m.id "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    "WHERE m.session_id = ? AND d.matched_hash IS NOT NULL "
+                    "AND d.matched_hash != ''" + pol_sql + " "
+                    "ORDER BY d.timestamp DESC LIMIT 1",
+                    tuple([session_id, *pol_params]),
+                ).fetchone()
+                if r and r["h"]:
+                    target_shape = str(r["h"]).strip()
+            except Exception:
+                target_shape = ""
+
+        def _aggregate(rows):
+            hist = {a: 0 for a in _ACTIONS}
+            conf_sum = 0.0
+            conf_n = 0
+            layer_counts: dict = {}
+            for rr in rows:
+                act = str(rr["action"] or "").strip().upper()
+                if act not in hist:
+                    continue
+                hist[act] += 1
+                try:
+                    conf_sum += float(rr["confidence"])
+                    conf_n += 1
+                except (TypeError, ValueError):
+                    pass
+                lyr = rr["layer"]
+                key = f"L{int(lyr)}" if lyr is not None and str(lyr) != "" else None
+                if key is not None:
+                    layer_counts[key] = layer_counts.get(key, 0) + 1
+            n = sum(hist.values())
+            if n == 0:
+                return None
+            dom = max(_ACTIONS, key=lambda a: hist[a])
+            dom_layer = (
+                max(layer_counts, key=lambda k: layer_counts[k]) if layer_counts else None
+            )
+            mean_conf = round(conf_sum / conf_n, 4) if conf_n else None
+            return {
+                "n": n,
+                "action_hist": {a: hist[a] for a in _ACTIONS},
+                "dominant_action": dom,
+                "dominant_share": round(hist[dom] / n, 4),
+                "mean_conf": mean_conf,
+                "dominant_layer": dom_layer,
+            }
+
+        agg = None
+        match_kind = "none"
+
+        # 2) Exact-shape match (the cheap indexed query on matched_hash).
+        if target_shape:
+            rows = conn.execute(
+                "SELECT d.action AS action, d.confidence AS confidence, "
+                f"{layer_sel} FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                "WHERE d.matched_hash = ?" + pol_sql + " "
+                "ORDER BY d.timestamp DESC LIMIT ?",
+                tuple([target_shape, *pol_params, cap]),
+            ).fetchall()
+            agg = _aggregate(rows)
+            if agg is not None:
+                match_kind = "exact"
+
+        # 3) k-NN fallback: when no exact-shape history exists, approximate by the
+        #    selected session's own recent decisions (the nearest available
+        #    neighborhood) -- v1 normalized-string neighborhood, no embeddings.
+        if agg is None and session_id:
+            rows = conn.execute(
+                "SELECT d.action AS action, d.confidence AS confidence, "
+                f"{layer_sel} FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                "WHERE m.session_id = ?" + pol_sql + " "
+                "ORDER BY d.timestamp DESC LIMIT ?",
+                tuple([session_id, *pol_params, min(cap, 50)]),
+            ).fetchall()
+            agg = _aggregate(rows)
+            if agg is not None:
+                match_kind = "knn"
+
+        conn.close()
+
+        if agg is None:
+            # Cold shape: no exact + no neighborhood. Honest "no history" (live,
+            # not mock -- the chip renders the NO HISTORY headline).
+            return {
+                "shape": target_shape,
+                "session_id": (session_id or ""),
+                "n": 0,
+                "match_kind": "none",
+                "action_hist": {},
+                "dominant_action": None,
+                "dominant_share": 0.0,
+                "mean_conf": None,
+                "dominant_layer": None,
+                "excluded_self": excluded_self,
+                "mock": False,
+            }
+
+        return {
+            "shape": target_shape,
+            "session_id": (session_id or ""),
+            "n": agg["n"],
+            "match_kind": match_kind,
+            "action_hist": agg["action_hist"],
+            "dominant_action": agg["dominant_action"],
+            "dominant_share": agg["dominant_share"],
+            "mean_conf": agg["mean_conf"],
+            "dominant_layer": agg["dominant_layer"],
+            "excluded_self": excluded_self,
+            "mock": False,
+        }
+    except Exception:
+        log.exception("governance-predict: query failed; degrading to mock-safe empty")
+        return empty
+
+
+# ============= BETA #8 : confidence-calibration-loop =============
+
+# --- GET /api/governance/calibration ---
+# ---------------------------------------------------------------------------
+# BETA confidence-calibration-loop (#8): a READ-ONLY reliability measurement.
+# Buckets the existing governed decisions by predicted confidence (deciles) and,
+# for each decile, computes realized operator-agreement = 1 - override_rate
+# against hitl_overrides. Returns a per-decile reliability table + headline
+# overall_agreement + Brier score + a fitted (monotone-ish) advisory transform.
+#
+# Additive, read-only (M18, post-hoc -- never on the verdict hot path). Touches
+# NO FROZEN surface: no governance.py, no message_bus schema change, no new bus
+# envelope, no new table, NO change to engine confidence semantics. It joins
+# only decisions + messages(session_id) + sessions(project_slug) + the existing
+# hitl_overrides table.
+#
+# POLARITY (G2, CLAUDE.md 'Session-source exception rule'): SM-self is excluded
+# server-side. Durable read key = project_slug NOT IN the SM exclusion set
+# (BRIDGE_SM_PROJECT_SLUGS, default {'streamManager'}); the SM_OWN_SESSION_ID
+# session id is the cheap backstop. An SM-self session can NEVER contribute a
+# decision OR an override to the curve, so SM never calibrates against itself.
+# excluded_self surfaces the dropped self-session count.
+#
+# Domain-agnostic (M16): scope is rendered FROM DATA; no monitored-project
+# vocabulary. Defensive: any error / fresh DB degrades to an empty shape (HTTP
+# 200, total_decisions:0) so the UI falls back to its deterministic mock fixture
+# (never reads as live when the server is down).
+@app.get("/api/governance/calibration")
+async def api_governance_calibration(days: int = 30, buckets: int = 10):
+    """Predicted-confidence-vs-realized-agreement calibration table (#8)."""
+    import time as _time
+
+    nbuckets = 10  # deciles are fixed; `buckets` is accepted for forward-compat.
+    win_days = int(days) if int(days or 0) > 0 else 30
+    now_s = _time.time()
+    now_ms = int(now_s * 1000)
+    win_lo_s = now_s - win_days * 86400.0
+
+    def _empty() -> dict:
+        return {
+            "now_ms": now_ms,
+            "bucket_count": nbuckets,
+            "days": win_days,
+            "excluded_self": 0,
+            "total_decisions": 0,
+            "total_overrides": 0,
+            "overall_agreement": 0.0,
+            "brier": 0.0,
+            "scope": "all governed sessions",
+            "buckets": [],
+            "transform": [],
+            "mock": False,
+        }
+
+    # Polarity: durable read key (project_slug) + cheap session-id backstop.
+    _sm_slugs_raw = os.environ.get("BRIDGE_SM_PROJECT_SLUGS", "streamManager")
+    sm_slugs = [s.strip() for s in _sm_slugs_raw.split(",") if s.strip()]
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+
+    try:
+        conn = _open()
+        try:
+            if not (_has_table(conn, "decisions") and _has_table(conn, "messages")):
+                return _empty()
+            has_sessions = _has_table(conn, "sessions")
+            has_overrides = _has_table(conn, "hitl_overrides")
+
+            # Build the self-exclude WHERE fragment (durable project_slug key +
+            # the session-id backstop). LEFT JOIN keeps rows with no sessions-row
+            # (NULL slug is NOT in the SM set -> kept; it is not SM-own).
+            join_sessions = (
+                "LEFT JOIN sessions s ON s.id = m.session_id " if has_sessions else ""
+            )
+            where = ["d.timestamp >= ?"]
+            params: list = [win_lo_s]
+            if has_sessions and sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                where.append(
+                    f"(s.project_slug IS NULL OR s.project_slug NOT IN ({ph}))"
+                )
+                params.extend(sm_slugs)
+            if sm_own:
+                where.append("m.session_id != ?")
+                params.append(sm_own)
+            where_sql = " AND ".join(where)
+
+            # Pull the governed decisions in-window: id, predicted confidence,
+            # and whether the decision was overridden (LEFT JOIN hitl_overrides;
+            # any override row => operator did NOT agree with the verdict).
+            over_join = (
+                "LEFT JOIN hitl_overrides ho ON ho.decision_id = d.id "
+                if has_overrides
+                else ""
+            )
+            over_sel = "ho.id AS override_id" if has_overrides else "NULL AS override_id"
+            sql = (
+                f"SELECT d.id AS did, d.confidence AS confidence, {over_sel} "
+                "FROM decisions d "
+                "JOIN messages m ON d.message_id = m.id "
+                f"{join_sessions}{over_join}"
+                f"WHERE {where_sql}"
+            )
+            rows = conn.execute(sql, tuple(params)).fetchall()
+
+            # Discover the governed scope label (the distinct project_slug, or
+            # 'all governed sessions' when more than one is present).
+            scope = "all governed sessions"
+            if has_sessions:
+                try:
+                    sp = [
+                        sr[0]
+                        for sr in conn.execute(
+                            "SELECT DISTINCT project_slug FROM sessions"
+                        ).fetchall()
+                        if (sr[0] or "").strip()
+                        and (sr[0] or "").strip() not in sm_slugs
+                    ]
+                    if len(sp) == 1:
+                        scope = sp[0]
+                except Exception:
+                    pass
+
+            # excluded_self readout (decisions on the SM-own session id).
+            excluded_self = 0
+            if sm_own:
+                er = conn.execute(
+                    "SELECT COUNT(DISTINCT s2.id) FROM sessions s2 WHERE s2.id = ?"
+                    if has_sessions
+                    else "SELECT 0",
+                    (sm_own,) if has_sessions else (),
+                ).fetchone()
+                excluded_self = int(er[0] or 0) if er else 0
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("calibration: query failed; degrading to empty")
+        return _empty()
+
+    # A decision is counted ONCE; it is 'overridden' if it has >=1 override row.
+    # Deduplicate the LEFT-JOIN fan-out by decision id.
+    seen: dict[str, bool] = {}
+    for r in rows:
+        did = r["did"]
+        try:
+            conf = float(r["confidence"])
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.0:
+            conf = 0.0
+        elif conf > 1.0:
+            conf = 1.0
+        overridden = r["override_id"] is not None
+        prev = seen.get(did)
+        if prev is None:
+            seen[did] = overridden
+        elif overridden:
+            seen[did] = True
+        # stash confidence alongside (first-seen value is stable per id)
+        if did not in _conf_cache:
+            _conf_cache[did] = conf
+
+    if not seen:
+        out = _empty()
+        out["excluded_self"] = excluded_self
+        out["scope"] = scope
+        return out
+
+    # Accumulate per decile: n, overrides, sum(confidence), sum(agreement),
+    # and the Brier accumulation (predicted vs the realized 0/1 agreement).
+    acc = [
+        {"n": 0, "ov": 0, "sum_conf": 0.0, "brier_sum": 0.0}
+        for _ in range(nbuckets)
+    ]
+    total_n = 0
+    total_ov = 0
+    brier_total = 0.0
+    for did, overridden in seen.items():
+        conf = _conf_cache.get(did, 0.0)
+        agree = 0.0 if overridden else 1.0
+        idx = int(conf * nbuckets)
+        if idx >= nbuckets:
+            idx = nbuckets - 1
+        a = acc[idx]
+        a["n"] += 1
+        if overridden:
+            a["ov"] += 1
+        a["sum_conf"] += conf
+        a["brier_sum"] += (conf - agree) ** 2
+        total_n += 1
+        if overridden:
+            total_ov += 1
+        brier_total += (conf - agree) ** 2
+
+    _conf_cache.clear()
+
+    tol = 0.025  # +/-2.5 points => CALIBRATED
+    bucket_rows = []
+    for i in range(nbuckets):
+        a = acc[i]
+        if a["n"] == 0:
+            continue
+        lo = i / nbuckets
+        hi = (i + 1) / nbuckets
+        mid = a["sum_conf"] / a["n"]  # mean predicted confidence in the decile
+        realized = 1.0 - (a["ov"] / a["n"])  # realized operator-agreement
+        gap = realized - mid
+        if gap > tol:
+            sign = "UNDER"
+        elif gap < -tol:
+            sign = "OVER"
+        else:
+            sign = "CALIBRATED"
+        if mid >= 0.75:
+            band = "HIGH"
+        elif mid >= 0.60:
+            band = "OK"
+        elif mid >= 0.45:
+            band = "WATCH"
+        else:
+            band = "LOW"
+        bucket_rows.append(
+            {
+                "idx": i,
+                "lo": round(lo, 2),
+                "hi": round(hi, 2),
+                "mid": round(mid, 4),
+                "n": a["n"],
+                "overrides": a["ov"],
+                "predicted": round(mid, 4),
+                "realized": round(realized, 4),
+                "gap": round(gap, 4),
+                "sign": sign,
+                "band": band,
+            }
+        )
+
+    overall_agreement = 1.0 - (total_ov / total_n) if total_n else 0.0
+    brier = brier_total / total_n if total_n else 0.0
+
+    # Fitted advisory transform: for each decile with >= 30 decisions, map the
+    # mean predicted confidence to the realized agreement (the operator-calibrated
+    # value). Advisory-only -- the UI applies this ONLY behind the opt-in display
+    # toggle; it never touches the verdict or decisions.confidence.
+    transform = [
+        {"from": b["predicted"], "to": b["realized"]}
+        for b in bucket_rows
+        if b["n"] >= 30
+    ]
+
+    return {
+        "now_ms": now_ms,
+        "bucket_count": nbuckets,
+        "days": win_days,
+        "excluded_self": excluded_self,
+        "total_decisions": total_n,
+        "total_overrides": total_ov,
+        "overall_agreement": round(overall_agreement, 4),
+        "brier": round(brier, 4),
+        "scope": scope,
+        "buckets": bucket_rows,
+        "transform": transform,
+        "mock": False,
+    }
+
+
+# Module-level scratch dict reused by the calibration aggregator above to carry
+# per-decision confidence across the LEFT-JOIN dedup pass (cleared each call).
+_conf_cache: dict[str, float] = {}
+
+
+@app.get("/api/governance/regret")
+async def api_governance_regret(window_days: int = 30, limit: int = 50):
+    """BETA regret-mining-override-loop (#24): the operator-override regret
+    ledger. READ-ONLY aggregate over the EXISTING hitl_overrides + decisions +
+    messages + sessions tables -- NO FROZEN surface, no new bus envelope, no new
+    column. For each divergence cluster (keyed by matched_hash, falling back to
+    the routing layer) it computes n_overridden, the per-shape denominator
+    n_decisions (governed decisions of that shape in the window), override_rate,
+    the dominant override DIRECTION (operator ESCALATED vs DE-ESCALATED), and the
+    underlying override rows. Hottest-first (override_rate x volume).
+
+    POLARITY (G2): SM-self is EXCLUDED at the SQL WHERE -- the durable read key
+    project_slug NOT IN the SM slug set (BRIDGE_SM_PROJECT_SLUGS, default
+    {'streamManager'}) AND the SM_OWN_SESSION_ID session-id backstop. The dropped
+    self-override tally surfaces as excluded_self (self-exclusion as a feature).
+    A leaked SM-self override can NEVER enter the regret corpus.
+
+    ADVISORY-ONLY: this endpoint mutates nothing. The 'Draft as proposal'
+    affordance composes markdown CLIENT-SIDE; there is no write-back path here.
+    Read-only, post-hoc (M18) -- never on the verdict hot path.
+
+    Degrades to an empty (zero-cluster) shape on any error / fresh DB so the UI
+    falls back to deterministic mock (never reads as live when the DB is empty).
+    """
+    sm_slugs = _sm_own_slugs()
+    sm_own = os.environ.get("SM_OWN_SESSION_ID", "").strip()
+    try:
+        wd = max(1, min(int(window_days or 30), 3650))
+    except Exception:
+        wd = 30
+    try:
+        cap = max(1, min(int(limit or 50), 200))
+    except Exception:
+        cap = 50
+    empty = {
+        "generated_at": _iso_now(),
+        "window_days": wd,
+        "excluded_self": 0,
+        "own_session_id": sm_own or None,
+        "total_overrides": 0,
+        "mock": False,
+        "clusters": [],
+    }
+    try:
+        conn = _open()
+        try:
+            if not (
+                _has_table(conn, "hitl_overrides")
+                and _has_table(conn, "decisions")
+                and _has_table(conn, "messages")
+            ):
+                return empty
+            has_sessions = _has_table(conn, "sessions")
+            has_layer = _has_decision_routing_cols(conn)
+            layer_expr = "COALESCE(d.layer, 0)" if has_layer else "0"
+
+            # Window cutoff: hitl_overrides.timestamp is an ISO string; compare
+            # lexicographically against the ISO cutoff (sortable). Rows with a
+            # non-ISO / null timestamp are kept (defensive -- never silently drop).
+            cutoff_iso = _iso_now()
+            try:
+                import datetime as _dt
+                cutoff_iso = (
+                    _dt.datetime.utcnow() - _dt.timedelta(days=wd)
+                ).replace(microsecond=0).isoformat() + "Z"
+            except Exception:
+                cutoff_iso = ""
+
+            # SM-self exclusion fragment (durable project_slug key + session
+            # backstop). NULL slug is NOT in the SM set -> kept (governed).
+            join_sessions = (
+                "LEFT JOIN sessions s ON m.session_id = s.id " if has_sessions else ""
+            )
+            self_excl: list[str] = []
+            self_params: list = []
+            if has_sessions and sm_slugs:
+                ph = ",".join("?" for _ in sm_slugs)
+                self_excl.append(
+                    f"(s.project_slug IS NULL OR LOWER(s.project_slug) NOT IN ({ph}))"
+                )
+                self_params.extend(sorted(sm_slugs))
+            if sm_own:
+                self_excl.append("m.session_id != ?")
+                self_params.append(sm_own)
+            self_clause = (" AND " + " AND ".join(self_excl)) if self_excl else ""
+
+            win_clause = ""
+            win_params: list = []
+            if cutoff_iso:
+                win_clause = " AND (h.timestamp IS NULL OR h.timestamp >= ?)"
+                win_params.append(cutoff_iso)
+
+            # Pull every governed (non-SM) override joined to its decision +
+            # message + session, newest-first. This is the corpus to cluster.
+            ov_sql = (
+                "SELECT h.decision_id AS decision_id, "
+                "COALESCE(h.original_action, d.action, '') AS original_action, "
+                "COALESCE(h.override_action, '') AS override_action, "
+                "h.note AS note, h.timestamp AS ts, "
+                "COALESCE(d.matched_hash, '') AS matched_hash, "
+                f"{layer_expr} AS layer, "
+                "COALESCE(m.content, '') AS content, "
+                "COALESCE(m.session_id, '') AS session_id, "
+                "COALESCE(s.project_slug, '') AS project_slug "
+                "FROM hitl_overrides h "
+                "JOIN decisions d ON h.decision_id = d.id "
+                "JOIN messages m ON d.message_id = m.id "
+                + join_sessions +
+                "WHERE 1=1" + self_clause + win_clause + " ORDER BY h.timestamp DESC"
+            )
+            ov_rows = conn.execute(
+                ov_sql, tuple(self_params + win_params)
+            ).fetchall()
+
+            # excluded_self tally: governed-shaped overrides that WOULD have been
+            # SM-self (so the operator sees the polarity filter working).
+            excluded_self = 0
+            if has_sessions and (sm_slugs or sm_own):
+                incl: list[str] = []
+                incl_params: list = []
+                if sm_slugs:
+                    ph2 = ",".join("?" for _ in sm_slugs)
+                    parts = [f"LOWER(s.project_slug) IN ({ph2})"]
+                    incl_params.extend(sorted(sm_slugs))
+                    if sm_own:
+                        parts.append("m.session_id = ?")
+                        incl_params.append(sm_own)
+                    incl.append("(" + " OR ".join(parts) + ")")
+                elif sm_own:
+                    incl.append("m.session_id = ?")
+                    incl_params.append(sm_own)
+                try:
+                    er = conn.execute(
+                        "SELECT COUNT(*) FROM hitl_overrides h "
+                        "JOIN decisions d ON h.decision_id = d.id "
+                        "JOIN messages m ON d.message_id = m.id "
+                        "LEFT JOIN sessions s ON m.session_id = s.id "
+                        "WHERE " + " AND ".join(incl),
+                        tuple(incl_params),
+                    ).fetchone()
+                    excluded_self = int(er[0]) if er else 0
+                except Exception:
+                    excluded_self = 0
+
+            # Cluster the overrides in Python (transparent, domain-agnostic).
+            _RANK = {"APPROVE": 0, "ALLOW": 0, "DISMISS": 1, "SUGGEST": 2,
+                     "GUIDE": 3, "INTERVENE": 4, "BLOCK": 5}
+
+            def _direction(orig: str, over: str) -> str:
+                o = _RANK.get((orig or "").upper())
+                v = _RANK.get((over or "").upper())
+                if o is not None and v is not None:
+                    return "ESCALATED" if v > o else "DE-ESCALATED"
+                return "DE-ESCALATED"
+
+            clusters: dict[str, dict] = {}
+            total_overrides = 0
+            for r in ov_rows:
+                total_overrides += 1
+                h = (r["matched_hash"] or "").strip()
+                layer = int(r["layer"] or 0)
+                if h:
+                    label_dim, identity, key = "matched_hash", h[:6], f"h:{h[:6]}"
+                else:
+                    label_dim, identity, key = "layer", f"L{layer}", f"layer:{layer}"
+                orig = (r["original_action"] or "").upper()
+                over = (r["override_action"] or "").upper()
+                d = _direction(orig, over)
+                acc = clusters.get(key)
+                if acc is None:
+                    acc = {
+                        "cluster_key": key, "label_dim": label_dim,
+                        "identity": identity, "layer": layer,
+                        "n_overridden": 0, "n_decisions": 0, "override_rate": 0.0,
+                        "dominant_direction": d, "direction_label": "",
+                        "from_action": orig, "to_action": over,
+                        "sample_content": (r["content"] or "")[:80],
+                        "project_slug": r["project_slug"] or "",
+                        "_hash": h, "_esc": 0, "_de": 0, "overrides": [],
+                    }
+                    clusters[key] = acc
+                acc["n_overridden"] += 1
+                acc["_esc" if d == "ESCALATED" else "_de"] += 1
+                if not acc["sample_content"] and r["content"]:
+                    acc["sample_content"] = (r["content"] or "")[:80]
+                if not acc["project_slug"] and r["project_slug"]:
+                    acc["project_slug"] = r["project_slug"]
+                if len(acc["overrides"]) < 12:
+                    acc["overrides"].append({
+                        "decision_id": r["decision_id"] or "",
+                        "timestamp": r["ts"] or "",
+                        "original_action": orig,
+                        "override_action": over,
+                        "note": r["note"],
+                        "session_id": r["session_id"] or "",
+                        "project_slug": r["project_slug"] or "",
+                        "content": r["content"] or "",
+                    })
+
+            # Per-cluster denominator: count governed decisions of the same shape
+            # in the window (matched_hash match, or layer match when no hash).
+            for acc in clusters.values():
+                denom = acc["n_overridden"]
+                try:
+                    if acc["_hash"]:
+                        dc = conn.execute(
+                            "SELECT COUNT(*) FROM decisions d "
+                            "JOIN messages m ON d.message_id = m.id "
+                            + join_sessions +
+                            "WHERE d.matched_hash = ?" + self_clause,
+                            tuple([acc["_hash"], *self_params]),
+                        ).fetchone()
+                    elif has_layer:
+                        dc = conn.execute(
+                            "SELECT COUNT(*) FROM decisions d "
+                            "JOIN messages m ON d.message_id = m.id "
+                            + join_sessions +
+                            "WHERE COALESCE(d.layer,0) = ?" + self_clause,
+                            tuple([acc["layer"], *self_params]),
+                        ).fetchone()
+                    else:
+                        dc = None
+                    if dc and int(dc[0]) >= acc["n_overridden"]:
+                        denom = int(dc[0])
+                except Exception:
+                    denom = acc["n_overridden"]
+                acc["n_decisions"] = denom
+                acc["override_rate"] = round(
+                    acc["n_overridden"] / denom, 4) if denom > 0 else 0.0
+                acc["dominant_direction"] = (
+                    "ESCALATED" if acc["_esc"] >= acc["_de"] else "DE-ESCALATED")
+                acc["direction_label"] = (
+                    f"you {acc['dominant_direction']} "
+                    f"{acc['n_overridden']}/{acc['n_decisions']}")
+                acc.pop("_hash", None)
+                acc.pop("_esc", None)
+                acc.pop("_de", None)
+
+            out = sorted(
+                clusters.values(),
+                key=lambda c: c["override_rate"] * c["n_decisions"],
+                reverse=True,
+            )[:cap]
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("governance/regret: query failed")
+        return empty
+
+    return {
+        "generated_at": _iso_now(),
+        "window_days": wd,
+        "excluded_self": excluded_self,
+        "own_session_id": sm_own or None,
+        "total_overrides": total_overrides,
+        "mock": False,
+        "clusters": out,
     }
 
 

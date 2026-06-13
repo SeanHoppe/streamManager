@@ -173,7 +173,17 @@ def load_episodes_from_db(
     # SQL WHERE.
     sm_slugs = sorted(_sm_slug_set())
     slug_clause = ""
-    if sm_slugs:
+    # Legacy-schema tolerance: ope opens the db READ-ONLY (mode=ro) so it
+    # cannot migrate a pre-`project_slug` episodes table the way the RW
+    # corpus_augment read does. Detect the column; when a legacy db predates
+    # it, omit the slug clause (the SELECT would otherwise raise "no such
+    # column") and rely on the post-fetch session backstop below. New/current
+    # dbs keep the SQL-WHERE durable key (CLAUDE.md L42).
+    has_slug_col = any(
+        row[1] == "project_slug"
+        for row in conn.execute("PRAGMA table_info(episodes)").fetchall()
+    )
+    if sm_slugs and has_slug_col:
         slug_placeholders = ",".join("?" for _ in sm_slugs)
         slug_clause = (
             f" AND (project_slug IS NULL OR project_slug NOT IN ({slug_placeholders}))"

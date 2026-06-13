@@ -109,30 +109,46 @@ def run_assert(pack: Path) -> int:
     return 0 if fails == 0 else 1
 
 
-def _load_shadow_candidate(proposal: Path):
+def _load_shadow_candidate(proposal: Path, mode: str = "v10.1"):
     """Build an ``rl.validate.Candidate`` from a proposal manifest.
 
     Handles both shapes deterministically:
       * a flat ``{"thresholds": {...}}`` (Candidate.from_json native), and
-      * an ``rl_proposals`` manifest ``{"proposals": [{"thresholds": ...}]}``
-        in which case the first (best-arm) proposal's thresholds are used.
+      * an ``rl_proposals`` manifest ``{"baseline": {...}, "proposals":
+        [{"thresholds": ...}]}``.
+
+    Mode-aware arm selection (ADR-18 Amendment D). In **v10.1-mode** the
+    run is a baseline-vs-baseline INFRA validation, so the candidate is
+    PINNED to the ``baseline`` arm -- picking ``proposals[0]`` (best arm)
+    would inject an unintended candidate<->production divergence (the
+    v10.1 mis-pin diagnosed 2026-06-13). In **v10.3-mode** the candidate
+    is the best-arm proposal (real divergence measurement).
     Falling through to ``Candidate.from_json`` would silently yield the
-    0.75 default for the manifest shape, so the manifest branch is
-    explicit.
+    0.75 default for the manifest shape, so each branch is explicit.
     """
     from rl.validate import L4_THRESHOLD_KEY, Candidate
 
     data = json.loads(Path(proposal).read_text(encoding="utf-8"))
     if data.get("thresholds"):
         return Candidate.from_json(Path(proposal))
+
+    sha = str(data.get("manifest_sha", ""))
+    seed = int(data.get("seed", 0))
+
+    if mode == "v10.1":
+        base_thr = (data.get("baseline") or {}).get("thresholds") or {}
+        if base_thr:
+            return Candidate(
+                thresholds={k: float(v) for k, v in base_thr.items()},
+                manifest_sha=sha, seed=seed,
+            )
+        # baseline carries no explicit thresholds -> Candidate default.
+        return Candidate(thresholds={L4_THRESHOLD_KEY: 0.75})
+
     proposals = data.get("proposals") or []
     if proposals and isinstance(proposals[0], dict):
         thr = {k: float(v) for k, v in (proposals[0].get("thresholds") or {}).items()}
-        return Candidate(
-            thresholds=thr,
-            manifest_sha=str(data.get("manifest_sha", "")),
-            seed=int(data.get("seed", 0)),
-        )
+        return Candidate(thresholds=thr, manifest_sha=sha, seed=seed)
     # Last resort: empty thresholds -> Candidate.l4_threshold() default.
     return Candidate(thresholds={L4_THRESHOLD_KEY: 0.75})
 
@@ -142,6 +158,7 @@ def run_shadow(
     shadow_db: Path,
     proposal: Path,
     soak_run_id: str,
+    mode: str = "v10.1",
 ) -> int:
     """Cassette-shadow mode: drive ShadowRecorder through the production
     ``bus.subscribe_decision`` seam from recorded cassette decisions and
@@ -159,7 +176,7 @@ def run_shadow(
         print(f"[cassette-shadow] proposal not found: {proposal}", file=sys.stderr)
         return 2
 
-    candidate = _load_shadow_candidate(proposal)
+    candidate = _load_shadow_candidate(proposal, mode)
 
     gov_db = ROOT / "tmp" / "cassette_shadow_gov.db"
     gov_db.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +337,7 @@ def main() -> int:
         else:
             iso = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             soak_run_id = f"{iso}--mode={args.mode}"
-        return run_shadow(pack, shadow_db, proposal, soak_run_id)
+        return run_shadow(pack, shadow_db, proposal, soak_run_id, args.mode)
 
     if bool(args.shadow_recorder) ^ bool(args.shadow_proposal):
         print("[cassette-replay] --shadow-recorder and --shadow-proposal "

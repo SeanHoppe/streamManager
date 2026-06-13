@@ -1,0 +1,69 @@
+{
+  "base": "http://localhost:4318/",
+  "tool": "playwright",
+  "observations": [
+    {
+      "route": "/",
+      "flow": "cold-load",
+      "observation": "frames A=true B=true C=true; tab title=\"StreamManager\"",
+      "friction": "",
+      "shot": "reports/ux-01-load.png"
+    },
+    {
+      "route": "/",
+      "flow": "dom-scrape",
+      "observation": "{\"frames\":[{\"id\":\"#frameA\",\"present\":true,\"header\":\"A Interactive Sessions REPL + session activity ↑ ↓ ACTION 0\",\"rowish\":132,\"looksEmpty\":false,\"sampleText\":\"A Interactive Sessions REPL + session activity ↑ ↓ ACTION 0 scope certPortal pid 33804 HITL decisions OBSERVING SYNC ASYNC OBSERVING session certPortal Observing -- no action required Take action switches this session to HITL SYNC OBSERVING\"},{\"id\":\"#frameB\",\"present\":true,\"header\":\"B Sub-Agents role-tagged agent timeline ↑ ↓ ACTION 0\",\"rowish\":0,\"looksEmpty\":true,\"sampleText\":\"B Sub-Agents role-tagged agent timeline ↑ ↓ ACTION 0 Still water. No sub-agents observed for this session yet.\"},{\"id\":\"#frameC\",\"present\":true,\"header\":\"C Background Jobs lifecycle: jobs + spawned agents ↑ ↓ ACTION 0\",\"rowish\":0,\"looksEmpty\":true,\"sampleText\":\"C Background Jobs lifecycle: jobs + spawned agents ↑ ↓ ACTION 0 Background jobs OPEN 0 Still water. No active jobs or agents in scope. Async HITL QUEUE 0 Still water. No async decisions awaiting annotation.\"}],\"badgeCount\":30,\"badgesSample\":[{\"text\":\"OBSERVING\",\"aria\":\"No HITL decisions awaiting action\",\"color\":\"rgb(71, 85, 105)\",\"bg\":\"rgb(241, 245, 249)\"},{\"text\":\"OBSERVING\",\"aria\":\"Observing -- no action required\",\"color\":\"rgb(71, 85, 105)\",\"bg\":\"rgb(241, 245, 249)\"},{\"text\":\"OBSERVING\",\"aria\":\"Observing -- no action required\",\"color\":\"rgb(71, 85, 105)\",\"bg\":\"rgb(241, 245, 249)\"},{\"text\":\"OBSERVING\",\"aria\":\"Observing -- no action required\",\"color\":\"rgb(71, 85, 105)\",\"bg\":\"rgb(241, 245, 249)\"},{\"text\":\"OBSERVING\",\"aria\":\"Observing -- ALLOW decision recorded (100% confidence)\",\"color\":\"rgb(71, 85, 105)\",\"bg\":\"rgb(241, 245, 249)\"},{\"text\":\"OBSERVING\",\"aria\":\"Observing -- ALLOW decision recorded (10% confidence)\",\"color\":\"rgb(71, 85, 105)\",\"bg\":\"rgb(241, 245, 249)\"},{\"text\":\"OBSERVING\"",
+      "friction": "",
+      "shot": ""
+    },
+    {
+      "route": "/",
+      "flow": "frame-empty",
+      "observation": "#frameB renders but looks empty (rowish=0)",
+      "friction": "#frameB empty -- does it add value with no data, or is it noise?",
+      "shot": ""
+    },
+    {
+      "route": "/",
+      "flow": "frame-empty",
+      "observation": "#frameC renders but looks empty (rowish=0)",
+      "friction": "#frameC empty -- does it add value with no data, or is it noise?",
+      "shot": ""
+    },
+    {
+      "route": "header",
+      "flow": "session-picker",
+      "observation": "picker options: [\"All governed sessions\",\"certPortal\",\"certPortal\",\"certPortal\",\"certPortal-dave-wt-JOB-20041-1685508-1781133589-1\",\"certPortal\",\"certPortal\",\"certPortal\",\"certPortal\",\"certPortal\",\"certPortal-dave-wt-JOB-20044-1652028-1781131586-1\",\"certPortal-dave-wt-JOB-20041-1629770-1781131099-1\",\"certPortal\",\"certPortal\",\"certPortal\",\"certPortal\",\"04:07:40.781 ALLOW  OBSERVING L1  100% cd /c/Users/SeanHoppe/vs/job20049-wt/frontend && (test -f package-lock.json && echo \\\"lockfile present, using npm ci\\\" || echo \\\"no lockfile\\\"); npm ci 2>&1 | tail -25; echo \\\"CI_EXIT: ${PIPESTATUS[0]}\\\" matched L4 (succ=1.00, n=30)  - a5e03181 Take action\",\"04:07:30.789 ALLOW  OBSERVING L3  10% cd /c/Users/SeanHoppe/vs/job20049-wt/frontend && (test -d node_modules && echo \\\"node_modules EXISTS\\\" || echo \\\"node_modules MISSING\\\"); test -d node_modules/@eslint/js && echo \\\"@eslint/js present\\\" || echo \\\"@eslint/js absent\\\"; node --version; npm --version default allow (no rules / no graph match)  - a5e03181 Take action\",\"04:07:18.830 ALLOW  OBSERVING L1  100% cd /c/Users/SeanHoppe/vs/job20049-wt/frontend && npx eslint . --format compact 2>&1 | head -60; echo \\\"EXIT: ${PIPESTATUS[0]}\\\" matched L2 (succ=1.00, n=7)  - a5e03181 Take action\",\"04:06:07.562 ALLOW  OBSERVING L1  100% ls C:/Users/SeanHoppe/vs/job20049-wt/frontend/src/tokens/ 2>&1; echo \\\"---design-tokens search---\\\"; ls C:/Users/SeanHoppe/vs/job20049-wt/frontend/src/**/design-tokens.css 2>/dev/null; find C:/Users/SeanHoppe/vs/job20049-wt/frontend/src -name \\\"design-tokens.css\\\" 2>/dev/null matched L4 (succ=1.00, n=497)  - a5e03181 Take action\"]",
+      "friction": "",
+      "shot": "reports/ux-02-picker.png"
+    },
+    {
+      "route": "/",
+      "flow": "hitl-dock",
+      "observation": "hitl surface=false; action words present=true",
+      "friction": "no HITL dock surface located -- core value (operator decision) may be buried",
+      "shot": "reports/ux-03-hitl.png"
+    },
+    {
+      "route": "settings",
+      "flow": "settings-drawer",
+      "observation": "no settings button found",
+      "friction": "FR-UI-9 settings are a contract surface; control not located",
+      "shot": ""
+    },
+    {
+      "route": "/",
+      "flow": "theme-switch",
+      "observation": "cycled phosphor/paper/obsidian; paper dim-text sample=null",
+      "friction": "",
+      "shot": "reports/ux-05-theme-paper.png"
+    },
+    {
+      "route": "/",
+      "flow": "keyboard-nav",
+      "observation": "after 3x Tab: {\"focusable\":true,\"tag\":\"BUTTON\",\"outline\":\"2px\",\"outlineStyle\":\"solid\"}",
+      "friction": "",
+      "shot": ""
+    }
+  ]
+}

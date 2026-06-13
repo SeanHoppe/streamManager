@@ -343,6 +343,36 @@ export function postHitlMode(body) {
 }
 
 /**
+ * GET /api/graduation/candidates -- ADR-18 Amendment F: proven-routine,
+ * safety-floor-clean shapes proposed for operator-confirmed graduation to a
+ * static ALLOW. Read-only; polarity-filtered (SM-self excluded).
+ * @param {number} [limit]
+ * @returns {Promise<Record<string, any>>}
+ */
+export function getGraduationCandidates(limit = 50) {
+  return getJSON(`/api/graduation/candidates?limit=${encodeURIComponent(String(limit))}`);
+}
+
+/**
+ * GET /api/graduation/active -- ADR-18 Amendment F: active graduated rules
+ * (powers the demote/reverse affordance).
+ * @returns {Promise<Record<string, any>>}
+ */
+export function getGraduationActive() {
+  return getJSON('/api/graduation/active');
+}
+
+/**
+ * POST /api/graduation/confirm -- ADR-18 Amendment F: operator-confirm one
+ * shape (M8 -- never auto). Server re-verifies eligibility before writing.
+ * @param {string} shapeHash
+ * @returns {Promise<Record<string, any>>}
+ */
+export function postGraduationConfirm(shapeHash) {
+  return postJSON('/api/graduation/confirm', { shape_hash: shapeHash });
+}
+
+/**
  * GET /api/beta/flags -- the operator's stored BETA feature on/off overrides.
  * Returns { flags: { key: bool } }; missing keys are OFF (the registry merges
  * defaults). Degrades to an empty map on any error (never reads as "on").
@@ -567,7 +597,7 @@ export async function getSessionEvents(sessionId, opts = {}) {
  * firewall-filtered NON-SM candidate sessions for the live-soak selector.
  * Each row: { session_id, project_slug, cwd, busy, last_seen_secs_ago }. The
  * server excludes SM-self (project_slug NOT IN the SM slug set AND session_id !=
- * SM_OWN_SESSION_ID) and rejects firewalled (certPortal-cwd) candidates; the
+ * SM_OWN_SESSION_ID) and rejects firewalled (off-limits monitored-project cwd) candidates; the
  * dropped tallies surface as { excluded_self, excluded_firewalled } so the UI
  * can render self-exclusion as a visible feature. Degrades to an empty shape on
  * any error / fresh DB (the component then falls back to deterministic mock).
@@ -1233,3 +1263,90 @@ export async function getTimeMachineReplay(body) {
     return empty;
   }
 }
+
+
+// --- policy-preview-chip helper 1 ---
+/**
+ * GET /api/governance/predict?session_id&shape -- BETA policy-preview-chip (#21).
+ * READ-ONLY corpus retrieval: the historical decision distribution for the
+ * selected session's command-shape (exact matched_hash first, then a cheap
+ * nearest-neighbor over the session's recent rows). NEVER calls the live engine
+ * / governance.evaluate (M18: off the verdict hot path). Polarity (G2): the
+ * corpus EXCLUDES SM-self server-side (project_slug NOT IN the SM slug set AND
+ * session_id != SM_OWN_SESSION_ID); excluded_self surfaces the dropped tally.
+ * Returns { shape, session_id, n, match_kind, action_hist, dominant_action,
+ * dominant_share, mean_conf, dominant_layer, excluded_self, mock }. Degrades to
+ * a SAFE n:0 / mock:true shape on any error / empty DB so the chip falls back to
+ * deterministic mock (never reads as live when the server is down).
+ * @param {{ session_id?:string|null, shape?:string|null, limit?:number }} [opts]
+ * @returns {Promise<Record<string, any>>}
+ */
+export async function getGovernancePredict(opts = {}) {
+  const empty = {
+    shape: opts.shape || '',
+    session_id: opts.session_id || '',
+    n: 0,
+    match_kind: 'none',
+    action_hist: {},
+    dominant_action: null,
+    dominant_share: 0,
+    mean_conf: null,
+    dominant_layer: null,
+    excluded_self: 0,
+    mock: true,
+  };
+  try {
+    const res = await fetch(
+      `/api/governance/predict${qs({ session_id: opts.session_id, shape: opts.shape, limit: opts.limit })}`,
+      { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store' },
+    );
+    if (!res.ok) return empty;
+    const data = await res.json();
+    return data && typeof data === 'object' && data.action_hist != null ? data : empty;
+  } catch {
+    return empty;
+  }
+}
+
+
+// --- confidence-calibration-loop helper 1 ---
+/**
+ * GET /api/governance/calibration?days=&buckets= -- BETA confidence-calibration-
+ * loop (#8). Buckets the existing governed decisions by predicted confidence
+ * (deciles) and computes realized operator-agreement = 1 - override_rate against
+ * hitl_overrides per bucket, plus headline overall_agreement + Brier score + a
+ * fitted advisory transform. Read-only, post-hoc (M18): never on the verdict hot
+ * path, no bus write, no change to engine confidence semantics. SM-self is
+ * EXCLUDED server-side (project_slug NOT IN the SM slug set AND session_id !=
+ * SM_OWN_SESSION_ID); excluded_self surfaces the dropped self sessions. Degrades
+ * to a SAFE empty shape (mock:true marker absent, total_decisions:0) on any error
+ * / fresh DB so the component falls back to its deterministic mock fixture (never
+ * reads as live when the server is down).
+ * @param {{ days?:number, buckets?:number }} [opts]
+ * @returns {Promise<{ now_ms:number, bucket_count:number, days:number, excluded_self:number, total_decisions:number, total_overrides:number, overall_agreement:number, brier:number, scope:string, buckets:Array<Record<string, any>>, transform:Array<{from:number,to:number}>, mock:boolean }>}
+ */
+export async function getCalibration(opts = {}) {
+  const empty = {
+    now_ms: Date.now(),
+    bucket_count: Number(opts.buckets) || 10,
+    days: Number(opts.days) || 30,
+    excluded_self: 0,
+    total_decisions: 0,
+    total_overrides: 0,
+    overall_agreement: 0,
+    brier: 0,
+    scope: 'all governed sessions',
+    buckets: [],
+    transform: [],
+    mock: false,
+  };
+  try {
+    const data = await getJSON(
+      `/api/governance/calibration${qs({ days: opts.days, buckets: opts.buckets })}`,
+    );
+    return data && typeof data === 'object' && Array.isArray(data.buckets) ? data : empty;
+  } catch {
+    return empty;
+  }
+}
+

@@ -123,6 +123,22 @@ export const BETA_REGISTRY = [
   { key: 'time-machine-governance-replay', num: 48, group: 'session', defaultEnabled: false,
     label: 'Time Machine',
     description: 'Counterfactual governance replay over stored decisions in the Settings drawer.' },
+
+  // -- batch-3 (gap-fill governance-semantics; read-only/advisory) --
+  { key: 'policy-preview-chip', num: 21, group: 'hitl', defaultEnabled: false,
+    label: 'Policy-preview chip',
+    description: 'An advisory chip at the SYNC/ASYNC decision point: for the selected session it reads the historical decision corpus and shows the likely verdict -- advisory only, never pre-selects a mode, never calls the live engine.' },
+  { key: 'confidence-calibration-loop', num: 8, group: 'monitor', defaultEnabled: false,
+    label: 'Confidence calibration loop',
+    description: 'A read-only reliability diagram: bucket governed decisions by predicted confidence vs realized operator-agreement (1 - override rate) to see where the confidence number is over- or under-confident. Advisory display transform only; never touches the verdict.' },
+  { key: 'regret-mining-override-loop', num: 24, group: 'hitl', defaultEnabled: false,
+    label: 'Regret Mining override loop',
+    description: 'A read-only ledger of where governance and you keep disagreeing -- operator overrides ranked by override-rate x volume per shape/layer, surfaced as a copyable advisory-bias proposal stub. Advisory only; writes nothing. SM-self excluded.' },
+
+  // -- ADR-18 Amendment F (allow-pattern auto-graduation; amendment APPROVED) --
+  { key: 'graduation-candidates', num: 1, group: 'hitl', defaultEnabled: false,
+    label: 'Allow-pattern auto-graduation',
+    description: 'Propose proven-routine command shapes (>=30 ALLOWs, >=0.95 confidence, zero override, never safety-floor) for operator-confirmed graduation to a static ALLOW that short-circuits the verdict ladder. M8: never auto -- you confirm each one; reverse via demote. The engine short-circuit is separately gated by BRIDGE_GRADUATED_RULES. SM-self excluded.' },
 ];
 
 /** Group display order + labels for the BetaToggles panel. */

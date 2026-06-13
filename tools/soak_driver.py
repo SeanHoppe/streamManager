@@ -582,7 +582,15 @@ _ALLOW_PHASE_ORDER: list[str] = [
 # Drift-detection: tests/test_dormant_ledger_consistency.py asserts
 # len(WIRED_LEVER_LEDGER) equals the WIRED_LEVER_LEDGER_COUNT HTML
 # comment in docs/adr/ADR-18-mvp-surface-freeze.md. Keep both in sync.
-WIRED_LEVER_LEDGER: dict[str, tuple[str, int]] = {}
+WIRED_LEVER_LEDGER: dict[str, tuple[str, int]] = {
+    # ADR-18 Amendment F: operator-confirmed graduated-ALLOW short-circuit
+    # in governance._evaluate_inner_core. Wired at feature-build (first
+    # soak-ledger lever). DORMANT-0 — no ship-gate soak strike yet; the
+    # Tier-1.5 soak measures the graduated-hit fire rate. Keep this dict in
+    # sync with the ADR-18 WIRED_LEVER_LEDGER_COUNT comment
+    # (tests/test_dormant_ledger_consistency.py asserts len == count).
+    "graduated_short_circuit": ("graduated_hit_rate", 0),
+}
 
 
 def _format_lever_ledger() -> list[str]:
@@ -1582,6 +1590,29 @@ def _emit_ppp_auto_probe(bus, session_id: str, idx: int) -> None:
     bus.write_envelope("audit.probe", payload)
 
 
+def _emit_pattern_graduated(bus, session_id: str, idx: int) -> None:
+    """ADR-18 Amendment F: write one synthetic `pattern_graduated` audit
+    envelope so the soak corpus covers the kind without a live operator-
+    confirm in the loop. Cold-path, audit-only — never on the verdict hot
+    path. Generic protocol vocab (M16)."""
+    import hashlib
+
+    issued_at = time.time()
+    canonical_text = "git status"
+    shape_hash = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()[:16]
+    bus.write_envelope("pattern_graduated", {
+        "shape_hash": shape_hash,
+        "canonical_text": canonical_text,
+        "n_allow": 42,
+        "mean_confidence": 0.97,
+        "n_override": 0,
+        "n_block_ever": 0,
+        "excluded_self": 0,
+        "confirmed_by": "operator",
+        "graduated_ts": issued_at,
+    })
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8766)
@@ -1909,6 +1940,9 @@ def main() -> int:
             if args.ppp_auto_probe and next_idx > 0 and next_idx % 10 == 0:
                 _emit_ppp_auto_probe(bus, session_id, next_idx)
                 state.ppp_auto_probes_emitted += 1
+                # ADR-18 Amendment F: cold-path pattern_graduated emit so
+                # the soak corpus covers the kind (rides the same gate).
+                _emit_pattern_graduated(bus, session_id, next_idx)
 
             # Sleep a short tick; do not over-sleep so deadline-honor stays tight.
             time.sleep(0.5)

@@ -120,6 +120,42 @@ that brushes the floor. Recorded here so it cannot be inherited silently.
 
 ---
 
+## 3a. Action-palette colors used as small TEXT (rendered-DOM axe, 2026-06-13)
+
+The hand-measured sections above cover `--text-dim`, the `--badge-*` pairs, and
+the focus ring. They did NOT cover the case of an **action-palette / accent
+color used directly as small body TEXT** (not a badge, not a token from the
+`--badge-*` set). The authoritative gate (axe-core on the RENDERED paper DOM --
+reachable on first load once the theme toggle auto-selects paper from the OS
+`prefers-color-scheme: light`) surfaced two such nodes that the static analysis
+missed:
+
+| element            | fg (before)      | bg surface        | ratio | AA 4.5:1 |
+|--------------------|------------------|-------------------|------:|----------|
+| `.rail__all--active` (selected ALL filter pill) | `--accent` #c0392b | active wash #eadcd2 | 4.05:1 | FAIL |
+| `.repl__note--err` (decision-seed error note)   | `--c-intervene` #ea580c | `--bg-card` #f8f4ee | 3.24:1 | FAIL |
+
+**Remediation applied (AA-clean, frozen-accent-preserving):**
+
+1. **`.rail__all--active` text.** The brand accent (#c0392b) is the FROZEN paper
+   identity and must NOT change. The accent at 11px on the light wash is 4.05:1.
+   Fix: a NEW paper-only token `--calm-accent-text: #9b1c13` (a darker editorial
+   red) is used for the accent-colored **text only**; the pill border + wash keep
+   the exact frozen `--accent` #c0392b. Measured `#9b1c13` on #eadcd2 = **6.1:1**
+   (PASS, 1.36x margin). Obsidian/phosphor do not define the token, so their
+   `var()` fallback resolves to `--accent` -- their look is unchanged.
+2. **`.repl__note--err` text.** Paper `--c-intervene` was #ea580c (3.24:1). This
+   is NOT a frozen-from-live value -- it is a ui-next-adapted "darkened for AA"
+   palette entry that did not actually clear the AA *text* floor. Darkened to
+   orange-700 **#c2410c** (= ~4.7:1 on #f8f4ee, PASS), still visually distinct
+   from `--c-block` #dc2626.
+
+After both fixes the paper theme passes the M17 axe gate on rendered DOM:
+**0 serious/critical** (`reports/axe-latest.md`, 2026-06-13). The frozen
+per-theme ACCENT identities (#f59e0b / #39ff14 / #c0392b) were preserved.
+
+---
+
 ## 4. Focus ring (#d97706) -- UI-component (3:1) check
 
 The focus ring is a non-text UI component; floor = 3:1 against the surface it
@@ -194,4 +230,5 @@ core uses the identical math on rendered DOM, which is the authoritative gate).
 - [ ] Badge tint-on-tint sub-AA-text pairs (SS3): ACCEPT-as-frozen (default) or REMEDIATE -- explicit decision logged.
 - [ ] Focus ring paper-card marginal case (SS4): confirmed by axe on rendered DOM; remediation noted if flagged.
 - [ ] Obsidian / phosphor `--text-dim` re-verified AA (SS5).
-- [ ] No token VALUE was changed by ui-next to obtain a pass (frozen-contract integrity held).
+- [x] Action-color-as-small-text paper failures fixed on rendered DOM (SS3a): `.rail__all--active` + `.repl__note--err` now AA; axe 0 serious (2026-06-13).
+- [ ] FROZEN per-theme ACCENT identities (#f59e0b/#39ff14/#c0392b) held -- YES. One ui-next-adapted (NOT frozen-from-live) paper palette value was darkened for AA (`--c-intervene` #ea580c->#c2410c) and one paper-only accent-TEXT token added (`--calm-accent-text`); no frozen accent value changed.

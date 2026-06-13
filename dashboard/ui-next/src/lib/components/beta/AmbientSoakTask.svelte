@@ -40,7 +40,7 @@
   excluded_self tally as a VISIBLE meta tag -- self-exclusion is a feature, not a
   silent filter.
 
-  FIREWALL (G1): no certPortal path is read; identity renders FROM DATA.
+  FIREWALL (G1): no firewalled monitored-project path is read; identity renders FROM DATA.
 
   ADR-18 MUST floor honoured here:
     - M1 3-frame presence: this is a footer chip + an overlay drawer; it adds NO

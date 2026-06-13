@@ -42,6 +42,7 @@
   import AgentRoster from './lib/components/AgentRoster.svelte';
   import FrameC_Jobs from './lib/components/FrameC_Jobs.svelte';
   import HitlDock from './lib/components/HitlDock.svelte';
+  import AuditDock from './lib/components/AuditDock.svelte';
   import SettingsDrawer from './lib/components/SettingsDrawer.svelte';
   // BETA features (default-OFF, gated on $betaFlags[...]). Each component also
   // self-gates internally; the {#if} wrappers keep the DOM clean when OFF.
@@ -70,6 +71,11 @@
   import SonificationEscalationLayer from './lib/components/beta/SonificationEscalationLayer.svelte';
   import SpatialSessionSidebar from './lib/components/beta/SpatialSessionSidebar.svelte';
   import TemporalScrubberGovernanceAudit from './lib/components/beta/TemporalScrubberGovernanceAudit.svelte';
+  // BETA batch-3 (gap-fill governance-semantics; read-only/advisory, self-gating).
+  import ConfidenceCalibrationLoop from './lib/components/beta/ConfidenceCalibrationLoop.svelte';
+  import RegretMiningOverrideLoop from './lib/components/beta/RegretMiningOverrideLoop.svelte';
+  // ADR-18 Amendment F (allow-pattern auto-graduation; amendment APPROVED).
+  import GraduationCandidates from './lib/components/beta/GraduationCandidates.svelte';
 
   import { connect, disconnect, seedDecisions, connectionState, escalationStore } from './lib/sse.js';
   import { startPollers, stopPollers, agentsStore, statsStore } from './lib/pollers.js';
@@ -361,6 +367,12 @@
     {#if $betaFlags['session-dna-heatmap-cross-pattern-topology']}
       <SessionDnaHeatmapCrossPatternTopology />
     {/if}
+    {#if $betaFlags['regret-mining-override-loop']}
+      <RegretMiningOverrideLoop />
+    {/if}
+    {#if $betaFlags['graduation-candidates']}
+      <GraduationCandidates />
+    {/if}
     <div class="fa-with-gutter" class:fa-with-gutter--on={$betaFlags['escalation-heatmap']}>
       {#if $betaFlags['escalation-heatmap']}
         <div class="fa-gutter"><EscalationHeatmap /></div>
@@ -372,6 +384,12 @@
             {#if $betaFlags['hitl-bulk-dismiss']}
               <HitlBulkDismiss dockCount={frameACount} on:culled={onBulkCulled} />
             {/if}
+            <!-- FR-PPP provenance-audit surface (M11/M12): the audit peer of the
+                 HITL dock. Owns the audit-probe attestation rows + the canary /
+                 hallucination leaves, correlated from the existing audit.* SSE
+                 events. No new envelope, no cassette change -- it consumes the
+                 named bus events sse.js already fans out. -->
+            <AuditDock />
           </svelte:fragment>
         </FrameA_Sessions>
       </div>
@@ -474,6 +492,14 @@
      Composition-root sibling; gated default-OFF. -->
 {#if $betaFlags['cross-session-pattern-audit-apis']}
   <CrossSessionPatternAuditApis />
+{/if}
+
+<!-- BETA: Confidence calibration loop -- quiet launcher chip + focus-trapped
+     reliability-diagram drawer (predicted confidence vs realized agreement).
+     Composition-root sibling; gated default-OFF. Renders nothing + registers no
+     listeners/fetch/timers when OFF. Observability only, never a 4th Frame. -->
+{#if $betaFlags['confidence-calibration-loop']}
+  <ConfidenceCalibrationLoop />
 {/if}
 
 <!-- BETA: Breach Cartography (constrained) -- transient causal-map modal

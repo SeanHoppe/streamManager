@@ -168,3 +168,66 @@ def test_thresholds_are_constants_not_env_overrides(
     assert spec.posterior_ci_cap == POSTERIOR_CI_CAP
     with pytest.raises(Exception):
         spec.shadow_reward_delta = 0.0  # type: ignore[misc]
+
+
+def _seed_zero_lift_run(db: Path, rid: str) -> None:
+    """Baseline-vs-baseline: candidate_verdict == production_verdict on
+    every row → reward delta is exactly 0.0 (no lift)."""
+    rows: list[tuple] = []
+    i = 0
+    for _ in range(100):
+        rows.append((rid, f"sess-{rid}", f"t-{i}", "ALLOW", "ALLOW", "ALLOW"))
+        i += 1
+    for _ in range(200):
+        rows.append((rid, f"sess-{rid}-noGT", f"t-{i}",
+                     "ALLOW", "ALLOW", None))
+        i += 1
+    _bulk(db, rows)
+
+
+def test_v10_1_mode_marks_reward_dormant_and_passes_infra(
+    tmp_path: Path,
+) -> None:
+    # ADR-18 Amendment D: baseline-vs-baseline has 0 reward lift, which
+    # FAILS the strict v10.3 reward criterion. v10.1-mode marks
+    # shadow_reward_improvement DORMANT (excluded from the verdict) and the
+    # other 5 criteria pass → overall PASS-INFRA.
+    db = _make_db(tmp_path)
+    for rid in ("20260520T120000Z", "20260521T120000Z", "20260522T120000Z"):
+        _seed_zero_lift_run(db, rid)
+    mdir = tmp_path / "m"
+    _seed_pass_manifests(mdir)
+
+    v103 = evaluate_criteria(db, mdir)  # default mode
+    reward_103 = next(c for c in v103.criteria
+                      if c.name == "shadow_reward_improvement")
+    assert not reward_103.passed and not reward_103.dormant
+    assert not v103.overall_passed
+
+    v101 = evaluate_criteria(db, mdir, mode="v10.1")
+    reward_101 = next(c for c in v101.criteria
+                      if c.name == "shadow_reward_improvement")
+    assert reward_101.dormant
+    assert v101.mode == "v10.1"
+    assert v101.overall_passed, [
+        (c.name, c.detail) for c in v101.criteria
+        if not c.passed and not c.dormant]
+
+
+def test_v10_1_mode_dormant_does_not_mask_real_fail(tmp_path: Path) -> None:
+    # A genuine FR-OG-7 violation must still FAIL the v10.1 verdict — the
+    # DORMANT reward criterion excludes only itself, never an active fail.
+    db = _make_db(tmp_path)
+    for rid in ("20260520T120000Z", "20260521T120000Z", "20260522T120000Z"):
+        _seed_pass_run(db, rid)
+    _bulk(db, [("20260522T120000Z", "sess-violator", "t-violator",
+                "ALLOW", "BLOCK", "ALLOW")])
+    mdir = tmp_path / "m"
+    _seed_pass_manifests(mdir)
+    report = evaluate_criteria(db, mdir, mode="v10.1")
+    reward = next(c for c in report.criteria
+                  if c.name == "shadow_reward_improvement")
+    fr = next(c for c in report.criteria if c.name == "fr_og_7_violations")
+    assert reward.dormant
+    assert not fr.passed
+    assert not report.overall_passed

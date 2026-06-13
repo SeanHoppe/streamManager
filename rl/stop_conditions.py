@@ -38,21 +38,36 @@ class CriterionResult:
     passed: bool
     detail: str
     metrics: dict = field(default_factory=dict)
+    # DORMANT (ADR-18 Amendment D): the criterion is structurally N/A in
+    # the active mode (e.g. shadow_reward_improvement under v10.1-mode
+    # baseline-vs-baseline infra validation). It is neither pass nor fail
+    # and is EXCLUDED from the overall verdict — distinct from a `passed`
+    # criterion so the report renders it honestly as DORMANT, not PASS.
+    dormant: bool = False
 
 
 @dataclass
 class CriteriaReport:
     criteria: list[CriterionResult] = field(default_factory=list)
     shadow_run_ids: list[str] = field(default_factory=list)
+    # "v10.3" (default) = real candidate promotion gate; "v10.1" = ADR-18
+    # Amendment D baseline-vs-baseline infrastructure validation.
+    mode: str = "v10.3"
 
     @property
     def overall_passed(self) -> bool:
-        return bool(self.criteria) and all(c.passed for c in self.criteria)
+        # DORMANT criteria are excluded from the verdict — they are
+        # structurally N/A in the active mode, not failing. Require ≥1
+        # active criterion so an all-dormant report cannot pass vacuously.
+        active = [c for c in self.criteria if not c.dormant]
+        return bool(active) and all(c.passed for c in active)
 
     def to_dict(self) -> dict:
         return {"overall_passed": self.overall_passed,
+                "mode": self.mode,
                 "shadow_run_ids": list(self.shadow_run_ids),
                 "criteria": [{"name": c.name, "passed": c.passed,
+                              "dormant": c.dormant,
                               "detail": c.detail, "metrics": c.metrics}
                              for c in self.criteria]}
 
@@ -174,18 +189,33 @@ def _best_arm(manifest: dict) -> tuple[float | None, float | None]:
 
 def evaluate_criteria(
     shadow_db: Path, manifest_dir: Path,
-    *, criteria: ShipCriteria | None = None,
+    *, criteria: ShipCriteria | None = None, mode: str = "v10.3",
 ) -> CriteriaReport:
     spec = criteria or ShipCriteria()
-    report = CriteriaReport()
+    report = CriteriaReport(mode=mode)
     run_ids, by_run = _last_runs(shadow_db, spec.shadow_reward_window)
     report.shadow_run_ids = list(run_ids)
 
-    def emit(name: str, passed: bool, detail: str, **metrics) -> None:
-        report.criteria.append(CriterionResult(name, passed, detail, metrics))
+    def emit(name: str, passed: bool, detail: str,
+             *, dormant: bool = False, **metrics) -> None:
+        report.criteria.append(
+            CriterionResult(name, passed, detail, metrics, dormant=dormant))
 
     # 1. shadow reward improvement
-    if len(run_ids) < spec.shadow_reward_window:
+    if mode == "v10.1":
+        # ADR-18 Amendment D legibility: v10.1-mode is baseline-vs-baseline
+        # infrastructure validation. Reward lift (cand − prod ≥ +0.02) is
+        # unreachable BY CONSTRUCTION — the candidate IS the baseline arm
+        # and production is already optimal on the safety-GT rows. This is
+        # a v10.3 PROMOTION gate, not a v10.1 ship criterion; mark DORMANT
+        # (excluded from the verdict) so a clean harness prints PASS-INFRA
+        # rather than a misleading FAIL. The strict v10.3 gate is untouched.
+        emit("shadow_reward_improvement", True,
+             "DORMANT — v10.1-mode infra validation: baseline-vs-baseline"
+             " has no reward lift by construction; reward improvement is a"
+             " v10.3 promotion gate, not a v10.1 ship criterion",
+             dormant=True, mode="v10.1")
+    elif len(run_ids) < spec.shadow_reward_window:
         emit("shadow_reward_improvement", False,
              f"insufficient shadow runs: have {len(run_ids)},"
              f" need {spec.shadow_reward_window}", n_runs=len(run_ids))

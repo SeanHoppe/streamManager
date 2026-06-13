@@ -66,6 +66,10 @@
     scopeParam,
   } from '../stores/session.js';
   import { settings } from '../stores/settings.js';
+  // BETA policy-preview-chip (#21): advisory corpus-read chip under the
+  // SYNC/ASYNC toggle. Default-OFF; self-gates + falls back to mock when ALL.
+  import { betaFlags } from '../stores/beta.js';
+  import PolicyPreviewChip from './beta/PolicyPreviewChip.svelte';
 
   /**
    * mode: the active HITL mode for the dock ('sync' | 'async'). Two-way bound so
@@ -164,9 +168,18 @@
     return (row?.project_slug ?? row?.session_id ?? '').toString();
   }
 
-  // The visible pending list = self-excluded + scope-filtered, newest first
-  // (the server returns the envelope order; we trust it and only filter).
-  $: visiblePending = pending.filter((r) => !isSelf(r) && inScope(r));
+  // Audit-probe pending rows (trigger_reason="audit_probe") are the FR-PPP
+  // Layer-1 attestation surface; they render in AuditDock as AuditProbeRow
+  // (radio candidate list + provenance ack), NOT as a generic HITL row. Exclude
+  // them here so a probe row renders in exactly one place (no double-render).
+  const AUDIT_PROBE_REASON = 'audit_probe';
+
+  // The visible pending list = self-excluded + scope-filtered + audit-probe
+  // excluded (AuditDock owns those), newest first (the server returns the
+  // envelope order; we trust it and only filter).
+  $: visiblePending = pending.filter(
+    (r) => !isSelf(r) && inScope(r) && (r && r.trigger_reason !== AUDIT_PROBE_REASON),
+  );
 
   // M3-at-dock-grain: the live open-ACTION-REQUIRED tally surfaced as a paired
   // count badge (M4). Only the editable (ON / promoted) rows are "action
@@ -364,6 +377,9 @@
       sessionId={$selectedSessionId}
       on:promoted={onModePromoted}
     />
+    {#if $betaFlags['policy-preview-chip']}
+      <PolicyPreviewChip sessionId={$selectedSessionId} sessionLabel={activeSessionLabel} />
+    {/if}
   </header>
 
   <div class="dock__body">

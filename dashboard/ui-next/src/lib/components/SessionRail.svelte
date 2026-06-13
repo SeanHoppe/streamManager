@@ -302,7 +302,9 @@
     border-color: var(--calm-hairline-hi, var(--border-hi, rgba(245, 158, 11, 0.25)));
   }
   .rail__all--active {
-    color: var(--calm-accent, var(--accent, #f59e0b));
+    /* Text uses the AA-safe accent INK (D4-012: paper red as small text on the
+       wash was 4.05:1); border + wash keep the frozen brand accent identity. */
+    color: var(--calm-accent-text, var(--calm-accent, var(--accent, #f59e0b)));
     border-color: var(--calm-accent, var(--accent, #f59e0b));
     background: var(--calm-accent-wash, rgba(245, 158, 11, 0.09));
   }

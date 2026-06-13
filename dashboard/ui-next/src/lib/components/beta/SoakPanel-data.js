@@ -29,9 +29,14 @@ export const SELF_SLUGS = new Set(['streammanager']);
  * working directory. A candidate whose cwd contains any of these (case-
  * insensitive) is rejected from the selector. This is the client-side
  * defense-in-depth mirror of the server reject; the server is the durable gate.
+ *
+ * M16 (domain-agnostic): this is a GENERIC PLACEHOLDER fragment, never a real
+ * monitored-project name. The real firewall list is operator/server
+ * configuration (the server reject + BRIDGE_* env at promotion), injected as
+ * data -- the UI taxonomy hard-codes no governed-target vocabulary.
  * @type {string[]}
  */
-export const FIREWALL_CWD_FRAGMENTS = ['certportal'];
+export const FIREWALL_CWD_FRAGMENTS = ['walled-repo'];
 
 /**
  * Is this candidate SM-self (by project_slug or by matching the injected own
@@ -288,7 +293,7 @@ export function mockCandidates() {
     // EXCLUDED -- SM-self by own-session-id (G2; slug is non-SM):
     { session_id: 'sm-own-0000-bridge', project_slug: 'bridge-host', cwd: '/home/op/vs/bridge', busy: 8, last_seen_secs_ago: 30 },
     // EXCLUDED -- firewalled cwd (G1):
-    { session_id: 'a1b2c3d4-fw01', project_slug: 'walled-target', cwd: '/home/op/vs/certPortal', busy: 25, last_seen_secs_ago: 12 },
+    { session_id: 'a1b2c3d4-fw01', project_slug: 'walled-target', cwd: '/home/op/vs/walled-repo', busy: 25, last_seen_secs_ago: 12 },
   ];
 }
 

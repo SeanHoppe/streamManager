@@ -1,8 +1,8 @@
-# axe-core audit — http://127.0.0.1:8765/
+# axe-core audit — http://127.0.0.1:4317/
 
-- Timestamp: `2026-05-02T13:35:49.284Z`
+- Timestamp: `2026-06-13T12:26:40.733Z`
 - axe-core version: `4.10.3`
-- Full JSON: `reports/axe-20260502T133549.json`
+- Full JSON: `reports/axe-20260613T122640.json`
 
 ## Counts by impact
 
@@ -13,9 +13,9 @@
 | moderate | 0 |
 | minor | 0 |
 
-- passes: 24
+- passes: 21
 - incomplete: 2
-- inapplicable: 37
+- inapplicable: 40
 
 ## Violations
 

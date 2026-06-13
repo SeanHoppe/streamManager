@@ -18,6 +18,8 @@ from stream_manager.agent_registry import AgentProfile, AgentRegistry
 from stream_manager.cli_governance import CliGovernor
 from stream_manager.cli_governance import is_enabled as _cli_enabled
 from stream_manager.decision_graph import DecisionGraph
+from stream_manager.graduated_rules import GraduatedRuleStore
+from stream_manager.graduated_rules import is_enabled as _graduated_enabled
 from stream_manager.hitl import PAUSE_PATTERNS, HitlQueue
 from stream_manager.learn_categorizer import BiasHint, bias_for
 from stream_manager.maturity_reader import MaturityReader
@@ -34,6 +36,7 @@ from stream_manager.project_context import (
     ProjectContextSnapshot,
     fast_precheck,
 )
+from stream_manager.project_context import is_destructive as _pc_is_destructive
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +99,34 @@ _CRED_EXFIL_RE = re.compile(
     r"ghp_[A-Za-z0-9]{20,}|"          # GitHub PAT
     r"xox[baprs]-[A-Za-z0-9\-]{10,})\b",
 )
+
+
+def is_safety_priority_content(content: str) -> bool:
+    """True if ``content`` hits any INTENT.md §"Safety priorities" class.
+
+    Module-level single source of truth shared by the engine's
+    ``_is_safety_priority_content`` method AND the ADR-18 Amendment F
+    graduation candidate scan. Invariant #2: the graduation eligibility
+    predicate MUST reuse the exact precheck safety regexes so a
+    safety-floor shape (destructive-shell / force-push / credential-exfil
+    / eval-exec injection) can never be offered as a graduation candidate
+    and the predicate cannot drift from the precheck. Read-only.
+    """
+    if not content:
+        return False
+    return bool(
+        _DESTRUCTIVE_SHELL_RE.search(content)
+        or _FORCE_PUSH_RE.search(content)
+        or _CRED_EXFIL_RE.search(content)
+        or EVAL_EXEC_INJECTION_RE.search(content)
+        # Invariant #2 (no drift): union with the precheck's OWN destructive
+        # list so this gate is a strict SUPERSET of fast_precheck -- anything
+        # the precheck would block (DROP DATABASE, mkfs, dd-to-device, ...)
+        # is caught here even where the governance-local regexes above differ.
+        or _pc_is_destructive(content)
+    )
+
+
 _SHELL_HINT_RE = re.compile(
     r"(?:^|\s)(?:bash|sh|cmd|powershell|pwsh)\s|"
     r"\$\(|`[^`]+`|"
@@ -263,6 +294,11 @@ class GovernanceEngine:
     # CliGovernor inherits this pool and routes escalation through it
     # instead of spawning a fresh subprocess per call. None = legacy path.
     cli_pool: object | None = None
+    # ADR-18 Amendment F: operator-confirmed graduated-ALLOW short-circuit.
+    # None = feature unwired (default) → the verdict ladder is byte-for-byte
+    # the pre-amendment ladder (no branch, no SQL). Wired only when the
+    # BRIDGE_GRADUATED_RULES env flag is set at engine construction.
+    graduated_rules: GraduatedRuleStore | None = None
     _sweep_job_agents_seen: list[str] = field(default_factory=list)
 
     _eligible_window: deque[bool] = field(default_factory=lambda: deque(maxlen=ROLLING_WINDOW))
@@ -835,27 +871,14 @@ class GovernanceEngine:
     def _is_safety_priority_content(self, content: str) -> bool:
         """True if the message hits any INTENT.md §"Safety priorities" class.
 
-        Matches the same regexes used elsewhere in this module so we
-        share a single source of truth. The check is read-only; a True
-        answer means bias must NOT be offered for this message,
-        regardless of pattern strength.
+        Delegates to the module-level :func:`is_safety_priority_content`
+        so the engine's bias-refusal check and the ADR-18 Amendment F
+        graduation candidate scan share ONE source of truth (invariant #2
+        — the eligibility predicate cannot drift from the precheck
+        regexes). Read-only; a True answer means bias must NOT be offered
+        for this message, regardless of pattern strength.
         """
-        if not content:
-            return False
-        if _DESTRUCTIVE_SHELL_RE.search(content):
-            return True
-        if _FORCE_PUSH_RE.search(content):
-            return True
-        if _CRED_EXFIL_RE.search(content):
-            return True
-        # Code-injection patterns: eval(/exec( in untrusted bodies
-        # (priority #3). Fix C (review): share the canonical regex with
-        # ``project_context.fast_precheck`` so the two checks cannot
-        # drift. A previous version used a substring check that would
-        # have missed e.g. `eval (` (whitespace before paren).
-        if EVAL_EXEC_INJECTION_RE.search(content):
-            return True
-        return False
+        return is_safety_priority_content(content)
 
     def _consult_learn_mode_bias(
         self, content: str, decision: GovDecision
@@ -986,6 +1009,28 @@ class GovernanceEngine:
         _t = _pc()
         match = self.graph.match(msg.content)
         sub["graph_classify"] = (_pc() - _t) * 1000.0
+        # ADR-18 Amendment F: operator-confirmed graduated ALLOW. Subordinate
+        # to fast_precheck (the safety floor already returned above), and it
+        # OUTRANKS the probabilistic graph.match decision below — an operator
+        # has explicitly confirmed this shape is routine. Read-only lookup
+        # against the graduated_rules table, keyed on the SAME DecisionGraph
+        # shape hash (match.hash). When the feature is unwired
+        # (self.graduated_rules is None) or the env flag is OFF, this is a
+        # zero-cost early return and the ladder is byte-for-byte unchanged.
+        if self.graduated_rules is not None and match is not None:
+            grad = self.graduated_rules.lookup(match.hash)
+            if grad is not None:
+                return GovDecision(
+                    action="ALLOW",
+                    confidence=1.0,
+                    reasoning=(
+                        f"graduated rule (n_allow={grad['n_allow_at_grad']},"
+                        " operator-confirmed)"
+                    ),
+                    mode=self.mode,
+                    matched_hash=match.hash,   # provenance/demote-key; invariant 7
+                    source="graduated",        # deliberately NOT in ELIGIBLE_SOURCES
+                )
         if match is not None and match.success_rate >= 0.55:
             return GovDecision(
                 action="ALLOW",
@@ -1164,7 +1209,13 @@ class GovernanceEngine:
         if decision.source in ELIGIBLE_SOURCES:
             self._eligible_window.append(was_correct)
             self._intervention_window.append(_was_intervention_attempt(decision))
-        if decision.matched_hash:
+        # ADR-18 Amendment F invariant #7: a graduated hit carries no
+        # judgment signal. `source="graduated"` is already excluded from
+        # ELIGIBLE_SOURCES (so it never enters the rolling-accuracy window /
+        # mode ladder); it must ALSO NOT feed graph.feedback() — a static
+        # operator-confirmed rule must not mutate the probabilistic graph's
+        # success_rate via its provenance matched_hash.
+        if decision.matched_hash and decision.source != "graduated":
             self.graph.feedback(decision.matched_hash, was_correct)
         self._update_mode()
 
@@ -1691,6 +1742,14 @@ class EngineRegistry:
                 maturity=self._maturity,
                 rate_limit_per_min=self._rate_limit_per_min,
                 cli_pool=self._cli_pool,
+                # ADR-18 Amendment F: wire the graduated-ALLOW short-circuit
+                # ONLY when the BRIDGE_GRADUATED_RULES env flag is set AND a
+                # bus is present. Default (unset) → None → ladder unchanged.
+                graduated_rules=(
+                    GraduatedRuleStore(bus=self._bus)
+                    if (self._bus is not None and _graduated_enabled())
+                    else None
+                ),
             )
             self._engines[session_id] = eng
             # Task I (v1.1): Hydrator is now lazy — it does NOT spawn during

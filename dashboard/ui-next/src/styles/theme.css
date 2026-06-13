@@ -151,6 +151,13 @@
   --accent-dim:   rgba(192, 57, 43, 0.07);
   --accent-glow:  rgba(192, 57, 43, 0.2);
 
+  /* D4-012: AA-safe accent INK for SMALL accent-colored TEXT on the paper cream.
+     The frozen brand accent (#c0392b) stays the border/wash/identity value; the
+     editorial-red at 11px on the accent wash measured 4.05:1 (< AA 4.5), so accent
+     TEXT uses this darker ink (6.1:1 on the active wash). Obsidian/phosphor leave
+     --calm-accent-text == --accent (their accent on dark already clears AA). */
+  --calm-accent-text: #9b1c13;
+
   --font-h:       'Playfair Display', serif;
   --font-d:       'Courier Prime', var(--ff-mono);
 
@@ -162,7 +169,9 @@
   --c-allow:     #16a34a;
   --c-suggest:   #65a30d;
   --c-guide:     #ca8a04;
-  --c-intervene: #ea580c;
+  /* D4-012: #ea580c measured 3.24:1 as small text on the paper card (< AA 4.5);
+     orange-700 #c2410c clears it (~4.7:1) and stays distinct from --c-block. */
+  --c-intervene: #c2410c;
   --c-block:     #dc2626;
 }
 
@@ -233,4 +242,22 @@
   --sm-action-fg:   var(--badge-ar-fg);
   --sm-action-bg:   var(--badge-ar-bg);
   --sm-font-mono:   var(--font-d, ui-monospace, monospace);
+
+  /* SURFACE tokens the component layer consumes but the original bridge MISSED.
+     They fell back to hardcoded dark-slate literals (e.g. .frame used
+     rgba(15,23,42,0.35)), which read fine over obsidian's near-black base but
+     rendered as GRAY panels over the paper (light) theme's cream base -- the
+     light-mode frame/side/chip surfaces were broken. Mapping each to the
+     per-theme surface token re-themes them automatically (var() resolves at the
+     active [data-theme]), fixing light mode without disturbing obsidian/phosphor.
+     Signal tokens (focus ring, warn/role badges) are deliberately NOT remapped
+     here -- they are theme-INVARIANT by M4/M17 design and keep their fixed
+     badge/focus contract values. */
+  --sm-frame-bg:      var(--bg-card);
+  --sm-frame-head-bg: var(--bg-card);
+  --sm-side-bg:       var(--bg-card);
+  --sm-row-active-bg: var(--bg-row-hover);
+  --sm-chip-bg:       var(--bg-row-alt);
+  --sm-count-bg:      var(--bg-row-alt);
+  --sm-text-strong:   var(--text-bright);
 }

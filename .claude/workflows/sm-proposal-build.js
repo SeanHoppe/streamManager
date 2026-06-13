@@ -146,7 +146,11 @@ const BATCH3_NEW = [
 const IN = (args && typeof args === 'object') ? args : {};
 // NOTE: Workflow `args` does NOT thread to the script via scriptPath (verified
 // 2026-06-11). Set ACTIVE_APPROVED here per run (APPROVED_13 | HELD_2 | BATCH2_NEW | BATCH3_NEW).
-const ACTIVE_APPROVED = BATCH3_NEW;
+// Batch-3 gate (2026-06-13): 3 PASS build now; allow-pattern-auto-graduation is
+// HELD (NEEDS-AMENDMENT -- genuinely needs an ADR-18 FROZEN amendment: a new
+// `pattern_graduated` envelope + verdict short-circuit; NOT constrained-additive).
+const BATCH3_PASS = BATCH3_NEW.filter((x) => x.key !== 'allow-pattern-auto-graduation');
+const ACTIVE_APPROVED = BATCH3_PASS;
 const APPROVED = (Array.isArray(IN.approved) && IN.approved.length ? IN.approved : ACTIVE_APPROVED).slice(0, 24);
 const TARGET = IN.target || 'dashboard/ui-next/';
 const MOCK_DIR = IN.mockDir || 'reports/proposals/mockups/';

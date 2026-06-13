@@ -30,14 +30,14 @@
 
   POLARITY (G2/M15): the selector fetch goes to GET /api/soak/sessions, which
   excludes SM-self (project_slug NOT IN the SM slug set AND session_id != self)
-  AND rejects firewalled (certPortal-cwd) candidates server-side. As
+  AND rejects firewalled (off-limits monitored-project cwd) candidates server-side. As
   defense-in-depth this component ALSO re-classifies every candidate
   (SoakPanel-data.classifyCandidate) so a self / firewalled row can never become
   selectable even on the mock path, and the excluded counts are rendered VISIBLE
   in the selector footer. The polarity verdict is a READ proof of zero SM-self
   leakage.
 
-  FIREWALL (G1): no certPortal path is read; a candidate whose cwd contains a
+  FIREWALL (G1): no firewalled monitored-project path is read; a candidate whose cwd contains a
   firewalled fragment is rejected (never selectable) and counted in the footer.
 
   ADR-18 MUST floor honoured here:

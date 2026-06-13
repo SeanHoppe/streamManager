@@ -80,17 +80,37 @@ def _is_sm_self(env: Mapping[str, Any]) -> bool:
 def candidate_decision(
     candidate: Candidate, envelope: Mapping[str, Any]
 ) -> tuple[float, str]:
-    """Offline (no live `claude -p` call) candidate decision. v10.1
-    action space = constant L4 threshold; the candidate's verdict
-    matches production when actions equal, else flips to ALLOW when
-    the envelope confidence clears the candidate threshold."""
+    """Offline (no live `claude -p` call) candidate decision under a
+    constant-L4-threshold candidate policy.
+
+    SAFETY INVARIANT (FR-OG-7). Non-ALLOW production verdicts
+    (BLOCK / INTERVENE / OBSERVE / SUGGEST / GUIDE) are produced by
+    ``fast_precheck`` / mode BEFORE any L4-threshold logic runs
+    (``governance.py`` ``_evaluate_inner_core``, precheck-first). A
+    constant-L4-threshold candidate therefore CANNOT override them: it
+    inherits the production verdict verbatim and never flips a safety
+    verdict to ALLOW. (The previous logic flipped any high-confidence
+    row to ALLOW once ``conf >= cand_a`` — which silently turned every
+    safety-priority BLOCK into a candidate ALLOW, the v10.1 mis-pin bug.)
+
+    The candidate threshold only governs the ALLOW<->escalate boundary:
+    production ALLOWed the row at confidence ``conf``; a stricter
+    (higher) candidate threshold escalates a borderline ALLOW to
+    AMBIGUOUS, while an equal-or-lower threshold also ALLOWs. This is the
+    only band where candidate and production may legitimately diverge.
+    """
     cand_a = candidate.l4_threshold()
-    prod_a = float(envelope.get("action_taken", envelope.get("threshold", cand_a)))
     prod_v = str(envelope.get("verdict", "ALLOW"))
-    if abs(prod_a - cand_a) < 1e-9:
+    if prod_v != "ALLOW":
+        # Threshold-independent safety / degrade verdict: inherit it.
         return cand_a, prod_v
-    conf = float(envelope.get("confidence", 0.0))
-    return cand_a, ("ALLOW" if conf + 1e-9 >= cand_a else prod_v)
+    conf = float(
+        envelope.get(
+            "confidence",
+            envelope.get("action_taken", envelope.get("threshold", cand_a)),
+        )
+    )
+    return cand_a, ("ALLOW" if conf + 1e-9 >= cand_a else "AMBIGUOUS")
 
 
 class ShadowRecorder:
